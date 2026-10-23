@@ -124,5 +124,48 @@ curl -fsS --max-time 120 -X DELETE -H "Cookie: ${COOKIE}" \
 	"${BASE}/u/${USER_ID}/skills?skill=md-to-docx" >/dev/null || fail "second uninstall failed"
 pass "uninstall removed the subtree; a repeat is not an error"
 
+echo "== second catalog skill: pdf-text-extraction installs, verifies, lists, uninstalls =="
+BUNDLE2="${ROOT}/marketplace/skills/pdf-text-extraction"
+MANIFEST2="${BUNDLE2}/marketplace.json"
+[[ -f "${MANIFEST2}" ]] || fail "catalog bundle missing: ${MANIFEST2}"
+mapfile -t ENTRIES2 < <(python3 - "${MANIFEST2}" <<'PY'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+for entry in manifest["files"]:
+    print(f"{entry['path']}\t{entry['sha256']}")
+PY
+)
+[[ "${#ENTRIES2[@]}" -ge 2 ]] || fail "second manifest lists too few files: ${#ENTRIES2[@]}"
+for entry in "${ENTRIES2[@]}"; do
+	rel="${entry%%	*}"
+	want_sha="${entry#*	}"
+	staged="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE}" \
+		-H 'content-type: application/octet-stream' \
+		--data-binary @"${BUNDLE2}/${rel}" \
+		"${BASE}/u/${USER_ID}/skills/file?skill=pdf-text-extraction&path=$(urlenc "${rel}")")" \
+		|| fail "install of ${rel} failed"
+	[[ "$(printf '%s' "${staged}" | field "d['sha256']")" == "${want_sha}" ]] \
+		|| fail "${rel} hash mismatch: ${staged}"
+done
+curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE}" \
+	-H 'content-type: application/octet-stream' \
+	--data-binary @"${MANIFEST2}" \
+	"${BASE}/u/${USER_ID}/skills/file?skill=pdf-text-extraction&path=marketplace.json" >/dev/null \
+	|| fail "install of second marketplace.json failed"
+verified2="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE}" \
+	-H 'content-type: application/json' \
+	--data-binary @"${MANIFEST2}" \
+	"${BASE}/u/${USER_ID}/skills/verify?skill=pdf-text-extraction")" || fail "second verify call failed"
+[[ "$(printf '%s' "${verified2}" | field "d['ok']")" == "True" ]] || fail "second skill does not verify: ${verified2}"
+listed2="$(curl -fsS --max-time 120 -H "Cookie: ${COOKIE}" "${BASE}/u/${USER_ID}/skills")" \
+	|| fail "GET /skills after second install failed"
+[[ "$(printf '%s' "${listed2}" | field "[s['name'] for s in d['skills']]")" == "['pdf-text-extraction']" ]] \
+	|| fail "second skill is not the only one listed: ${listed2}"
+[[ "$(printf '%s' "${listed2}" | field "[s['version'] for s in d['skills']]")" == "['1.0.0']" ]] \
+	|| fail "second skill version is not reported: ${listed2}"
+curl -fsS --max-time 120 -X DELETE -H "Cookie: ${COOKIE}" \
+	"${BASE}/u/${USER_ID}/skills?skill=pdf-text-extraction" >/dev/null || fail "second uninstall failed"
+pass "pdf-text-extraction installed (${#ENTRIES2[@]} files), verified ok, listed v1.0.0, uninstalled"
+
 echo
 echo "SKILLS PASSED"

@@ -1,0 +1,22 @@
+{
+	"name": "pdf-text-extraction",
+	"version": "1.0.0",
+	"description": "Read PDFs in this sandbox the right way: text, page ranges, metadata and positioned items through the preinstalled unpdf — with the runtime paths and the real failure modes (NODE_PATH, ESM, scanned PDFs).",
+	"requires": {
+		"nodeLibraries": [
+			"unpdf"
+		]
+	},
+	"files": [
+		{
+			"path": "references/extract-pdf.cjs",
+			"sha256": "e4cf39b5e10d9786b60f65bfe672d056b9f1df60192215e828c4e6b1d05d86d6",
+			"bytes": 4919
+		},
+		{
+			"path": "SKILL.md",
+			"sha256": "7fe04be402ecbdb3750f7ac732c3662afdf59fda4fa8266db6d89d3b4c914bab",
+			"bytes": 6475
+		}
+	]
+}

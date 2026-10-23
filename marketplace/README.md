@@ -13,6 +13,10 @@ marketplace/
       marketplace.json       name, version, description, requires, files[] (generated)
       SKILL.md               the container-adapted skill the model reads
       references/            extra files the skill tells the model to read
+    pdf-text-extraction/
+      marketplace.json
+      SKILL.md
+      references/extract-pdf.cjs   bounded one-PDF extractor (text/pages/items/meta)
 ```
 
 ## Manifest

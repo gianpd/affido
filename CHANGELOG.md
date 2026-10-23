@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `pdf-text-extraction` marketplace skill: the preinstalled `unpdf` explained
+  to the agent — runtime paths (`NODE_PATH=/app/node_modules`, CJS `require`
+  only, never override it), a bounded ready-to-run extractor
+  (`references/extract-pdf.cjs`), and the observed failure modes (scanned
+  PDFs, spaced-digit fiscal forms, column interleaving).
+
 ### Changed
 
 - The uploads tree moved inside the corpus bucket: `WORKSPACE/uploads/` is now
