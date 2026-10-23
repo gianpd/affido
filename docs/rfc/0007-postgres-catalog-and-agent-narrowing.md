@@ -18,17 +18,30 @@ returns NER entities, structure and `doc_date` per document — but nothing stor
 it where a query can reach it.
 
 This RFC puts the document catalog in the `oltp` Postgres the control plane
-already runs, and makes it the agent's first point of contact with the corpus:
+already runs. What the agent may do with it is gated on where the bytes live:
 
 ```
-user query
-  -> agent extracts the intent (which parties, dates, amounts, codes matter)
-  -> catalog_query: one fixed SELECT over document, keywords bound as $1
-     (per-user read-only role, RLS on session_user)
-  -> a small set of docIds
-  -> narrowed investigation: corpus_grep / corpus_read on those docIds only
-  -> citations verified against corpus/docs/<docId>.md, as in RFC 0006
+bytes in the workspace (today, and until RFC 0005 moves them):
+user query -> corpus_grep over corpus/docs/*.md — ripgrep narrows and
+             returns ids and paths in the same call
+          -> corpus_read on the matches -> citations (RFC 0006)
+
+bytes in object storage (Phase C, with RFC 0005):
+user query -> agent extracts the intent (parties, dates, amounts, codes)
+          -> catalog_query: one fixed SELECT over document, keywords bound
+             as $1 (per-user read-only role, RLS on session_user)
+          -> a small set of docIds + storage keys
+          -> fetch only those objects, corpus_grep / corpus_read on them
+          -> citations verified against the fetched text, as in RFC 0006
 ```
+
+The gate is the decision, not a compromise: while the bytes are local,
+ripgrep *is* the narrowing tool, and a Postgres round-trip would answer the
+same question slower while importing the entire §5.4–§5.9 trust machinery
+(per-user login roles, a crown-jewel secret, RLS guards) to protect it. The
+catalog surface becomes necessary exactly when RFC 0005 turns the corpus
+into a bucket the agent cannot enumerate — and it ships with that change,
+not before (D3, §2.2).
 
 Decisions already taken, recorded here:
 
@@ -37,14 +50,15 @@ Decisions already taken, recorded here:
   analyzes text that is deterministic, hashed and stored before any run.
   Rationale in §5.2; this is the PRD 0001 §6.2 position, unchanged.
 - **D2 — One fixed narrowing query, raw SQL as escape hatch; per-user
-  read-only role, RLS keyed on `session_user`.** The default interface of
-  `catalog_query` is a single `SELECT` fixed in the tool (§5.6): the agent
-  supplies keywords, bound as one `$1::text[]` parameter, and gets the ids
-  and paths of the parsed documents whose entity values, title or filename
-  contain them — ripgrep semantics over metadata, executed by Postgres. The
-  agent writes SQL text only through a secondary `sql` input, for what
-  keywords cannot express (date ranges, amounts, exact containment on one
-  bucket). The security boundary is Postgres itself: one login role per user
+  read-only role, RLS keyed on `session_user` — all of it Phase C, gated on
+  RFC 0005 (D3).** The default interface of `catalog_query` is a single
+  `SELECT` fixed in the tool (§5.6): the agent supplies keywords, bound as
+  one `$1::text[]` parameter, and gets the ids and paths of the parsed
+  documents whose entity values, title or filename contain them — ripgrep
+  semantics over metadata, executed by Postgres. The agent writes SQL text
+  only through a secondary `sql` input, for what keywords cannot express
+  (date ranges, amounts, exact containment on one bucket). The security
+  boundary is Postgres itself: one login role per user
   (`agent_ro_<userId>`, member of the no-login group `agent_ro_group`) with
   `SELECT` on `document` only, and row level security whose policy derives the
   user from `session_user` — the one identity a session cannot change without
@@ -53,15 +67,23 @@ Decisions already taken, recorded here:
   identity: a custom GUC (`app.user_id`) is writable by any `SELECT
   set_config(...)` and is not a boundary. In keywords mode there is no SQL
   surface at all; the `sql` input's syntax check is UX, not the boundary
-  (§5.4).
-- **D3 — Bytes stay in the workspace for now.** This RFC lands the catalog and
-  the narrowing step of RFC 0005 early; it does not move bytes to object
-  storage. When RFC 0005 lands, the same subset flow drives object fetch and
-  the tool contract survives (§6).
+  (§5.4). Until Phase C none of this exists: no `agent_ro_*` role, no policy,
+  no `CATALOG_URL`, no Postgres credential in any sandbox — `corpus_grep` is
+  the narrowing tool.
+- **D3 — The agent-facing catalog is gated on object storage; bytes stay in
+  the workspace until RFC 0005 moves them.** The agent needs a metadata
+  index exactly when it can no longer enumerate its corpus: with bytes under
+  `WORKSPACE`, ripgrep returns ids and paths in one bounded call, and a
+  catalog is a slower grep with a trust surface attached; with bytes behind a
+  bucket API the model cannot list, the catalog is the only route from
+  question to docIds (§2.2). Phase C therefore lands in the same change as
+  RFC 0005's storage move — a catalog without the bucket is this RFC's
+  rejected first draft (§9).
 
-Upload changes that ride along because the catalog is useless without them:
-the browser/sandbox limit rises from 10 MiB to 15 MB and `.pdf` becomes a
-first-class upload (§5.3).
+Upload changes that ride along, because no narrowing — grep or catalog —
+works on documents that cannot be ingested and parsed: the browser/sandbox
+limit rises from 10 MiB to 15 MB and `.pdf` becomes a first-class upload
+(§5.3).
 
 ## 2. Problem
 
@@ -96,18 +118,31 @@ Facts that matter:
   already; this RFC relies on it and freezes it as an invariant (I1).
 - `oltp` sits on the shared `agents` network only. Per-user sandbox networks
   carry the agent, manager, Caddy and the web app. A sandbox cannot open a
-  Postgres connection today.
+  Postgres connection today, and Phases A and B keep it that way; only
+  Phase C provisions one.
 
-### 2.2 Why narrowing must come before reading
+### 2.2 Why the agent-facing catalog waits for object storage
 
-RFC 0006 already bounds reads (`corpus_grep` limit, `corpus_read` maxChars),
-but bounding the window does not bound the choice. With 100 parsed documents
-the model still greps all of them per question; with entity-bearing queries
-("contracts where Edilstrade is a party after June") a metadata index answers
-in one query what grep answers in N scans. PRD 0001 §6.4 anticipated this with
-a `corpus_metadata` tool over a pi session-scoped doc; a Postgres table is the
-same idea with a real query language, shared by dashboard and agent, and it
-survives sandbox destruction by construction.
+The first draft of this RFC shipped `catalog_query` immediately, arguing that
+at 100+ parsed documents grep-all-per-question degrades. The speed claim is
+real; the shipping argument is wrong. `corpus_grep` over `corpus/docs/*.md`
+is ripgrep over local files: it narrows and returns paths in the same bounded
+call, at a cost the sandbox already pays, with zero new trust surface.
+Answering "which documents mention Edilstrade" through Postgres instead would
+be slower per question and would cost the entire §5.4–§5.9 machinery up
+front: per-user login roles, an HMAC-minted crown-jewel secret, RLS policies,
+guard stages in the stack gate, and a `pg` dependency in the sandbox image —
+all of it existing only to let a sandbox talk to Postgres. While bytes are
+local, that trade is never worth it.
+
+The trade flips exactly when RFC 0005 moves bytes to object storage and the
+agent loses enumeration: "the model never enumerates the bucket" means the
+only path from a question to a document runs through the catalog. Date
+ranges, NER-typed parties and amounts then stop being grep approximations and
+become index queries; PRD 0001 §6.4's `corpus_metadata` idea is realized
+there (Phase C). What cannot wait is what local grep itself needs: PDF
+first-class upload, deterministic parse, and parsed markdown in the
+workspace — Phases A and B.
 
 ### 2.3 What this RFC does not change
 
@@ -126,16 +161,16 @@ survives sandbox destruction by construction.
 
 ### 3.1 Goals
 
-| ID | Goal |
-|---|---|
-| G1 | Every parsed document is queryable by its extracted metadata (entities, docDate, title, hashes, status) from both dashboard and agent. |
-| G2 | The agent's first corpus contact is a metadata query that returns docIds, never text. That query is fixed in the tool: the agent passes keywords as a bound parameter, not SQL text. |
-| G3 | A sandbox can only ever read its own user's rows, enforced by the database, not by tool code. |
-| G4 | PDF uploads up to 15 MB parse end-to-end; binary raw files never enter the citation index. |
-| G5 | The write path keeps PRD 0001 §6.2 guarantees: sandbox verifies `source_hash`, owns bytes and parsed markdown; the control plane owns metadata rows. |
-| G6 | The design degrades: with Postgres unreachable the run falls back to full-corpus grep and says so. |
-| G7 | When RFC 0005 moves bytes to object storage, the catalog query and the role/RLS design carry over unchanged. |
-| G8 | The tenant boundary is asserted, not assumed: policy presence, zero cross-tenant rows, role flags, and password enforcement are build-breaking checks (§5.9, R13). |
+| ID | Goal | Gate |
+|---|---|---|
+| G1 | Every parsed document's extracted metadata (entities, docDate, title, hashes, status) is persisted in the `document` row at ingest and visible to the dashboard. | B |
+| G2 | The agent's first corpus contact is a metadata query that returns docIds, never text. That query is fixed in the tool: the agent passes keywords as a bound parameter, not SQL text. | C, with RFC 0005 |
+| G3 | While bytes are workspace-local a sandbox holds no Postgres credential at all; from Phase C on it can only read its own user's rows, enforced by the database, not by tool code. | B: no credential; C: RLS |
+| G4 | PDF uploads up to 15 MB parse end-to-end; binary raw files never enter the citation index. | A |
+| G5 | The write path keeps PRD 0001 §6.2 guarantees: sandbox verifies `source_hash`, owns bytes and parsed markdown; the control plane owns metadata rows. | B |
+| G6 | The design degrades: with Postgres unreachable the run falls back to full-corpus grep and says so. | C |
+| G7 | The catalog query and the role/RLS design land together with RFC 0005's object storage — same change, not a carry-over. | C |
+| G8 | The tenant boundary is asserted, not assumed: policy presence, zero cross-tenant rows, role flags, and password enforcement are build-breaking checks (§5.9, R13). | C |
 
 ### 3.2 Non-goals
 
@@ -146,26 +181,29 @@ survives sandbox destruction by construction.
 - Text or markdown in Postgres. The `document` row stays metadata-only.
 - Write access of any kind from a sandbox to Postgres.
 - Moving bytes off the workspace volume (RFC 0005).
+- Any agent-facing catalog surface before RFC 0005's object storage: while
+  the agent can enumerate its workspace, `corpus_grep` is the narrowing tool
+  (D3, §2.2).
 - Multi-corpus ACLs and sharing (RFC 0005).
 
 ## 4. Requirements
 
-| ID | Requirement | Acceptance |
-|---|---|---|
-| R1 | `document` gains first-class `entities jsonb`, `structure jsonb` with a GIN index on `entities`. | A containment query on 10^4 rows uses the index (EXPLAIN) and returns bounded results. |
-| R2 | One login role per user (`agent_ro_<userId>`, member of the no-login group `agent_ro_group`) has `SELECT` on `document` only. | As any agent role: `UPDATE`/`DELETE`/`INSERT`/DDL fail with `permission denied`; other tables yield no data (their names remain listable via `information_schema` — public metadata, not data). |
-| R3 | RLS derives the user from `session_user`; no session setting carries identity. | Sandbox A's query returns zero rows of user B; `SELECT set_config('app.user_id', …)` or any `SET` before the same query changes nothing; a stolen role-A password, used on a direct connection, still reads only user A. |
-| R4 | The catalog connection is unreachable from sandboxes unless provisioned. | With `CATALOG_URL` absent, the agent starts, answers, and the tool reports `catalog_unavailable`. |
-| R5 | `catalog_query` runs either its fixed statement (`keywords`, the default) or one caller-written read-only statement (`sql`). | `keywords` never becomes SQL text: a keyword like `' OR '1'='1` or `x; DROP TABLE` is a literal substring and returns zero rows. `sql` input that is not `SELECT`/`WITH` or contains `;` is rejected with `not_a_read_query` before any connection is opened. |
-| R6 | Queries are bounded server-side. | Role `statement_timeout` (2 s) aborts a heavy query; the tool truncates at 50 rows / 4 KB per cell and sets `truncated: true`. |
-| R7 | Probes never open the catalog. | `GET /health` and `GET /status` on a fresh sandbox open zero Postgres connections (`pg_stat_activity` empty). |
-| R8 | Upload limit is 15 MB on both sides; `.pdf` is accepted. | A 15 MB PDF ingests; a 15.1 MB file is refused by the form and by the sandbox with the same message. |
-| R9 | Binary raw files never enter the citation index. | After a PDF ingest, `documents()` lists it only once `corpus/docs/<docId>.md` exists; grep over a raw `.pdf` returns no mojibake. |
-| R10 | Ingest keeps PRD 0001 §6.2 semantics. | Same `docId`+hash idempotent; different hash `409`; `source_hash` mismatch leaves no file and no row. |
-| R11 | Strict-citation runs count catalog calls in the corpus-call budget. | A run that only loops `catalog_query` exhausts `MAX_CORPUS_CALLS` and is rejected. |
-| R12 | E2E exercises the full narrowing path through Caddy only. | `e2e-test` uploads a PDF, prompts for an entity-scoped question, and shows a `catalog_query` call preceding grep on the returned docIds. |
-| R13 | A guard stage in the stack gate asserts the boundary (§5.9, I3–I6). | Red matrix: with the policy dropped, `FORCE` removed, an `agent_ro_%` role granted `rolsuper`, a trust line replacing scram in `pg_hba`, or a foreign row visible, `./verify.sh` fails; on a healthy stack it passes. |
-| R14 | The keywords mode is deterministic: one statement per `match` value, byte-identical across runs, keywords as the only external input. | A curated-corpus test asserts the statement returns exactly the parsed documents containing all (or, with `match: "any"`, any) keyword across entity buckets, title and filename; `raw_only` and foreign-tenant rows never appear; more than 50 matches return 50 rows with `truncated: true` (§8 T15). |
+| ID | Requirement | Acceptance | Gate |
+|---|---|---|---|
+| R1 | `document` gains first-class `entities jsonb`, `structure jsonb` with a GIN index on `entities`. | A containment query on 10^4 rows uses the index (EXPLAIN) and returns bounded results. | B |
+| R2 | One login role per user (`agent_ro_<userId>`, member of the no-login group `agent_ro_group`) has `SELECT` on `document` only. | As any agent role: `UPDATE`/`DELETE`/`INSERT`/DDL fail with `permission denied`; other tables yield no data (their names remain listable via `information_schema` — public metadata, not data). | C |
+| R3 | RLS derives the user from `session_user`; no session setting carries identity. | Sandbox A's query returns zero rows of user B; `SELECT set_config('app.user_id', …)` or any `SET` before the same query changes nothing; a stolen role-A password, used on a direct connection, still reads only user A. | C |
+| R4 | The catalog connection is unreachable from sandboxes unless provisioned. | With `CATALOG_URL` absent, the agent starts, answers, and the tool reports `catalog_unavailable`. | C |
+| R5 | `catalog_query` runs either its fixed statement (`keywords`, the default) or one caller-written read-only statement (`sql`). | `keywords` never becomes SQL text: a keyword like `' OR '1'='1` or `x; DROP TABLE` is a literal substring and returns zero rows. `sql` input that is not `SELECT`/`WITH` or contains `;` is rejected with `not_a_read_query` before any connection is opened. | C |
+| R6 | Queries are bounded server-side. | Role `statement_timeout` (2 s) aborts a heavy query; the tool truncates at 50 rows / 4 KB per cell and sets `truncated: true`. | C |
+| R7 | Probes never open the catalog. | `GET /health` and `GET /status` on a fresh sandbox open zero Postgres connections (`pg_stat_activity` empty). | C |
+| R8 | Upload limit is 15 MB on both sides; `.pdf` is accepted. | A 15 MB PDF ingests; a 15.1 MB file is refused by the form and by the sandbox with the same message. | A |
+| R9 | Binary raw files never enter the citation index. | After a PDF ingest, `documents()` lists it only once `corpus/docs/<docId>.md` exists; grep over a raw `.pdf` returns no mojibake. | A |
+| R10 | Ingest keeps PRD 0001 §6.2 semantics. | Same `docId`+hash idempotent; different hash `409`; `source_hash` mismatch leaves no file and no row. | B |
+| R11 | Strict-citation runs count catalog calls in the corpus-call budget. | A run that only loops `catalog_query` exhausts `MAX_CORPUS_CALLS` and is rejected. | C |
+| R12 | E2E exercises the full narrowing path through Caddy only. | `e2e-test` uploads a PDF, prompts for an entity-scoped question, and shows a `catalog_query` call preceding grep on the returned docIds. | C |
+| R13 | A guard stage in the stack gate asserts the boundary (§5.9, I3–I6). | Red matrix: with the policy dropped, `FORCE` removed, an `agent_ro_%` role granted `rolsuper`, a trust line replacing scram in `pg_hba`, or a foreign row visible, `./verify.sh` fails; on a healthy stack it passes. | C |
+| R14 | The keywords mode is deterministic: one statement per `match` value, byte-identical across runs, keywords as the only external input. | A curated-corpus test asserts the statement returns exactly the parsed documents containing all (or, with `match: "any"`, any) keyword across entity buckets, title and filename; `raw_only` and foreign-tenant rows never appear; more than 50 matches return 50 rows with `truncated: true` (§8 T15). | C |
 
 ## 5. Design
 
@@ -175,12 +213,13 @@ survives sandbox destruction by construction.
 |---|---|---|---|
 | Raw bytes | workspace `corpus/raw/<docId><ext>` | sandbox `/ingest` | sandbox `/raw`, parser call, audit |
 | Parsed text | workspace `corpus/docs/<docId>.md` | sandbox (after `/convert`) | citation store (grep/read/annotate) |
-| Catalog | Postgres `document` (+ `ingest_event` history) | web app only | web app, dashboard, agent via per-user `agent_ro_<userId>` roles |
+| Catalog | Postgres `document` (+ `ingest_event` history) | web app only | web app, dashboard (Phase B); agent via per-user `agent_ro_<userId>` roles (Phase C, with RFC 0005) |
 | Session | `/data/session.sqlite` | Harness | Harness |
 
 The split is unchanged from RFC 0006 §5.2 — "the control plane owns the
 metadata; the sandbox owns the bytes" — with the catalog promoted from "row the
-dashboard lists" to "index the agent queries".
+dashboard lists" to "index the agent queries" at Phase C; until then the
+dashboard is its only reader.
 
 ### 5.2 Parse: knowledge-extractor at ingest (D1)
 
@@ -188,8 +227,9 @@ The parser is the existing knowledge-extractor service, a separate
 repository. Deployment follows
 the `affido-agent:latest` pattern: the image is built from that repo,
 tagged `knowledge-extractor:latest`, and declared in compose as a control-plane
-service (`knowledge-extractor`, `agents` network, token via env). The sandbox
-manager attaches it to every per-user network alongside `oltp` (§5.5). The e2e
+service (`knowledge-extractor`, `agents` network, token via env). At Phase B the sandbox manager attaches it to every per-user
+network; the `oltp` attachment arrives with Phase C, when sandboxes first
+need one (§5.5). The e2e
 guard that fails on `agent*` services is untouched: this is one shared service,
 not a sandbox.
 
@@ -249,10 +289,19 @@ is a new `docId`, not a new version.
   unchanged; a PDF preview serves bytes, and the dashboard already declares
   the "not textual" case.
 
-### 5.4 The read path: per-user roles, RLS on `session_user`, and the tool (D2)
+### 5.4 The read path: per-user roles, RLS on `session_user`, and the tool (D2, Phase C)
+
+Everything in §5.4–§5.6 and §5.9 ships at Phase C, in the same change as
+RFC 0005's object storage (D3). Before that point none of it exists: no
+`agent_ro_group`, no policy, no `CATALOG_RO_SECRET`, no Postgres reachability
+from any per-user network, no `pg` dependency. The design is recorded here
+because it is the part of this RFC that must be reviewed as a security
+boundary, and because Phase B's `entities`/`structure` columns are its
+substrate.
 
 Schema additions (a new hand-written SQL migration alongside 0001–0003 —
-the generator cannot express roles and policies):
+the generator cannot express roles and policies; the columns land at Phase B,
+the roles and policy at Phase C):
 
 ```sql
 ALTER TABLE document
@@ -261,6 +310,7 @@ ALTER TABLE document
   ADD COLUMN structure jsonb;     -- {page_count, has_tables, has_code, has_images}
 CREATE INDEX document_entities_gin_idx ON document USING gin (entities);
 
+-- Phase C (with RFC 0005):
 CREATE ROLE agent_ro_group NOLOGIN;
 GRANT CONNECT ON DATABASE pi TO agent_ro_group;
 GRANT USAGE ON SCHEMA public TO agent_ro_group;
@@ -326,22 +376,23 @@ exists before the first tool call (R7).
 
 ### 5.5 Topology and secrets (manager changes)
 
-Three `sandbox_manager.py` changes, all RFC 0003-shaped (guests, reconcile,
-create-time env):
+`sandbox_manager.py` changes, all RFC 0003-shaped (guests, reconcile,
+create-time env), split by phase:
 
-- `ensure_guests` additionally connects `OLTP_CONTAINER` (default `oltp`) and
-  `KEX_CONTAINER` (default `knowledge-extractor`) to each per-user network.
-  Without this, the per-user catalog DSN and the parser URL are unreachable
-  from the sandbox. Today `ensure_guests` runs only in `provision()`: when compose
-  recreates the manager it loses every per-user attachment and an existing
-  sandbox stays unreachable until reprovisioned (the function's own
-  docstring). Two new guests make that gap load-bearing, so the reconcile
-  loop must also call `ensure_guests` for every registered user — one
-  `docker network inspect` per user per tick, `docker network connect` only
-  for what is missing.
-- `create_args` passes, when configured:
-  `-e CATALOG_URL=postgresql://agent_ro_<userId>:<password>@oltp:5432/pi?connect_timeout=2`
+- Phase B — `ensure_guests` additionally connects `KEX_CONTAINER` (default
+  `knowledge-extractor`) to each per-user network. Without it the parser URL
+  is unreachable from the sandbox. Today `ensure_guests` runs only in
+  `provision()`: when compose recreates the manager it loses every per-user
+  attachment and an existing sandbox stays unreachable until reprovisioned
+  (the function's own docstring). A new guest makes that gap load-bearing, so
+  the reconcile loop must also call `ensure_guests` for every registered
+  user — one `docker network inspect` per user per tick,
+  `docker network connect` only for what is missing.
+- Phase B — `create_args` passes
   `-e KEX_URL=http://knowledge-extractor:<port>` and the parser token.
+- Phase C, with RFC 0005 — `ensure_guests` also connects `OLTP_CONTAINER`
+  (default `oltp`), and `create_args` passes
+  `-e CATALOG_URL=postgresql://agent_ro_<userId>:<password>@oltp:5432/pi?connect_timeout=2`.
   The manager owns the roles: `provision()` creates the role idempotently
   through its existing superuser `DATABASE_URL` (a `pg_roles` lookup, then
   `CREATE ROLE "agent_ro_<uid>" LOGIN PASSWORD … IN ROLE agent_ro_group
@@ -359,16 +410,20 @@ create-time env):
   at 63 bytes and `agent_ro_` takes 9. Provisioning fails loudly otherwise
   (same stance as `safeDocId`).
 
-Secrets: `CATALOG_RO_SECRET` (the HMAC key; handling frozen as I3, §5.9) and
-`KEX_TOKEN` are manager env (compose defaults exist for local dev, like
-`dev-manager-token`; documented in `.env.example`). Sandboxes receive only their derived per-user DSN and the
-parser token, as env at `docker create`, so a change requires `dev.sh reload`
-— the same rule as a provider switch. The `.env` stays untracked.
+Secrets: `KEX_TOKEN` is manager env from Phase B; `CATALOG_RO_SECRET` (the
+HMAC key; handling frozen as I3, §5.9) arrives with Phase C. Both get compose
+defaults for local dev, like `dev-manager-token`, documented in
+`.env.example`. Sandboxes receive only the parser token (Phase B) and their
+own derived per-user DSN (Phase C), as env at `docker create`, so a change
+requires `dev.sh reload` — the same rule as a provider switch. The `.env`
+stays untracked.
 
-### 5.6 The `catalog_query` tool
+### 5.6 The `catalog_query` tool (Phase C)
 
-One `defineTool` in `agent/` beside the RFC 0006 citation tools, with two
-inputs: `keywords` (the default) and `sql` (a secondary input for structured
+One `defineTool` in `agent/` beside the RFC 0006 citation tools, shipped at
+Phase C with RFC 0005's object storage (D3); until then the agent narrows
+with `corpus_grep` alone and this tool does not exist. Two inputs:
+`keywords` (the default) and `sql` (a secondary input for structured
 predicates). In keywords mode the statement is fixed in the tool and the
 agent's keywords travel as one bound `$1::text[]` parameter — ripgrep
 semantics over metadata, executed by Postgres. A document matches when every
@@ -498,9 +553,9 @@ agree:
 
 ### 5.8 What the model never sees
 
-Bucket credentials (there are none yet), per-user catalog passwords, other
-users' rows, document text through the catalog, `ingest_event`, auth tables,
-and any write path. The failure modes are named errors, not silent
+Bucket credentials (there are none yet), any Postgres credential at all
+before Phase C, per-user catalog passwords, other users' rows, document text
+through the catalog, `ingest_event`, auth tables, and any write path. The failure modes are named errors, not silent
 fallthrough: unset scope, permission denied, timeout, unavailable.
 
 ### 5.9 Boundary guards: invariants I3–I6
@@ -549,10 +604,11 @@ once (I3).
   privilege-system, RLS, or auth changes) plus a guard-stage rerun, not a
   chore.
 
-Binding: I3, I5, and I6 apply from Phase B, when `CATALOG_RO_SECRET` and
-the DDL first enter the system; the I4 guard stage lands in Phase C, the
-same phase as the first sandbox-held credential, so no CI run ever
-exercises an unasserted boundary. The guards add no component and change
+Binding: I3–I6 all apply from Phase C — the change that lands with RFC 0005's
+object storage, where `CATALOG_RO_SECRET`, the role/policy DDL and the first
+sandbox-held credential enter the system together — so no CI run ever
+exercises an unasserted boundary. Phase B ships none of this surface, which
+is precisely why it may ship first. The guards add no component and change
 no runtime behavior: they are checks on what §5.4 already builds. And D3
 already bounds the worst case — the catalog holds metadata only, so even a
 fully broken boundary leaks titles, dates and entities, never document
@@ -560,21 +616,23 @@ text.
 
 ## 6. Interaction with RFC 0005, RFC 0006, PRD 0001
 
-- **RFC 0005**: this RFC is an early landing of its catalog plane (§5.2, G6:
-  "the catalog scales without enumeration"). Bytes, versioning, records,
-  sharing and the object store are untouched. When RFC 0005 lands: the
-  `document` table gains storage keys and versions; `catalog_query` keeps
-  working unchanged; `corpus_search` (0005 §6.1) either wraps this surface or
-  is dropped in favor of it — decision deferred to RFC 0005 implementation,
-  and 0005 §6.1 gets a note to that effect. The role/RLS design carries over.
+- **RFC 0005**: Phase C of this RFC *is* 0005's catalog plane, landing in the
+  same change as the storage move (D3) — there is no earlier landing. Bytes,
+  versioning, records, sharing and the object store are 0005's; the
+  `document` table gains storage keys and versions; `catalog_query` becomes
+  the fetch planner (docIds and keys out, bytes fetched after).
+  `corpus_search` (0005 §6.1) either wraps this surface or is dropped in
+  favor of it — decision at 0005 implementation, and 0005 §6.1 gets a note
+  to that effect. The role/RLS design ships there unchanged from §5.4.
 - **RFC 0006**: no change to the citation contract. The alignment table in
   0006 §6 gains: "`corpus_metadata` idea of PRD 0001 §6.4 → realized as
   `catalog_query` over Postgres (RFC 0007); metadata-only, docIds out". The
   strict-run budget now counts `catalog_query`.
-- **PRD 0001**: §4 upload limit 10 MB → 15 MB; §6.2 response carries
-  `parsed{…}` metadata instead of `markdown`; §6.4 `corpus_metadata` is
-  replaced by `catalog_query`. These edits land with the implementation, in
-  the same change, not after.
+- **PRD 0001**: §4 upload limit 10 MB → 15 MB and §6.2 response carrying
+  `parsed{…}` metadata instead of `markdown` land with Phases A/B; §6.4
+  `corpus_metadata` is replaced by `catalog_query` at Phase C — until then
+  the answer to "how does the agent find documents" stays `corpus_grep`, and
+  the PRD says so.
 
 ## 7. Migration
 
@@ -583,52 +641,58 @@ Phase A — upload and guard (independent, ships first):
 - 15 MB on both sides; `.pdf` accepted; binary exclusion in the citation
   store; tests for R8/R9. No parser, no catalog yet: PDFs stage as `raw_only`.
 
-Phase B — parse:
+Phase B — parse (still no agent-facing Postgres):
 
-- compose `knowledge-extractor` service; manager `KEX_*` env, guest attach;
-  sandbox `/ingest` calls `/convert`, verifies `source_hash`, writes
-  `corpus/docs`, returns `parsed{…}`; web app persists metadata; migration 0003
-  adds `entities`/`structure`/GIN (the `agent_ro_group` + policy DDL ships
-  here too, so the boundary exists before Phase C needs it); backfill job re-ingests `raw_only`
-  documents with a filename on record; manager `CATALOG_RO_SECRET` env and
-  per-user role provisioning — I3, I5, and I6 bind from this phase (§5.9).
+- compose `knowledge-extractor` service; manager `KEX_*` env and KEX guest
+  attach (reconcile included, §5.5); sandbox `/ingest` calls `/convert`,
+  verifies `source_hash`, writes `corpus/docs`, returns `parsed{…}`; web app
+  persists metadata; migration adds `entities`/`structure`/GIN; backfill job
+  re-ingests `raw_only` documents with a filename on record. No
+  `agent_ro_group`, no policy, no `CATALOG_RO_SECRET`, no `oltp` guest, no
+  `pg`: the agent narrows with `corpus_grep` over `corpus/docs/*.md`, which
+  this phase makes work for PDFs too.
 
-Phase C — read:
+Phase C — catalog + object storage (one change with RFC 0005, or never):
 
-- manager passes `CATALOG_URL` (needs `dev.sh reload`: sandbox env is fixed at
-  create); `pg` dependency; `catalog_query` tool, prompt section, skill;
-  strict-run budget integration; e2e per R12; guard stage in `./verify.sh`
-  (R13/I4) and tests T13–T14 land in the same phase as the first
-  sandbox-held credential.
+- RFC 0005 moves bytes to the bucket; in the same change: role/policy DDL
+  and `CATALOG_RO_SECRET` (I3–I6 bind here, §5.9); manager `oltp` guest
+  attach, per-user role provisioning and `CATALOG_URL` at `docker create`
+  (needs `dev.sh reload`: sandbox env is fixed at create); `pg` dependency;
+  `catalog_query` tool, prompt section, skill; strict-run budget
+  integration; e2e per R12; guard stage in `./verify.sh` (R13/I4) and tests
+  T13–T15. This phase is not schedulable on its own: without the bucket it
+  is the rejected alternative (§9, D3).
 
-Rollback: each phase is independent. Removing Phase C returns the agent to
-grep-all; removing Phase B returns staging-only uploads; Phase A's limit raise
-is harmless without the others.
+Rollback: each phase is independent. Removing Phase C rolls back together
+with RFC 0005 (bytes return to the workspace) and the agent goes back to
+grep-all; removing Phase B returns staging-only uploads; Phase A's limit
+raise is harmless without the others.
 
 ## 8. Testing
 
-| ID | Test |
-|---|---|
-| T1 | An agent role sees exactly its user's rows; a second user's sandbox gets zero rows for the same query. |
-| T2 | Identity games are inert: `SELECT set_config('app.user_id','B',false)`, `SET app.user_id`, and `SET SESSION AUTHORIZATION` all fail or change nothing — zero rows of B either way. |
-| T3 | `UPDATE`/`DELETE`/`INSERT`/`CREATE TABLE` as an agent role fail with `permission denied`; `SELECT` of data from any other table fails. |
-| T4 | A query slower than 2 s aborts with SQLSTATE `57014`; the tool reports `query_timeout`. |
-| T5 | `sql` input rejects `;`, `DELETE …`, empty input as `not_a_read_query` without opening a connection. |
-| T6 | 60-row result truncates at 50 with `truncated: true`; a 10 KB cell truncates at 4096. |
-| T7 | Fresh sandbox: `GET /health`, `GET /status`, then `pg_stat_activity` shows no `agent_ro_%` connections. |
-| T8 | Unit: binary exclusion — a staged `.pdf` is absent from `documents()` until `corpus/docs/<docId>.md` appears. |
-| T9 | Unit: ingest response mapping, `source_hash` mismatch leaves no file, idempotent replay, `409` on different hash. |
-| T10 | Strict run: `catalog_query` calls counted; exhausting the budget rejects with `turn_budget_exhausted`. |
-| T11 | Degraded: `CATALOG_URL` unset or oltp stopped → `catalog_unavailable`, the run still answers via full-corpus grep. |
-| T12 | E2E through Caddy (`localhost:18080/u/<user>/…`): upload 15 MB PDF → parsed row with entities → prompt "in which documents is X a party" → trace shows a `catalog_query` keywords call → grep only on returned docIds → citations verify. |
-| T13 | Guard red matrix (R13): each injected failure — policy dropped, `FORCE` removed, `rolsuper` on an agent role, a trust `pg_hba` line, one visible foreign row — fails `./verify.sh`; the healthy stack passes. |
-| T14 | Secret rotation (I3): change `CATALOG_RO_SECRET`, `dev.sh reload`; old derived DSNs are rejected with an auth failure, new DSNs still read only their own tenant. |
-| T15 | Fixed statements on a live cluster (schema and policy of §5.4, `postgres:17-alpine`): `match:"all"`/`"any"` return exactly the parsed docs containing all/any keyword across buckets, title and filename; injection strings (` OR '1'='1`, `x; DROP TABLE document;--`) are literals — zero rows, no error, table intact; non-array buckets and NULL `entities` are safe; `raw_only` and foreign-tenant rows never appear; 51 fetched, 50 returned with `truncated: true`. |
+| ID | Test | Gate |
+|---|---|---|
+| T1 | An agent role sees exactly its user's rows; a second user's sandbox gets zero rows for the same query. | C |
+| T2 | Identity games are inert: `SELECT set_config('app.user_id','B',false)`, `SET app.user_id`, and `SET SESSION AUTHORIZATION` all fail or change nothing — zero rows of B either way. | C |
+| T3 | `UPDATE`/`DELETE`/`INSERT`/`CREATE TABLE` as an agent role fail with `permission denied`; `SELECT` of data from any other table fails. | C |
+| T4 | A query slower than 2 s aborts with SQLSTATE `57014`; the tool reports `query_timeout`. | C |
+| T5 | `sql` input rejects `;`, `DELETE …`, empty input as `not_a_read_query` without opening a connection. | C |
+| T6 | 60-row result truncates at 50 with `truncated: true`; a 10 KB cell truncates at 4096. | C |
+| T7 | Fresh sandbox: `GET /health`, `GET /status`, then `pg_stat_activity` shows no `agent_ro_%` connections. | C |
+| T8 | Unit: binary exclusion — a staged `.pdf` is absent from `documents()` until `corpus/docs/<docId>.md` appears. | A |
+| T9 | Unit: ingest response mapping, `source_hash` mismatch leaves no file, idempotent replay, `409` on different hash. | B |
+| T10 | Strict run: `catalog_query` calls counted; exhausting the budget rejects with `turn_budget_exhausted`. | C |
+| T11 | Degraded: `CATALOG_URL` unset or oltp stopped → `catalog_unavailable`, the run still answers via full-corpus grep. | C |
+| T12 | E2E through Caddy (`localhost:18080/u/<user>/…`): upload 15 MB PDF → parsed row with entities → prompt "in which documents is X a party" → trace shows a `catalog_query` keywords call → grep only on returned docIds → citations verify. | C |
+| T13 | Guard red matrix (R13): each injected failure — policy dropped, `FORCE` removed, `rolsuper` on an agent role, a trust `pg_hba` line, one visible foreign row — fails `./verify.sh`; the healthy stack passes. | C |
+| T14 | Secret rotation (I3): change `CATALOG_RO_SECRET`, `dev.sh reload`; old derived DSNs are rejected with an auth failure, new DSNs still read only their own tenant. | C |
+| T15 | Fixed statements on a live cluster (schema and policy of §5.4, `postgres:17-alpine`): `match:"all"`/`"any"` return exactly the parsed docs containing all/any keyword across buckets, title and filename; injection strings (` OR '1'='1`, `x; DROP TABLE document;--`) are literals — zero rows, no error, table intact; non-array buckets and NULL `entities` are safe; `raw_only` and foreign-tenant rows never appear; 51 fetched, 50 returned with `truncated: true`. | C |
 
 ## 9. Alternatives considered
 
 | Alternative | Why not |
 |---|---|
+| Agent-facing catalog shipped while bytes are workspace-local (this RFC's first draft) | With local bytes `corpus_grep` narrows and returns paths in one call; the Postgres path answers the same question slower and costs per-user roles, a crown-jewel secret, RLS guards and a `pg` dependency. The catalog pays for itself only when the bucket removes enumeration — so Phase C is gated on RFC 0005 (D3, §2.2). |
 | Agent parses PDFs itself with curated skills | Breaks D1's rationale: unstable evidence text, model-verified-by-model circularity, tokens burned on OCR, ingest pinned to conversation lifetime. |
 | Structured filter tool (`search_documents(filters)`) | A fixed vocabulary must predict every query shape over evolving JSONB buckets; rejected as the only interface. What v1 ships instead is narrower and covers the common path: one fixed keyword statement (§5.6) — a filter vocabulary of exactly one concept, grep — with raw SQL as the escape hatch for everything else. |
 | HTTP metadata-search endpoint on the control plane, sandbox calls it | Keeps Postgres off user networks, but adds a hop, a second query language to maintain, and a middleman that must re-implement RLS. Postgres auth + RLS is the purpose-built primitive. |
@@ -668,6 +732,11 @@ is harmless without the others.
 9. **N login roles.** One role per user lives in the cluster (`pg_authid`),
    created and converged by the manager at provision. They are cheap rows;
    eviction may set them `NOLOGIN` (dropping is optional).
+10. **Narrowing quality until Phase C.** Date-range and NER-typed questions
+   are approximated by grep plus reading the candidates while bytes are
+   local; the metadata for exact answers is already persisted (Phase B) but
+   the agent does not query it. Accepted cost of the D3 gate; it closes when
+   RFC 0005 lands.
 
 ## 11. Decision requested
 
@@ -675,17 +744,20 @@ Approve:
 
 1. knowledge-extractor as the external parser at ingest, bytes and parsed
    markdown in the workspace, metadata in `oltp` (D1, §5.2).
-2. Narrowing via `catalog_query` — one fixed, parameter-bound statement
-   driven by keywords (§5.6), with raw SQL as a secondary input for
-   structured predicates — backed by one login role per user
-   (`agent_ro_<userId>`, member of `agent_ro_group`) with `SELECT` on
-   `document` only, RLS keyed on `session_user`, per-role timeout, read-only
-   transactions and connection limit (D2, §5.4).
+2. The gate (D3): no agent-facing catalog while bytes are workspace-local.
+   The agent's narrowing tool is `corpus_grep` over `corpus/docs/*.md`, and no
+   sandbox holds a Postgres credential, role, or DSN before Phase C.
 3. The 15 MB / `.pdf` upload change and the citation-store binary guard
    (§5.3, §5.7).
-4. The phase order A → B → C (§7), with PRD 0001 §4/§6.2/§6.4 edits landing in
-   the same changes.
-5. The boundary guards I3–I6 (§5.9) — crown-jewel handling of
+4. The Phase C design, landing in the same change as RFC 0005's object
+   storage: `catalog_query` — one fixed, parameter-bound statement driven by
+   keywords (§5.6), raw SQL as a secondary input — backed by one login role
+   per user (`agent_ro_<userId>`, member of `agent_ro_group`) with `SELECT`
+   on `document` only, RLS keyed on `session_user`, per-role timeout,
+   read-only transactions and connection limit (D2, §5.4).
+5. The phase order A → B → C (§7), with PRD 0001 edits landing in the same
+   changes: §4 and §6.2 with Phases A/B, §6.4 with Phase C.
+6. The boundary guards I3–I6 (§5.9) — crown-jewel handling of
    `CATALOG_RO_SECRET`, the `./verify.sh` guard stage (R13), migration
-   sensitivity for `document`, Postgres pin discipline — landing with
-   Phases B/C as specified, not as follow-ups.
+   sensitivity for `document`, Postgres pin discipline — all binding from
+   Phase C, the phase that first creates a credential, not as follow-ups.
