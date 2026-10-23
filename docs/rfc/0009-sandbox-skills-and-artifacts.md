@@ -186,7 +186,9 @@ Pillow and LibreOffice). Inside a per-user sandbox that means:
 - **R5 — Closed toolbox.** `require("docx")` and `require("unpdf")` succeed
   in any Node script the agent runs from the workspace, with no network;
   `npm`, `npx`, and `corepack` are absent from the image; a skill manifest's
-  required libraries must exist in the image (e2e-enforced).
+  required libraries must exist in the image (e2e-enforced). The container
+  prompt section states these facts to the model in every sandbox, with no
+  skill installed.
 - **R6 — Return path.** Any file under `artifacts/` is downloadable by its
   owner; nothing else is; the response is always an attachment with a static
   content type.
@@ -333,6 +335,18 @@ Rules:
   use what we make available": a prompt-injected `npm install` fails with
   `command not found`, not with a policy sentence the model can argue with.
   (Recovery is always one `dev.sh reload` away: the image is the deploy unit.)
+- **The container prompt section states the toolbox** (added after the first
+  real PDF session exposed the gap: the model met a `.pdf`, looked for
+  `pdftotext`/Python, found neither, and characterized the file by its magic
+  bytes instead of reading it). Awareness of the baked libraries no longer
+  depends on a skill being installed: the server-built `container` section in
+  `agent/agent.ts` (exported as `containerSection`, asserted by a unit test)
+  tells every sandbox that `docx` and `unpdf` are preinstalled and
+  `require()`-able from any working directory through `NODE_PATH`, how to read
+  a PDF with `unpdf` (`getDocumentProxy` + `extractText`, embedded text only —
+  a scanned PDF yields none), and that `pdftotext`, Python, LibreOffice, and
+  the installer do not exist. Skills still ship procedure; the image ships
+  capability plus this one bounded statement of fact about the capability.
 - Not added: python3, Pillow, LibreOffice. The container skill variant (§5.9)
   works without them; validation is structural in Node.
 

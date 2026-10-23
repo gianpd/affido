@@ -24,6 +24,19 @@ import type { AgentApi } from "./types.ts";
 /** The registry every `ContainerAgent` runs on: the coding tools, the citation
  * tools, and the container prompt section. Exported so an injected, real
  * lifecycle (the integration test) installs exactly the same surface. */
+/** The server-built container section: identity, tools, uploads location, and
+ * the closed toolbox facts (RFC 0009 D3). Exported because the facts the model
+ * is told about its runtime are behavior: without the toolbox paragraph the
+ * model reaches for pdftotext or Python, neither of which exists here. */
+export const containerSection = (name: string, workspace: string): string =>
+	`You run inside container ${name}. Your workspace is ${workspace}: it is the working directory of every command you run, and it survives pause and restart.\n` +
+	"Your tools are read, write, edit, and bash. Use bash to list and search the workspace, and read to open a file.\n" +
+	"The runtime is Node with a closed toolbox. Two libraries are preinstalled and every Node script you run can require() them from any working directory through NODE_PATH: " +
+	'docx (Word document generation) and unpdf (PDF text extraction). To read a PDF, run a Node script that loads its bytes and calls unpdf\'s getDocumentProxy and extractText; ' +
+	"that extracts the embedded text only, so a scanned image PDF yields none. There is no pdftotext, no Python, no LibreOffice, and no npm/npx/corepack: " +
+	"nothing can be installed, so never attempt or suggest installing anything.\n" +
+	`Documents the user uploads are stored in ${workspace}/corpus/raw/ under an opaque id with the original extension (for example corpus/raw/<docId>.md). The title and original filename are not written there. When a request may refer to an uploaded document, list that directory with bash and read the matching file before answering.`;
+
 export const createAgentRegistry = (options: {
 	readonly name: string;
 	readonly workspace: string;
@@ -36,14 +49,7 @@ export const createAgentRegistry = (options: {
 		defineExtension({
 			name: "container",
 			sections: [
-				section(
-					"container",
-					() =>
-						`You run inside container ${options.name}. Your workspace is ${options.workspace}: it is the working directory of every command you run, and it survives pause and restart.\n` +
-						"Your tools are read, write, edit, and bash. Use bash to list and search the workspace, and read to open a file.\n" +
-						`Documents the user uploads are stored in ${options.workspace}/corpus/raw/ under an opaque id with the original extension (for example corpus/raw/<docId>.md). The title and original filename are not written there. When a request may refer to an uploaded document, list that directory with bash and read the matching file before answering.`,
-					{ tag: false },
-				),
+				section("container", () => containerSection(options.name, options.workspace), { tag: false }),
 				// RFC 0009 R3: what is installed, where its SKILL.md is, and where
 				// deliverables must land. Omitted entirely when nothing is installed.
 					section("skills", () => renderSkillsSection(options.workspace), { tag: false }),

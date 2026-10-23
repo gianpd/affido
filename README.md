@@ -1,6 +1,6 @@
 # Affido
 
-[![CI](https://github.com/affidohq/affido/actions/workflows/ci.yml/badge.svg)](https://github.com/affidohq/affido/actions/workflows/ci.yml)
+[![CI](https://github.com/gianpd/affido/actions/workflows/ci.yml/badge.svg)](https://github.com/gianpd/affido/actions/workflows/ci.yml)
 
 **Self-hosted AI agents you can entrust: sandboxed by default, powers granted
 one skill at a time, every act traced and on the record.**
@@ -356,7 +356,11 @@ The image ships capability, not knowledge: a closed set of runtime libraries
 exact-pinned, resolved through `NODE_PATH`) and **no installer** — `npm`,
 `npx`, and `corepack` are deleted from the runtime image, so extending the
 toolbox at runtime fails with `command not found`. `verify.sh` asserts both
-properties. `unpdf` bundles a serverless build of PDF.js; the bundled engine
+properties. The server-built container prompt section states these facts to
+the model in every sandbox — which libraries exist, that PDFs are read with
+`unpdf`, and that nothing can be installed — so an uploaded PDF is read
+through `unpdf`, never characterized by its magic bytes for lack of
+`pdftotext`. `unpdf` bundles a serverless build of PDF.js; the bundled engine
 version is pinned by a unit test, so upgrading it is a one-line, reviewed
 change. `md-to-docx` is the first catalog skill; the e2e drives the shipped
 bundle end to end, including the faux documents dance that builds a real

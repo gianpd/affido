@@ -21,7 +21,7 @@ import type {
 	TaskId,
 	TaskInspection,
 } from "@earendil-works/pi-durable";
-import { ContainerAgent } from "./agent.ts";
+import { ContainerAgent, containerSection } from "./agent.ts";
 import { MAX_ARTIFACT_BYTES } from "./artifacts.ts";
 import type { ConversationHandler, HarnessLifecycle } from "./harness.ts";
 import {
@@ -317,6 +317,20 @@ test("a /skill_name prompt carries the server-built hint in the stored content",
 	const plain = await agent.prompt("what is 2+2", "req-hint-3", "off");
 	assert.equal((drafts.at(-1) as { content?: unknown }).content, "what is 2+2");
 	assert.deepEqual(plain.artifacts, []);
+});
+	test("the container section states the closed toolbox (RFC 0009 D3): every sandbox knows unpdf", () => {
+	// Server-built facts, present with no skill installed. Without the toolbox
+	// paragraph the model reaches for pdftotext or Python and reports a PDF as
+	// unreadable; the paragraph must name both baked libraries, the NODE_PATH
+	// resolution, the unpdf entry points, and the no-installer boundary.
+	const text = containerSection("u1", "/workspace");
+	assert.ok(text.includes("unpdf"), "names unpdf");
+	assert.ok(text.includes("docx"), "names docx");
+	assert.ok(text.includes("NODE_PATH"), "names NODE_PATH");
+	assert.ok(text.includes("getDocumentProxy"), "names the unpdf entry point");
+	assert.ok(text.includes("extractText"), "names the unpdf extraction call");
+	assert.ok(text.includes("pdftotext"), "rules out pdftotext explicitly");
+	assert.ok(text.includes("nothing can be installed"), "states the no-installer boundary");
 });
 
 test("status reports the injected lifecycle without activating it", async () => {
