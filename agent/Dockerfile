@@ -5,17 +5,18 @@ WORKDIR /app
 # Install dependencies first so the layer is cached across server edits.
 # Dev dependencies (typescript, @types/node) are only for the typecheck gate,
 # not the runtime: Node 24 runs the .ts sources with native type stripping.
-# `docx` is a runtime library of the image, not of the server: nothing in the
-# agent source imports it — generation scripts the model writes use it through
-# NODE_PATH (RFC 0009 D3).
+# `docx` and `unpdf` are runtime libraries of the image, not of the server:
+# nothing in the agent source imports them — generation and parsing scripts
+# the model writes use them through NODE_PATH (RFC 0009 D3).
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 
 # Closed toolbox (RFC 0009 D3): the installer does not exist in the runtime
 # image, so "extend the toolbox at runtime" fails with command not found
 # instead of being a policy the model can argue with. The runtime libraries
-# under /app/node_modules (including docx) are untouched. Recovery from any
-# image change is one `dev.sh reload` away: the image is the deploy unit.
+# under /app/node_modules (including docx and unpdf) are untouched. Recovery
+# from any image change is one `dev.sh reload` away: the image is the deploy
+# unit.
 RUN rm -rf /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
 

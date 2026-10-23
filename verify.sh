@@ -47,10 +47,11 @@ for binary in npm npx corepack; do
 	fi
 done
 pass "npm, npx and corepack are absent (command not found)"
-# The one baked runtime library resolves through NODE_PATH, with no network.
-docker run --rm --network none affido-agent:latest node -e "require('docx')" >/dev/null 2>&1 \
-	|| fail "require('docx') must resolve through NODE_PATH"
-pass "docx resolves in the image without network"
+# The baked runtime libraries resolve through NODE_PATH, with no network.
+docker run --rm --network none affido-agent:latest \
+	node -e "require('docx'); require('unpdf')" >/dev/null 2>&1 \
+	|| fail "require('docx')/require('unpdf') must resolve through NODE_PATH"
+pass "docx and unpdf resolve in the image without network"
 
 echo "== marketplace bundle: manifest hashes are fresh (RFC 0009 R1) =="
 node marketplace/manifest.mjs --check >/dev/null || fail "marketplace manifest is stale: run node marketplace/manifest.mjs"

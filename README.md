@@ -351,13 +351,16 @@ agent:
   always attachments with a static content type, capped at 25 MiB, and a
   symlink anywhere under `artifacts/` is neither listed nor served.
 
-The image ships capability, not knowledge: exactly one runtime library
-(`docx`, exact-pinned, resolved through `NODE_PATH`) and **no installer** —
-`npm`, `npx`, and `corepack` are deleted from the runtime image, so extending
-the toolbox at runtime fails with `command not found`. `verify.sh` asserts
-both properties. `md-to-docx` is the first catalog skill; the e2e drives the
-shipped bundle end to end, including the faux documents dance that builds a
-real `.docx` without an API key.
+The image ships capability, not knowledge: a closed set of runtime libraries
+(`docx` for document generation, `unpdf` for PDF text extraction — both
+exact-pinned, resolved through `NODE_PATH`) and **no installer** — `npm`,
+`npx`, and `corepack` are deleted from the runtime image, so extending the
+toolbox at runtime fails with `command not found`. `verify.sh` asserts both
+properties. `unpdf` bundles a serverless build of PDF.js; the bundled engine
+version is pinned by a unit test, so upgrading it is a one-line, reviewed
+change. `md-to-docx` is the first catalog skill; the e2e drives the shipped
+bundle end to end, including the faux documents dance that builds a real
+`.docx` without an API key.
 
 ## Strict citations (RFC 0006)
 

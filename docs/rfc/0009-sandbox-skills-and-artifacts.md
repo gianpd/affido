@@ -37,9 +37,10 @@ This RFC closes the four gaps with a strict separation of planes:
   workspace at `WORKSPACE/skills/<name>/` through new non-activating agent
   endpoints. Installed skills live on the per-user volume, so they survive
   pause, stop, eviction, and reprovision; only `dev.sh reset` removes them.
-- **Capability is baked, minimal, and closed** (D3). The image gains exactly
-  one runtime library — `docx`, exact-pinned — reachable from any working
-  directory via `NODE_PATH`. The agent cannot extend its own toolbox:
+- **Capability is baked, minimal, and closed** (D3). The image gains a closed
+  set of runtime libraries — `docx` (document generation) and `unpdf` (PDF
+  text extraction), both exact-pinned — reachable from any working directory
+  via `NODE_PATH`. The agent cannot extend its own toolbox:
   `npm`/`npx`/`corepack` are deleted from the runtime image, so "hide npm
   install" is enforced by the filesystem, not by prompt text. No Python, no
   Pillow, no LibreOffice.
@@ -128,9 +129,9 @@ Pillow and LibreOffice). Inside a per-user sandbox that means:
 - **Discovery without invocation.** The skills prompt section still lists what
   is installed, so plain-language requests ("make me a Word document") match
   skills too.
-- **Least privilege.** `require("docx")` works in any Node script the agent
-  runs from the workspace; `npm`/`npx`/`corepack` do not exist in the runtime
-  image; nothing installs anything at runtime.
+- **Least privilege.** `require("docx")` and `require("unpdf")` work in any
+  Node script the agent runs from the workspace; `npm`/`npx`/`corepack` do
+  not exist in the runtime image; nothing installs anything at runtime.
 - **Return path.** A user with a valid session can download any file under
   their sandbox's `artifacts/` root; no path outside that root is served; the
   response is always an attachment with a static content type.
@@ -182,10 +183,10 @@ Pillow and LibreOffice). Inside a per-user sandbox that means:
 - **R4 — Invocation.** `/skill_name` at the start of a prompt resolves against
   installed skills; the model receives a hint naming the `SKILL.md` to read.
   Unresolved names yield a note listing what is installed.
-- **R5 — Closed toolbox.** `require("docx")` succeeds in any Node script the
-  agent runs from the workspace, with no network; `npm`, `npx`, and `corepack`
-  are absent from the image; a skill manifest's required libraries must exist
-  in the image (e2e-enforced).
+- **R5 — Closed toolbox.** `require("docx")` and `require("unpdf")` succeed
+  in any Node script the agent runs from the workspace, with no network;
+  `npm`, `npx`, and `corepack` are absent from the image; a skill manifest's
+  required libraries must exist in the image (e2e-enforced).
 - **R6 — Return path.** Any file under `artifacts/` is downloadable by its
   owner; nothing else is; the response is always an attachment with a static
   content type.
@@ -298,13 +299,27 @@ Rules:
   `/skills/file`; then call `/skills/verify` with the manifest; a mismatch
   surfaces in the UI (retry rewrites the same paths).
 
-### 5.4 D3 — Least-privilege runtime: one library, no installer
+### 5.4 D3 — Least-privilege runtime: baked libraries, no installer
 
 - `agent/package.json` gains `"docx": "<exact version>"` (the pin is chosen at
   implementation; the policy is the repo's: direct dependencies exact). It is
   a runtime dependency of the image, not of `server.ts` — nothing in the agent
   source imports it. `npm ci --omit=dev --ignore-scripts` installs it into
   `/app/node_modules` as today.
+- `unpdf` (pinned `1.9.1`) is the second baked library, for PDF text
+  extraction (`getDocumentProxy` + `extractText`; scanned PDFs need OCR and
+  stay out of scope). Why this package: zero transitive dependencies (the
+  `npm audit` surface is one package), ~2 MB of which 1.7 MB is the bundled
+  serverless PDF.js build — no native binaries, no `canvas` module — and no
+  `eval`/`new Function` in that build, so the CVE-2024-4367 code path is
+  structurally absent (the fix floor, 4.2.67, is asserted anyway). The
+  bundled engine version (6.4.299 at pin time) is asserted by
+  `agent/unpdf.test.ts`: a PDF.js upgrade inside an unpdf bump is a
+  deliberate, reviewed change, never silent drift. If a PDF.js CVE lands and
+  unpdf lags, `definePDFJSModule` can mount an external `pdfjs-dist` (legacy
+  build — the default entry fails on Node 24); that escape hatch is
+  documented here, not pre-built. A security update is: bump the pin, bump
+  the test constant, `./dev.sh reload`.
 - `Dockerfile` adds `ENV NODE_PATH=/app/node_modules`. Node's CJS resolution
   honors `NODE_PATH` after walking up from the script directory, so
   `node generate_x.js` anywhere in `WORKSPACE` resolves `require("docx")`
@@ -553,7 +568,7 @@ catalog (repo bundle)          user's sandbox (volume)              prompt time
 
 | Content | Author | Reviewed how | Executes where |
 |---|---|---|---|
-| Image + `docx` library | platform | code review, lockfile, `verify.sh` | Node, in every sandbox |
+| Image + `docx`/`unpdf` libraries | platform | code review, lockfile, `verify.sh`, engine version pinned by unit test | Node, in every sandbox |
 | Marketplace skill files | platform | catalog review + e2e that drives the shipped bundle | the model *reads* them; scripts it writes run with baked libs only |
 | `uploads/` trees | user | not reviewed (single-tenant trust) | same as above |
 | `/prompt` text | user | not reviewed | same |
@@ -565,14 +580,17 @@ installer does not exist to extend it.
 
 ## 9. Testing
 
-- **Unit (`agent/skills.test.ts`, `agent/artifacts.test.ts`):** skill-name
+- **Unit (`agent/skills.test.ts`, `agent/artifacts.test.ts`,
+  `agent/unpdf.test.ts`):** skill-name
   validation; install writes and overwrite idempotency; `GET /skills`
   frontmatter parsing (bounded, missing-description disqualified); verify
   against a manifest (ok/mismatch/missing); `safeTreePath` reuse; tree walk
   (cap, truncation, symlink skip); `snapshotArtifacts` + `diffArtifacts`
   (create/change/delete/no-root); content-type map and disposition building;
   `RawResponse` writing; hint builder (resolve/strip, not-installed note,
-  non-prefix `/` untouched).
+  non-prefix `/` untouched); unpdf: bundled PDF.js version pinned exactly,
+  CVE-2024-4367 floor asserted, extraction smoke test on the running Node
+  major.
 - **Agent test (`agent.test.ts` extension):** fake-lifecycle prompt whose
   script writes a file into sandbox `artifacts/` between snapshot and settle
   reports it in the envelope; replay of the same `requestId` returns the same
@@ -599,8 +617,9 @@ installer does not exist to extend it.
   3. The documents dance asserts the hint: an unknown `/nope` prompt receives the
      not-installed note and answers without pretending.
 - **Image gate:** `verify.sh` asserts `docker run --rm <image> npm --version`
-  fails (installer absent) and `node -e "require('docx')"` succeeds with
-  `NODE_PATH` set and the network namespace of the test removed.
+  fails (installer absent) and `node -e "require('docx'); require('unpdf')"`
+  succeeds with `NODE_PATH` set and the network namespace of the test
+  removed.
 - **Gates:** `cd agent && npm run typecheck && npm test`; `cd frontend &&
   pnpm check && pnpm test:unit -- --run`; `./verify.sh` (the RFC crosses the
   agent/Caddy/frontend boundary). Docs: README HTTP API table gains the seven
@@ -641,8 +660,8 @@ the session and forward bounded requests to the user's own sandbox.
   artifact walks (0 when the root is absent). Local filesystem; microseconds.
 - **Memory:** one ≤ 25 MiB transient buffer per in-flight download, per
   sandbox; the proxy never buffers.
-- **Image:** `+docx` (~3 MB), `−npm −npx −corepack` (a net reduction); every
-  sandbox shares the same immutable layers.
+- **Image:** `+docx` (~3 MB), `+unpdf` (~2 MB), `−npm −npx −corepack` (a net
+  reduction); every sandbox shares the same immutable layers.
 - **10k users:** each sandbox is independent; downloads are per-sandbox
   streams through Caddy, which already proxies every other response.
 
@@ -653,8 +672,8 @@ One implementation slice, no migration:
 1. `agent/`: `skills.ts` + `artifacts.ts` (+ tests), hint builder in
    `agent.ts`, `RawResponse` in `http.ts`, seven `HttpTool`s (skills ×4,
    artifacts ×3), envelope diff, skills section in `createAgentRegistry`,
-   `docx` pin + `Dockerfile` (`NODE_PATH`, installer removal), faux documents
-   dance in `model.ts`.
+   `docx`/`unpdf` pins + `Dockerfile` (`NODE_PATH`, installer removal), faux
+   documents dance in `model.ts`.
 2. `marketplace/`: bundle `md-to-docx` (adapted SKILL.md, references,
    manifest) + `manifest.mjs` + `README.md`.
 3. `frontend/`: catalog page, install/verify/uninstall calls, sandbox
