@@ -1,0 +1,1 @@
+DROP INDEX "trace_session_userId_conversationId_idx";

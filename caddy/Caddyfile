@@ -1,0 +1,26 @@
+# The only externally published endpoint. Per-user sandbox agents are not
+# declared in compose: the manager creates them on demand and returns their
+# upstream in X-Sandbox-Endpoint, so Caddy has no static agent routes.
+
+:80 {
+	# RFC 0003: per-user sandboxes. The manager resolves user -> sandbox (starting
+	# it if needed) and returns the upstream in X-Sandbox-Endpoint; Caddy then
+	# dials that endpoint. forward_auth's default GET subrequest never consumes
+	# the request body, so POST /prompt replays intact.
+	@u path_regexp u ^/u/([^/]+)/(.*)$
+	handle @u {
+		# Never let a client-supplied endpoint reach the dial (GHSA-7r4p-vjf4-gxv4).
+		header -X-Sandbox-Endpoint
+		rewrite * /{re.u.2}
+		forward_auth sandbox-manager:8090 {
+			uri /resolve?user_id={re.u.1}
+			header_up X-Manager-Token {env.MANAGER_TOKEN}
+			copy_headers X-Sandbox-Endpoint
+		}
+		reverse_proxy {http.request.header.X-Sandbox-Endpoint}
+	}
+
+	handle {
+		respond "pi-durable agents: per-user sandboxes at /u/<user_id>/..." 200
+	}
+}

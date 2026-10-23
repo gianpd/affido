@@ -1,0 +1,814 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RFC 0007 risk graph — review</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel2: #1c2129;
+    --line: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --critical: #f85149;
+    --high: #ff9345;
+    --medium: #e3b341;
+    --low: #7d8590;
+    --good: #3fb950;
+    --security: #ff5757;
+    --bugs: #ff9f43;
+    --coherence: #ffd166;
+    --efficiency: #59a7ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color: #58a6ff; }
+
+  header { padding: 18px 24px 10px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: .2px; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .chips { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .chip { border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); background: var(--panel); }
+  .chip.critical { color: var(--critical); border-color: var(--critical); }
+  .chip.high { color: var(--high); border-color: var(--high); }
+  .chip.medium { color: var(--medium); border-color: var(--medium); }
+  .chip.low { color: var(--muted); border-color: var(--muted); }
+  .chip.good { color: var(--good); border-color: var(--good); }
+
+  .layout { display: flex; align-items: stretch; min-height: calc(100vh - 120px); }
+  #graphwrap { flex: 1 1 auto; position: relative; overflow: hidden; min-width: 0; }
+  svg#graph { width: 100%; height: calc(100vh - 150px); display: block; cursor: grab; }
+  svg#graph.dragging { cursor: grabbing; }
+
+  #controls { position: absolute; top: 12px; left: 12px; display: flex; gap: 6px; z-index: 5; }
+  #controls button { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+  #controls button:hover { border-color: #58a6ff; }
+
+  #legend { position: absolute; bottom: 12px; left: 12px; z-index: 5; background: rgba(13,17,23,.88);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 12px; color: var(--muted); }
+  #legend .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  #legend .item { display: inline-flex; align-items: center; gap: 5px; }
+  #legend .sw { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+  aside#detail { flex: 0 0 430px; border-left: 1px solid var(--line); background: var(--panel);
+    padding: 18px 20px; overflow-y: auto; max-height: calc(100vh - 150px); }
+  aside#detail h2 { margin: 0 0 2px; font-size: 16px; }
+  aside#detail .meta { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  aside#detail h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 14px 0 4px; }
+  aside#detail p, aside#detail li { font-size: 13px; margin: 4px 0; }
+  aside#detail code, aside#detail pre { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: #0b0f14; border: 1px solid var(--line); border-radius: 6px; }
+  aside#detail code { padding: 1px 5px; }
+  aside#detail pre { padding: 8px 10px; overflow-x: auto; }
+  .placeholder { color: var(--muted); font-size: 13px; margin-top: 40px; }
+  .breakchip { display: inline-block; border: 1px solid var(--line); border-radius: 4px; padding: 0 6px;
+    font-size: 11px; margin-right: 4px; color: var(--muted); }
+  .fixbox { border: 1px solid var(--good); border-radius: 8px; padding: 8px 12px; margin-top: 14px; background: rgba(63,185,80,.06); }
+  .fixbox h3 { color: var(--good) !important; }
+  .statusline { border: 1px solid var(--good); color: var(--good); border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 700; margin: 10px 0 4px; background: rgba(63,185,80,.08); }
+
+  section#bottom { border-top: 1px solid var(--line); padding: 20px 24px 40px; }
+  section#bottom h2 { font-size: 16px; margin: 0 0 10px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } aside#detail { display: none; } }
+  section#bottom ul { margin: 0; padding-left: 18px; }
+  section#bottom li { margin: 6px 0; font-size: 13px; }
+  .ok { color: var(--good); font-weight: 700; }
+  .verdict { border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; background: var(--panel); margin-bottom: 22px; font-size: 14px; }
+  .verdict b.critical { color: var(--critical); } .verdict b.high { color: var(--high); } .verdict b.medium { color: var(--medium); }
+  table.matrix { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.matrix th, table.matrix td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+  table.matrix th { color: var(--muted); font-weight: 600; background: var(--panel); }
+  table.matrix td.id { font-family: ui-monospace, monospace; white-space: nowrap; cursor: pointer; }
+  table.matrix td.id:hover { color: #58a6ff; }
+  .sev { font-weight: 700; }
+  .sev.critical { color: var(--critical); } .sev.high { color: var(--high); }
+  .sev.medium { color: var(--medium); } .sev.low { color: var(--muted); }
+
+  svg text { user-select: none; }
+  .node { cursor: pointer; }
+  .node.dim { opacity: .18; }
+  .edge.dim { opacity: .06; }
+  .edge { fill: none; stroke-width: 2; }
+  .edgelabel { font-size: 11px; fill: #9aa4b2; paint-order: stroke; stroke: #0d1117; stroke-width: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>RFC 0007 — Postgres catalog &amp; agent narrowing · risk graph</h1>
+  <div class="sub">Review axes: coherence · bug-freedom · security · efficiency. Every claim about the current code was checked against the repo. Click a node for the full finding; drag nodes, wheel-zoom, drag background to pan.</div>
+  <div class="chips" id="chips"></div>
+</header>
+
+<div class="layout">
+  <div id="graphwrap">
+    <div id="controls">
+      <button id="btnReset">Reset view</button>
+      <button id="btnLabels">Toggle edge labels</button>
+    </div>
+    <div id="legend">
+      <div class="row">
+        <span class="item"><span class="sw" style="background:var(--critical)"></span>critical</span>
+        <span class="item"><span class="sw" style="background:var(--high)"></span>high</span>
+        <span class="item"><span class="sw" style="background:var(--medium)"></span>medium</span>
+        <span class="item"><span class="sw" style="background:var(--low)"></span>low</span>
+        <span class="item"><span class="sw" style="background:var(--security)"></span>security zone</span>
+        <span class="item"><span class="sw" style="background:var(--bugs)"></span>bug zone</span>
+        <span class="item"><span class="sw" style="background:var(--coherence)"></span>coherence zone</span>
+        <span class="item"><span class="sw" style="background:var(--efficiency)"></span>efficiency zone</span>
+        <span class="item"><span style="width:18px;height:0;border-top:2px dashed #f85149;display:inline-block"></span>amplifies</span>
+      </div>
+    </div>
+    <svg id="graph" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6e7681"></path>
+        </marker>
+        <marker id="arrRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#f85149"></path>
+        </marker>
+      </defs>
+      <g id="viewport"></g>
+    </svg>
+  </div>
+  <aside id="detail"><div class="placeholder">Select a node to read the finding: what the RFC claims, what the code says, the concrete trace, the worst consequence, and the minimal fix.</div></aside>
+</div>
+
+<section id="bottom">
+  <div class="verdict" id="verdictBox"></div>
+  <div class="cols">
+    <div>
+      <h2>Verified sound (checked against the repo)</h2>
+      <ul id="positives"></ul>
+    </div>
+    <div>
+      <h2>Index</h2>
+      <table class="matrix" id="matrix"></table>
+    </div>
+  </div>
+</section>
+
+<script>
+"use strict";
+
+// ─── severity / zone palettes ────────────────────────────────────────────────
+const SEV = {
+  critical: { color: "#f85149", label: "CRITICAL" },
+  high:     { color: "#ff9345", label: "HIGH" },
+  medium:   { color: "#e3b341", label: "MEDIUM" },
+  low:      { color: "#7d8590", label: "LOW" },
+  damage:   { color: "#f85149", label: "DAMAGE" },
+};
+const ZONE = {
+  security:   { color: "#ff5757", label: "SECURITY" },
+  bugs:       { color: "#ff9f43", label: "BUG-FREENESS" },
+  coherence:  { color: "#ffd166", label: "COHERENCE" },
+  efficiency: { color: "#59a7ff", label: "EFFICIENCY" },
+};
+
+// ─── findings ────────────────────────────────────────────────────────────────
+// kind: issue | consequence | damage
+// Each issue links to its worst consequence; consequences link to a terminal
+// damage class. "amplifies" edges are issue-to-issue.
+const NODES = [
+  // ── issues: SECURITY ──
+  {
+    id: "S1", kind: "issue", zone: "security", sev: "critical",
+    title: "RLS keyed on a session-settable GUC",
+    sub: "\u00a75.4 policy \u00b7 breaks G3, R3, D2 premise",
+    status: "RESOLVED IN REVISION \u2014 per-user login roles, RLS on session_user, no GUC (RFC \u00a75.4/\u00a75.5 rev)",
+    claim: "\u201capp.user_id is set once per connection by the DSN, not by any tool, so the model cannot change it.\u201d (\u00a75.4, property 2)",
+    reality: "app.user_id is a custom GUC. Postgres enforces no privilege on custom GUCs: any session can SET them or call set_config() from a plain SELECT. The statement below passes every catalog_query check (starts with SELECT, no \u00ab;\u00bb, under 4000 chars) and runs under agent_ro:",
+    code: "SELECT set_config('app.user_id', 'u_victim', false);",
+    trace: "The Pool is max:1 and reuses the connection, so the NEXT catalog_query executes scoped to the forged user and returns the victim's rows. Vector 2 needs no tool at all: the agent_ro password sits in every sandbox env, and \u00a75.5 puts oltp on every user network \u2014 a direct connection with options=-c app.user_id=<victim> forges the setting at connect time.",
+    worst: "Any tenant, via prompt injection into their own agent (document title/entity text is model-visible), reads every other tenant's document metadata: titles, parties, amounts, dates, hashes. G3/R3 \u2014 the RFC's central security claim \u2014 broken with zero sandbox compromise. Tests T1/T2 pass because they never try to forge the GUC.",
+    breaks: ["G3", "R3", "D2 premise", "T1/T2 blind spot"],
+    fix: "ADOPTED: one login role per user (agent_ro_<uid>, member of agent_ro_group), policy USING (\"userId\" = regexp_replace(session_user::text, '^agent_ro_', '')), created by the manager at provision with password base64url(HMAC-SHA256(CATALOG_RO_SECRET, uid)). session_user is fixed at authentication and SET SESSION AUTHORIZATION needs superuser, so no model-written SQL can re-key the policy; a stolen per-user password reads only that user's rows on any connection; per-role CONNECTION LIMIT 4 caps abuse. Full design: RFC 0007 \u00a75.4/\u00a75.5 revision.",
+  },
+  {
+    id: "S3", kind: "issue", zone: "security", sev: "high",
+    title: "Shared agent_ro password, no CONNECTION LIMIT, DB on every sandbox network",
+    sub: "\u00a75.4 + \u00a75.5 \u00b7 availability unmodelled",
+    status: "MITIGATED IN REVISION \u2014 per-role CONNECTION LIMIT 4; per-user passwords bound to one tenant's rows",
+    claim: "Least privilege: one table, read-only, RLS \u2014 \u201cthe security boundary is Postgres itself\u201d.",
+    reality: "True for SQL semantics. But the same password is baked into every sandbox env, \u00a75.5 attaches oltp to every per-user network, the role has no CONNECTION LIMIT, and Postgres max_connections defaults to 100. A compromised sandbox (or any future exec tool) opens connections directly and ignores the tool entirely.",
+    code: "-- attacker, from any sandbox:\npsql \"$CATALOG_URL\" -c 'SELECT 1' &  \u00d7 90",
+    trace: "Hostile sandbox holds 90 idle connections as agent_ro \u2192 the web app's own pool starts failing with 'too many connections' \u2192 login, dashboard and ingest down for every tenant.",
+    worst: "One tenant's compromise becomes a control-plane outage for all users. The RFC has no requirement covering DB availability against tenants \u2014 that is the gap.",
+    breaks: ["control-plane availability (unmodelled)"],
+    fix: "Adopted with the S1 revision: each per-user role gets CONNECTION LIMIT 4 (manager-set at provision) and a per-user derived password, so a stolen credential reads only that tenant and cannot flood the cluster. Remaining hardening if needed: pg_hba scoping on the oltp side.",
+  },
+  {
+    id: "S5", kind: "issue", zone: "security", sev: "medium",
+    title: "One shared KEX token for all tenants",
+    sub: "\u00a75.5, \u00a710.3 \u00b7 shared failure domain",
+    claim: "Shared parser instance; 429 maps to 503 retryable; \u201ccapacity sizing is deployment work, not a design change\u201d.",
+    reality: "The token is identical for every tenant and lives in every sandbox env. Nothing per-tenant rate-limits /convert; whoever leaks the URL+token can monopolize the parser semaphore for everyone.",
+    trace: "Tenant A (or anyone who exfiltrated the token from any sandbox env) hammers /convert \u2192 semaphore saturated \u2192 every other tenant's ingest gets 429 \u2192 mapped to 503 across the whole platform.",
+    worst: "Single-tenant abuse starves all tenants' ingestion; no attribution, no revocation per tenant.",
+    breaks: ["ingest availability (shared)"],
+    fix: "Per-sandbox (at minimum per-tenant) KEX tokens so abuse is attributable and revocable, or a per-user concurrency quota at the parser.",
+  },
+  {
+    id: "N1", kind: "issue", zone: "security", sev: "low",
+    title: "\u201cOther tables are invisible\u201d is overstated",
+    sub: "R2 acceptance \u00b7 metadata is PUBLIC-readable",
+    claim: "R2: \u201cother tables are invisible\u201d to agent_ro.",
+    reality: "information_schema and pg_catalog are readable by PUBLIC. agent_ro can enumerate every table and column name (users, sessions, auth tables) though not their data.",
+    trace: "SELECT table_name, column_name FROM information_schema.columns \u2014 legal as agent_ro.",
+    worst: "Schema reconnaissance that sharpens the S1 forgery and S3 flood (attacker learns exact column names).",
+    breaks: ["R2 wording", "T3 wording"],
+    fix: "Reword R2/T3 to \u201cno data from other tables\u201d. Hiding schema metadata is rarely worth the breakage.",
+  },
+  {
+    id: "N2", kind: "issue", zone: "security", sev: "low",
+    title: "Role defaults are session-overridable",
+    sub: "\u00a75.4 property 3 \u00b7 same root cause as S1",
+    status: "FIXED IN REVISION \u2014 \u00a75.4 now states grants/RLS are the floor, timeouts are friction",
+    claim: "\u201cstatement_timeout and read-only transactions \u2026 hold even if the tool is rewritten or bypassed.\u201d",
+    reality: "Role defaults are per-session settings: SET statement_timeout = 0 works for anyone. The non-overridable floor is the privilege system (grants, RLS structure). Session-mutable state is again treated as a wall.",
+    trace: "SELECT 1; SET statement_timeout = 0; -- as agent_ro, on a direct connection",
+    worst: "Overstated defense-in-depth is exactly the reasoning error that produced S1; low direct impact (grants still bind).",
+    breaks: ["\u00a75.4 property 3 wording"],
+    fix: "Reword to \u201cgrants and RLS are the floor; timeouts are defaults, not walls\u201d; adopt the S1 fix.",
+  },
+  {
+    id: "N3", kind: "issue", zone: "security", sev: "low",
+    title: "DSN options encoding is fragile",
+    sub: "\u00a75.5 \u00b7 fails closed, still pin it",
+    status: "MOOT \u2014 the revised DSN carries connect_timeout only, no options parameter",
+    claim: "CATALOG_URL=postgresql://agent_ro:\u2026@oltp:5432/pi?options=-c app.user_id%3D<uid>",
+    reality: "The literal space in \u201c-c app.user_id\u201d survives only because URL parsing re-encodes it to %20. A mangled DSN yields an unset GUC \u2192 zero rows (fail-closed, the good direction) \u2014 but silently empty catalogs.",
+    worst: "A sandbox silently sees zero documents; debugging detour. Not exploitable.",
+    breaks: [],
+    fix: "Emit %20 explicitly; add an e2e assertion that a provisioned sandbox reads its own rows.",
+  },
+
+  // ── issues: BUG-FREENESS ──
+  {
+    id: "S2", kind: "issue", zone: "bugs", sev: "high",
+    title: "Synchronous 660 s parse races the 600 s idle-stop",
+    sub: "\u00a75.2 + \u00a72.3 vs sandbox-manager eviction",
+    claim: "\u201cThe ingest stays a synchronous sandbox call for v1\u201d with the PRD's 660 s timeout budget; uploads \u201cstill do not activate the agent\u201d.",
+    reality: "eviction_tick (sandbox_manager.py) stops a container when /status reports paused and idle_for \u2265 STOP_AFTER_S (compose default 600 s). Ingest does not activate the harness, so after IDLE_MS (5 s) /status reports paused for the whole parse; last_seen_at was touched once, at request start, by Caddy's resolve. A parse in the 600\u2013660 s window is docker-stopped mid-OCR. Below that, undici's default 300 s headersTimeout on the web app's fetch is also unexamined.",
+    code: "# eviction_tick\nif status.paused and idle_for >= STOP_AFTER_S:  # 600\ndocker stop --time 10 <container>                # parse budget: 660 s",
+    trace: "90-page scanned PDF \u2192 parse runs 640 s \u2192 at idle_for = 600 the manager stops the container \u2192 browser gets 502, bytes stay staged raw_only \u2192 user retries \u2192 identical loop.",
+    worst: "Worst-case documents can never ingest on default configuration; each attempt burns minutes of OCR. G4 (\u201cPDF uploads up to 15 MB parse end-to-end\u201d) fails for exactly the documents the limit raise targets.",
+    breaks: ["G4", "R8 (slow tail)", "PRD \u00a76.2 budget consistency"],
+    fix: "Touch the registry on ingest completion (or heartbeat during parse), or hold a harness activation for the ingest route so /status stays un-paused, or make STOP_AFTER_S > parse budget and set explicit fetch/proxy timeouts end-to-end. Structural fix: the async ingest already planned as RFC 0005 phase 2.",
+  },
+  {
+    id: "S4", kind: "issue", zone: "bugs", sev: "medium",
+    title: "No connect timeout: degradation never fires",
+    sub: "\u00a75.4 \u201cunreachable \u2192 catalog_unavailable\u201d",
+    claim: "G6: \u201cwith Postgres unreachable the run falls back \u2026 and says so\u201d.",
+    reality: "statement_timeout bounds work only after a connection is established. The pg Pool gets no connectionTimeoutMillis and the DSN no connect_timeout, so a blackholed oltp (dropped packets, not refused) blocks on TCP SYN retries for \u2248 2 minutes before the tool can report anything.",
+    trace: "oltp container paused/frozen (not refused) \u2192 catalog_query hangs on SYN retries \u2192 the model turn stalls minutes; the fallback prose is never reached.",
+    worst: "G6 holds only for refused connections; under blackhole the run stalls instead of degrading.",
+    breaks: ["G6 (blackhole case)", "R4 nuance"],
+    fix: "Pool connectionTimeoutMillis \u2248 2000, connect_timeout=2 in the DSN, and a wall-clock cap in the tool that maps to catalog_unavailable.",
+  },
+  {
+    id: "N4", kind: "issue", zone: "bugs", sev: "low",
+    title: "Semicolon ban rejects legal literals",
+    sub: "\u00a75.6 / R5 \u00b7 benign false positive",
+    claim: "Any input containing \u00ab;\u00bb is rejected as not_a_read_query.",
+    reality: "SELECT \u2026 WHERE title = 'a;b' is a legal single statement and is rejected. The model simply rewrites (e.g. LIKE 'a%'), so impact is a wasted turn at most.",
+    worst: "Minor friction; no security impact (rejection is the safe direction).",
+    breaks: [],
+    fix: "Note the rewrite pattern in the curated skill; do not try to parse SQL in the tool.",
+  },
+
+  // ── issues: COHERENCE ──
+  {
+    id: "C1", kind: "issue", zone: "coherence", sev: "medium",
+    title: "DELETE leaves the parsed markdown behind",
+    sub: "\u00a75.3 vs \u00a75.7 \u00b7 orphan citation surface",
+    claim: "\u201cThe existing staged-bytes routes (GET /raw, DELETE /ingest) are unchanged.\u201d",
+    reality: "removeRaw (agent/corpus.ts) deletes corpus/raw/<docId><ext> and the meta file \u2014 nothing else. After Phase B, corpus/docs/<docId>.md survives deletion, and \u00a75.7/R9 make that md the citation source: the store keeps listing, grepping and verifying the document while the web app row is gone.",
+    trace: "User deletes the document \u2192 dashboard shows nothing \u2192 asks \u201cwhat does the bando say about X?\u201d \u2192 agent greps, finds the orphan md, answers with attribution_verified.",
+    worst: "Verified citations for documents the user deleted \u2014 the exact class of silent inconsistency R9 exists to prevent, in the opposite direction.",
+    breaks: ["R9 (delete direction)", "I1 spirit"],
+    fix: "DELETE also removes corpus/docs/<docId>.md (then noteCorpusChange), or refuse deletion of parsed documents until the md path is specified. Add a test mirroring T8 for deletion.",
+  },
+  {
+    id: "C2", kind: "issue", zone: "coherence", sev: "medium",
+    title: "Two-phase write, no reconciliation",
+    sub: "\u00a75.2 sequence \u00b7 row \u2260 workspace drift",
+    claim: "Sandbox writes md, returns 200; then \u201cweb app \u2192 UPDATE document SET ingestStatus='parsed'\u201d.",
+    reality: "Nothing binds the two writes. A crash or redeploy between them leaves md present and ingestStatus=raw_only forever. \u00a75.7 correctly prevents fabricated verification, but not invisibility: catalog-first runs filter ingestStatus='parsed', so the document exists in the workspace yet no narrowing query can return it.",
+    trace: "Web app deploys mid-ingest \u2192 UPDATE never lands \u2192 md on disk, row raw_only \u2192 \u201cwhich documents mention Edilstrade?\u201d returns nothing \u2192 grep-all fallback contradicts the catalog answer.",
+    worst: "The user's own parsed document is systematically missed; strict runs answer no_evidence while the text sits on disk.",
+    breaks: ["G1 (durability of the row)", "G2 consistency"],
+    fix: "Reconcile on read: row raw_only + workspace md whose textSha256 matches \u2192 promote the row (idempotent, owner is the web app); or fold into the C3 backfill sweep.",
+  },
+  {
+    id: "C3", kind: "issue", zone: "coherence", sev: "medium",
+    title: "Backfill job: no owner, no path to the bytes",
+    sub: "\u00a77 Phase B \u00b7 under-specified",
+    claim: "\u201cbackfill job re-ingests raw_only documents with a filename on record.\u201d",
+    reality: "The bytes live in per-user sandbox workspaces the web app cannot read; stopped containers' volumes are unreachable until start. The RFC does not say who drives the job, how it iterates N sandboxes, or what happens on failure. Re-ingest also re-runs the parser at its current version, so invariant I2 (\u201cparsed text under a docId never changes\u201d) needs the parser pinned or the original output honored.",
+    trace: "Deploy Phase B \u2192 existing raw_only docs stay entity-less \u2192 catalog queries miss them \u2192 \u201cbackfill\u201d is a sentence in the RFC, not a component.",
+    worst: "Catalog permanently under-populated for pre-existing documents; or backfill silently violates I2 after a parser upgrade.",
+    breaks: ["G1 (for existing docs)", "I2 (unpinned)"],
+    fix: "Run backfill at sandbox activation (bytes are local; the sandbox owns the parse per D1/G5), driven by the web app marking candidates; pin the parser image per backfill batch and record its version in ingest_event.",
+  },
+  {
+    id: "N5", kind: "issue", zone: "coherence", sev: "low",
+    title: "\u201cFirst hand-written migration\u201d is false",
+    sub: "\u00a77 Phase B \u00b7 accuracy of repo claims",
+    claim: "\u201cthe first hand-written SQL migration in the folder \u2014 generated migrations cannot express roles and policies\u201d.",
+    reality: "frontend/drizzle already contains three hand-written SQL migrations registered in the journal: 0001_drop_document_content.sql, 0002_document_metadata_and_ingest_event.sql, 0003_certain_owl.sql.",
+    worst: "Small, but the RFC's credibility rests on precise repo claims; this one was checkable and wrong.",
+    breaks: [],
+    fix: "Drop the superlative; say \u201cthe first migration creating roles and policies\u201d.",
+  },
+
+  // ── issues: EFFICIENCY ──
+  {
+    id: "E1", kind: "issue", zone: "efficiency", sev: "medium",
+    title: "Row and cell caps, but no total cap",
+    sub: "\u00a75.6 \u00b7 context flooding",
+    claim: "\u201cOutput is capped: 50 rows, 4096 characters per cell, truncated flags both.\u201d",
+    reality: "The caps multiply: 50 rows \u00d7 4 KB per cell \u2248 200 KB \u2248 50 K tokens in one tool result. entities and structure are jsonb and fat; SELECT entities FROM document is legal, indexed and fast.",
+    code: "-- legal, instant, and huge:\nSELECT entities, structure FROM document;",
+    trace: "Model asks for the widest legal projection \u2192 one catalog_query returns \u2248 50 K tokens \u2192 context window gone; MAX_CORPUS_CALLS=48 bounds the loop count, not the payload.",
+    worst: "Context exhaustion, failed runs, cost spikes \u2014 from a single perfectly legal query.",
+    breaks: ["R6 spirit", "cost model"],
+    fix: "Total-bytes cap (\u2248 24\u201332 KB) with truncated:true, computed while serializing rows; teach narrow projections in the skill.",
+  },
+  {
+    id: "E2", kind: "issue", zone: "efficiency", sev: "low",
+    title: "Per-user docker inspect, every 60 s tick",
+    sub: "\u00a75.5 \u00b7 linear subprocess churn",
+    claim: "\u201cone docker network inspect per user per tick, docker network connect only for what is missing.\u201d",
+    reality: "Each inspect is a docker CLI subprocess (\u2248 50\u2013150 ms), run serially in the reconcile tick, forever, to re-learn known state. At 100 users that is \u2248 100 spawns/minute plus daemon load, delaying the unhealthy-sandbox watchdog that shares the loop.",
+    worst: "Reconcile latency grows linearly with tenants; watchdog restarts lag at exactly the scale the catalog targets.",
+    breaks: [],
+    fix: "Batch: one docker network ls --filter label=<project> per tick, inspect only changed networks; or attach event-driven on resolve.",
+  },
+  {
+    id: "E3", kind: "issue", zone: "efficiency", sev: "low",
+    title: "GIN jsonb_ops indexes every bucket key",
+    sub: "\u00a75.4 index \u00b7 \u00a710.6 half-solvable now",
+    claim: "CREATE INDEX \u2026 USING gin (entities); risk 6 defers bloat to monitoring.",
+    reality: "Default jsonb_ops indexes every key/value of the whole payload. The tool contract uses @> containment (the skill adds unnest ILIKE, which never uses the index anyway) \u2014 jsonb_path_ops is \u2248 half the size for the same containment support.",
+    worst: "2\u00d7 index size and ingest-time write amplification at 10\u2074+ documents.",
+    breaks: [],
+    fix: "USING gin (entities jsonb_path_ops) in migration 0003; keep monitoring from risk 6.",
+  },
+
+  // ── consequence nodes (worst concrete outcome of each issue) ──
+  { id: "C-S1", kind: "consequence", sev: "critical", title: "SELECT set_config(\u2026) passes every tool check; pooled connection re-used \u2192 next query reads another tenant's rows", for: "S1" },
+  { id: "C-S3", kind: "consequence", sev: "high", title: "One tenant exhausts max_connections (\u2248 100) \u2192 web app login and dashboard fail for everyone", for: "S3" },
+  { id: "C-S5", kind: "consequence", sev: "medium", title: "Leaked shared token \u2192 parser semaphore monopolized \u2192 503 ingest for every tenant", for: "S5" },
+  { id: "C-S2", kind: "consequence", sev: "high", title: "docker stop at idle 600 s kills a 660 s parse mid-OCR \u2192 502, retry, identical loop", for: "S2" },
+  { id: "C-S4", kind: "consequence", sev: "medium", title: "Blackholed oltp \u2192 tool blocks \u2248 2 min on TCP retries \u2192 turn stalls, fallback never fires", for: "S4" },
+  { id: "C-C1", kind: "consequence", sev: "medium", title: "Deleted document still greppable, readable and citable \u2014 with attribution_verified", for: "C1" },
+  { id: "C-C2", kind: "consequence", sev: "medium", title: "Crash between sandbox 200 and row UPDATE \u2192 md on disk, row raw_only forever \u2192 catalog-first runs never see it", for: "C2" },
+  { id: "C-C3", kind: "consequence", sev: "medium", title: "Pre-existing documents never gain entities; or re-parse violates I2 after a parser upgrade", for: "C3" },
+  { id: "C-E1", kind: "consequence", sev: "medium", title: "One legal query returns \u2248 50 K tokens \u2192 context window gone, run fails or burns cost", for: "E1" },
+  { id: "C-E2", kind: "consequence", sev: "low", title: "Manager tick slippage grows with tenants; unhealthy-sandbox restarts lag", for: "E2" },
+  { id: "C-E3", kind: "consequence", sev: "low", title: "2\u00d7 index bloat + write amplification at 10\u2074 docs", for: "E3" },
+  { id: "C-N1", kind: "consequence", sev: "low", title: "Full schema/table/column map readable \u2192 reconnaissance for S1/S3", for: "N1" },
+  { id: "C-N2", kind: "consequence", sev: "low", title: "Defense-in-depth overstated \u2192 the S1 class of error ships unreviewed", for: "N2" },
+
+  // ── terminal damage classes ──
+  { id: "T-DISCLOSURE", kind: "damage", sev: "critical", title: "Cross-tenant data disclosure" },
+  { id: "T-OUTAGE",    kind: "damage", sev: "high",     title: "Control-plane outage \u2014 all tenants" },
+  { id: "T-LIVELOCK",  kind: "damage", sev: "high",     title: "Large uploads never complete" },
+  { id: "T-CITATIONS", kind: "damage", sev: "high",     title: "Citations verify against deleted docs \u2014 trust break" },
+  { id: "T-BLIND",     kind: "damage", sev: "medium",   title: "Agent blind to its own evidence (no_evidence)" },
+  { id: "T-FLOOD",     kind: "damage", sev: "medium",   title: "Context exhaustion / cost spike" },
+  { id: "T-STALL",     kind: "damage", sev: "medium",   title: "Run stalls minutes, no degradation" },
+  { id: "T-OPS",       kind: "damage", sev: "low",      title: "Operational drag at scale" },
+  { id: "T-NITS",      kind: "damage", sev: "low",      title: "Benign nits \u2014 fail closed" },
+];
+
+const EDGES = [
+  // issue -> consequence
+  { from: "S1", to: "C-S1", type: "causes", label: "set_config in a plain SELECT" },
+  { from: "S3", to: "C-S3", type: "causes", label: "unlimited direct connections" },
+  { from: "S5", to: "C-S5", type: "causes", label: "one token, every sandbox" },
+  { from: "S2", to: "C-S2", type: "causes", label: "600 s stop < 660 s budget" },
+  { from: "S4", to: "C-S4", type: "causes", label: "no connectionTimeoutMillis" },
+  { from: "C1", to: "C-C1", type: "causes", label: "removeRaw spares the md" },
+  { from: "C2", to: "C-C2", type: "causes", label: "no reconcile step" },
+  { from: "C3", to: "C-C3", type: "causes", label: "bytes unreachable to the owner" },
+  { from: "E1", to: "C-E1", type: "causes", label: "50 \u00d7 4096 chars" },
+  { from: "E2", to: "C-E2", type: "causes", label: "subprocess per user" },
+  { from: "E3", to: "C-E3", type: "causes", label: "jsonb_ops vs path_ops" },
+  { from: "N1", to: "C-N1", type: "causes", label: "PUBLIC catalog views" },
+  { from: "N2", to: "C-N2", type: "causes", label: "" },
+  // consequence -> damage
+  { from: "C-S1", to: "T-DISCLOSURE", type: "causes", label: "" },
+  { from: "C-S3", to: "T-OUTAGE", type: "causes", label: "" },
+  { from: "C-S5", to: "T-OUTAGE", type: "causes", label: "" },
+  { from: "C-S2", to: "T-LIVELOCK", type: "causes", label: "" },
+  { from: "C-S4", to: "T-STALL", type: "causes", label: "" },
+  { from: "C-C1", to: "T-CITATIONS", type: "causes", label: "" },
+  { from: "C-C2", to: "T-BLIND", type: "causes", label: "" },
+  { from: "C-C3", to: "T-BLIND", type: "causes", label: "" },
+  { from: "C-E1", to: "T-FLOOD", type: "causes", label: "" },
+  { from: "C-E2", to: "T-OPS", type: "causes", label: "" },
+  { from: "C-E3", to: "T-OPS", type: "causes", label: "" },
+  // nits straight to the benign terminal
+  { from: "N3", to: "T-NITS", type: "causes", label: "zero rows, safe direction" },
+  { from: "N4", to: "T-NITS", type: "causes", label: "model rewrites" },
+  { from: "N5", to: "T-NITS", type: "causes", label: "one line to fix" },
+  // amplification edges (issue -> issue)
+  { from: "S1", to: "S3", type: "amplifies", label: "same credential, no tool check on a direct connection" },
+  { from: "N1", to: "S1", type: "amplifies", label: "recon reveals column names" },
+  { from: "C2", to: "C3", type: "amplifies", label: "backfill inherits the unreconciled rows" },
+];
+
+const POSITIVES = [
+  "<b>Current-state claims verified accurate</b> against the repo: dual 10 MiB limits (agent/corpus.ts:25, upload-limit.ts:10), <code>ensure_guests</code> called only in provision(), no sandbox\u2192Postgres path today, raw bytes decoded as UTF-8 into the citation index, .pdf excluded by the frontend. All true.",
+  "<b>The uid regex</b> <code>^[A-Za-z0-9_-]{1,64}$</code> on the DSN blocks options/GUC injection through the user id itself (spaces, newlines) \u2014 the one injection vector the design did consider, handled correctly.",
+  "<b>Fail-closed policy direction:</b> NULLIF(current_setting('app.user_id', true), '') matches zero rows when unset (T2) \u2014 correct as far as it goes; the gap is that a set value can be replaced (S1).",
+  "<b>R7 probe isolation</b> matches the house invariants: lazy pool, no connection before the first tool call, /health and /status never touch the catalog.",
+  "<b>Server-side bounds where they are real:</b> single-table grants, FORCE RLS, read-only transaction default, superuser bypass unchanged for the dashboard.",
+  "<b>Citation store keeps hashing the file it indexes</b> (\u00a75.7) \u2014 a drifted row cannot fabricate a verification. Right call.",
+  "<b>Phase independence with clean rollback</b>, PRD edits bound to the same change, e2e through Caddy only (R12) \u2014 house rules followed.",
+  "<b>The alternatives table is honest</b>: rejecting agent-side parsing (D1) for evidence stability and the filter-tool for SQL are both well-argued.",
+];
+
+// ─── layout ──────────────────────────────────────────────────────────────────
+const COLS = {
+  issue:       { x: 60,   w: 250 },
+  consequence: { x: 460,  w: 300 },
+  damage:      { x: 940,  w: 250 },
+};
+const nodeById = Object.create(null);
+for (const n of NODES) nodeById[n.id] = n;
+
+function measureIssues() {
+  // stack issues by zone, in NODES order
+  const zones = ["security", "bugs", "coherence", "efficiency"];
+  const zoneStart = {};
+  let y = 70;
+  for (const z of zones) {
+    zoneStart[z] = y;
+    const items = NODES.filter((n) => n.kind === "issue" && n.zone === z);
+    for (const n of items) { n.x = COLS.issue.x; n.y = y; n.w = COLS.issue.w; y += n.h; }
+    y += 46; // zone gap
+  }
+  return zoneStart;
+}
+function wrapLines(text, maxChars) {
+  const words = String(text).split(/\s+/);
+  let lines = 1, len = 0;
+  for (const w of words) {
+    if (len === 0) { len = w.length; continue; }
+    if (len + 1 + w.length > maxChars) { lines++; len = w.length; } else len += 1 + w.length;
+  }
+  return lines;
+}
+function heights() {
+  for (const n of NODES) {
+    if (n.kind === "issue") {
+      const tl = wrapLines(`${n.id} \u00b7 ${n.title}`, (n.w - 40) / 6.6);
+      const sl = n.sub ? wrapLines(n.sub, (n.w - 26) / 5.6) : 0;
+      n.h = Math.max(52, 14 + tl * 16.5 + 8 + sl * 14 + 10);
+    }
+    if (n.kind === "consequence") {
+      const bl = wrapLines(n.title, (n.w - 24) / 6.0);
+      n.h = Math.max(56, 24 + bl * 14.4 + 14);
+    }
+    if (n.kind === "damage") {
+      const tl = wrapLines(n.title, (n.w - 48) / 6.6);
+      n.h = Math.max(50, 14 + tl * 16.5 + 18);
+    }
+  }
+}
+
+function layout() {
+  // widths first (heights() and measureIssues() read n.w)
+  for (const n of NODES) {
+    if (n.kind === "issue") n.w = COLS.issue.w;
+    if (n.kind === "consequence") n.w = COLS.consequence.w;
+    if (n.kind === "damage") n.w = COLS.damage.w;
+  }
+  heights();
+  const zoneStart = measureIssues();
+
+  // consequences aligned near their issue
+  for (const n of NODES) {
+    if (n.kind !== "consequence") continue;
+    n.x = COLS.consequence.x; n.w = COLS.consequence.w;
+    const src = nodeById[n.for];
+    n.y = src.y + (src.h - n.h) / 2;
+  }
+  // de-overlap consequences (simple sweep, grouped column order)
+  const cons = NODES.filter((n) => n.kind === "consequence").sort((a, b) => a.y - b.y);
+  for (let i = 1; i < cons.length; i++) {
+    const prev = cons[i - 1], cur = cons[i];
+    if (cur.y < prev.y + prev.h + 14) cur.y = prev.y + prev.h + 14;
+  }
+
+  // damage terminals stacked by severity order
+  const order = ["T-DISCLOSURE", "T-OUTAGE", "T-LIVELOCK", "T-CITATIONS", "T-BLIND", "T-FLOOD", "T-STALL", "T-OPS", "T-NITS"];
+  let y = 90;
+  for (const id of order) {
+    const n = nodeById[id];
+    n.x = COLS.damage.x; n.w = COLS.damage.w; n.y = y;
+    y += n.h + 26;
+  }
+
+  const maxY = Math.max(...NODES.map((n) => n.y + n.h));
+  const maxX = Math.max(...NODES.map((n) => n.x + n.w));
+  return { zoneStart, height: maxY + 80, width: maxX + 60 };
+}
+
+// ─── rendering ───────────────────────────────────────────────────────────────
+const svg = document.getElementById("graph");
+const viewport = document.getElementById("viewport");
+const NS = "http://www.w3.org/2000/svg";
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs ?? {})) e.setAttribute(k, String(v));
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function wrapText(textEl, text, maxChars) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    if ((line + " " + w).trim().length > maxChars) { if (line) lines.push(line); line = w; }
+    else line = (line ? line + " " : "") + w;
+  }
+  if (line) lines.push(line);
+  lines.forEach((ln, i) => {
+    const tspan = el("tspan", { x: textEl.getAttribute("x"), dy: i === 0 ? 0 : "1.25em" }, null);
+    tspan.textContent = ln;
+    textEl.appendChild(tspan);
+  });
+  return lines.length;
+}
+
+let showAllLabels = false;
+const edgeLayer = el("g", {}, viewport);
+const nodeLayer = el("g", {}, viewport);
+const zoneLayer = el("g", {}, viewport);
+viewport.insertBefore(zoneLayer, edgeLayer);
+const edgeEls = [];
+const nodeEls = [];
+
+function sevColor(n) { return SEV[n.sev].color; }
+
+function drawEdge(e) {
+  const a = nodeById[e.from], b = nodeById[e.to];
+  const ax = a.x + a.w, ay = a.y + a.h / 2;
+  const bx = b.x, by = b.y + b.h / 2;
+  const mx = (ax + bx) / 2;
+  const d = `M ${ax} ${ay} C ${mx} ${ay}, ${mx} ${by}, ${bx - 6} ${by}`;
+  const cls = e.type === "amplifies" ? "dash" : "";
+  const g = el("g", { class: "edge " + cls }, edgeLayer);
+  const path = el("path", {
+    d, fill: "none",
+    stroke: e.type === "amplifies" ? "#f85149" : (SEV[a.sev]?.color ?? "#6e7681"),
+    "stroke-opacity": e.type === "amplifies" ? 0.85 : 0.55,
+    "stroke-width": e.type === "amplifies" ? 1.6 : (a.sev === "critical" || a.sev === "high" ? 2.4 : 1.8),
+    "stroke-dasharray": e.type === "amplifies" ? "6 5" : "none",
+    "marker-end": e.type === "amplifies" ? "url(#arrRed)" : "url(#arr)",
+  }, g);
+  let labelEl = null;
+  if (e.label) {
+    labelEl = el("text", { x: mx, y: (ay + by) / 2 - 6, "text-anchor": "middle", class: "edgelabel" }, g);
+    labelEl.textContent = e.label;
+    const visibleByDefault = a.sev === "critical" || a.sev === "high";
+    labelEl.style.display = visibleByDefault || showAllLabels ? "" : "none";
+    if (e.type === "amplifies") labelEl.setAttribute("fill", "#ff8b88");
+  }
+  edgeEls.push({ data: e, el: g, path, label: labelEl, a, b });
+}
+
+function drawNode(n) {
+  const color = n.kind === "issue" ? ZONE[n.zone].color : sevColor(n);
+  const g = el("g", { class: "node", transform: `translate(${n.x},${n.y})` }, nodeLayer);
+  const rect = el("rect", {
+    width: n.w, height: n.h, rx: 10,
+    fill: n.kind === "damage" ? "rgba(248,81,73,.10)" : (n.kind === "consequence" ? "rgba(230,231,243,.04)" : "#161b22"),
+    stroke: n.kind === "damage" ? SEV[n.sev].color : color,
+    "stroke-width": n.kind === "damage" ? 2 : 1.4,
+    "stroke-opacity": 0.95,
+  }, g);
+  if (n.status) el("rect", { x: -5, y: -5, width: n.w + 10, height: n.h + 10, rx: 14, fill: "none", stroke: "#3fb950", "stroke-width": 1.5, "stroke-dasharray": "5 4" }, g);
+
+  if (n.kind === "issue") {
+    el("circle", { cx: 14, cy: 17, r: 5, fill: SEV[n.sev].color }, g);
+    const title = el("text", { x: 26, y: 21, fill: "#e6edf3", "font-size": 12.5, "font-weight": 700 }, g);
+    const lines = wrapText(title, `${n.id} \u00b7 ${n.title}`, (n.w - 40) / 6.6);
+    let y = 21 + lines * 16.5 + 6;
+    if (n.sub) {
+      const sub = el("text", { x: 14, y, fill: "#8b949e", "font-size": 11 }, g);
+      wrapText(sub, n.sub, (n.w - 26) / 5.6);
+    }
+    // severity tag
+    const tag = el("text", { x: n.w - 10, y: 21, "text-anchor": "end", fill: SEV[n.sev].color, "font-size": 9.5, "font-weight": 800, "letter-spacing": .8 }, g);
+    tag.textContent = SEV[n.sev].label;
+  } else if (n.kind === "consequence") {
+    const head = el("text", { x: 12, y: 18, fill: "#9aa4b2", "font-size": 9.5, "font-weight": 800, "letter-spacing": .8 }, g);
+    head.textContent = "WORST CASE \u2192";
+    const body = el("text", { x: 12, y: 34, fill: "#e6edf3", "font-size": 11.5 }, g);
+    wrapText(body, n.title, (n.w - 24) / 6.0);
+  } else {
+    const icon = el("text", { x: 14, y: 24, fill: SEV[n.sev].color, "font-size": 15, "font-weight": 900 }, g);
+    icon.textContent = "\u26a0";
+    const t = el("text", { x: 36, y: 24, fill: "#e6edf3", "font-size": 12, "font-weight": 800 }, g);
+    wrapText(t, n.title, (n.w - 48) / 6.6);
+  }
+  nodeEls.push({ data: n, el: g });
+  g.addEventListener("click", (ev) => { ev.stopPropagation(); select(n.id); });
+}
+
+function drawZones(zoneStart, totalHeight) {
+  const zones = [
+    { key: "security", x: COLS.issue.x - 34 },
+    { key: "bugs", x: COLS.issue.x - 34 },
+    { key: "coherence", x: COLS.issue.x - 34 },
+    { key: "efficiency", x: COLS.issue.x - 34 },
+  ];
+  const items = NODES.filter((n) => n.kind === "issue");
+  for (const z of zones) {
+    const inZone = items.filter((n) => n.zone === z.key);
+    const y0 = zoneStart[z.key] - 14;
+    const y1 = Math.max(...inZone.map((n) => n.y + n.h)) + 14;
+    el("rect", { x: z.x, y: y0, width: COLS.issue.w + 48, height: y1 - y0, rx: 12,
+      fill: ZONE[z.key].color, "fill-opacity": 0.05, stroke: ZONE[z.key].color, "stroke-opacity": 0.28, "stroke-dasharray": "3 5" }, zoneLayer);
+    const t = el("text", { x: z.x + 14, y: y0 - 6, fill: ZONE[z.key].color, "font-size": 11, "font-weight": 800, "letter-spacing": 1.2 }, zoneLayer);
+    t.textContent = ZONE[z.key].label;
+  }
+  // column captions
+  const cap1 = el("text", { x: COLS.issue.x, y: 34, fill: "#8b949e", "font-size": 11, "font-weight": 800, "letter-spacing": 1.2 }, zoneLayer);
+  cap1.textContent = "FINDING (\u00a7 = RFC 0007 section)";
+  const cap2 = el("text", { x: COLS.consequence.x, y: 34, fill: "#8b949e", "font-size": 11, "font-weight": 800, "letter-spacing": 1.2 }, zoneLayer);
+  cap2.textContent = "WORST CONSEQUENCE";
+  const cap3 = el("text", { x: COLS.damage.x, y: 34, fill: "#8b949e", "font-size": 11, "font-weight": 800, "letter-spacing": 1.2 }, zoneLayer);
+  cap3.textContent = "DAMAGE CLASS";
+}
+
+// ─── detail panel ────────────────────────────────────────────────────────────
+const detail = document.getElementById("detail");
+function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function select(id) {
+  const n = nodeById[id];
+  highlight(id);
+  if (n.kind !== "issue") {
+    detail.innerHTML = `<h2>${esc(n.title)}</h2><div class="meta">${n.kind === "consequence" ? "worst consequence of " + esc(n.for) : "terminal damage class"}</div>` +
+      (n.kind === "consequence" ? `<p>Open <b>${esc(n.for)}</b> for the full finding.</p>` : `<p>Every path ending here is drawn on the graph. Click a finding node on the left for details.</p>`);
+    return;
+  }
+  const sev = SEV[n.sev];
+  detail.innerHTML = `
+    <h2 style="color:${sev.color}">${esc(n.id)} \u00b7 ${esc(n.title)}</h2>
+    <div class="meta">${ZONE[n.zone].label} \u00b7 severity ${sev.label} ${n.breaks?.length ? "\u00b7 " + n.breaks.map((b) => `<span class="breakchip">${esc(b)}</span>`).join("") : ""}</div>
+    ${n.status ? `<div class="statusline">\u2713 ${esc(n.status)}</div>` : ""}
+    <h3>The RFC claims</h3><p>${esc(n.claim)}</p>
+    <h3>What the code / reality says</h3><p>${esc(n.reality)}</p>
+    ${n.code ? `<pre>${esc(n.code)}</pre>` : ""}
+    <h3>Concrete trace</h3><p>${esc(n.trace)}</p>
+    <h3>Worst consequence</h3><p><b>${esc(n.worst)}</b></p>
+    <div class="fixbox"><h3>Fix</h3><p>${esc(n.fix)}</p></div>`;
+  detail.scrollTop = 0;
+}
+
+function highlight(id) {
+  const connected = new Set([id]);
+  for (const e of EDGES) {
+    if (e.from === id) { connected.add(e.to); connected.add(e.from); }
+    if (e.to === id) { connected.add(e.from); connected.add(e.to); }
+  }
+  for (const ne of nodeEls) ne.el.classList.toggle("dim", !connected.has(ne.data.id));
+  for (const ee of edgeEls) ee.el.classList.toggle("dim", !(connected.has(ee.data.from) && connected.has(ee.data.to)));
+}
+function clearHighlight() {
+  for (const ne of nodeEls) ne.el.classList.remove("dim");
+  for (const ee of edgeEls) ee.el.classList.remove("dim");
+}
+svg.addEventListener("click", () => clearHighlight());
+
+// ─── pan / zoom / drag ───────────────────────────────────────────────────────
+let view = { x: 0, y: 0, k: 1 };
+function applyView() { viewport.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`); }
+svg.addEventListener("wheel", (ev) => {
+  ev.preventDefault();
+  const rect = svg.getBoundingClientRect();
+  const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+  const k2 = Math.min(2.5, Math.max(0.3, view.k * (ev.deltaY < 0 ? 1.12 : 1 / 1.12)));
+  view.x = mx - ((mx - view.x) * k2) / view.k;
+  view.y = my - ((my - view.y) * k2) / view.k;
+  view.k = k2;
+  applyView();
+}, { passive: false });
+
+let panning = null;
+svg.addEventListener("pointerdown", (ev) => {
+  if (ev.target.closest(".node")) {
+    // node drag
+    const g = ev.target.closest(".node");
+    const ne = nodeEls.find((x) => x.el === g);
+    panning = { node: ne, startX: ev.clientX, startY: ev.clientY, origX: ne.data.x, origY: ne.data.y, mode: "node" };
+    svg.classList.add("dragging");
+  } else {
+    panning = { startX: ev.clientX, startY: ev.clientY, origX: view.x, origY: view.y, mode: "pan" };
+    svg.classList.add("dragging");
+  }
+  svg.setPointerCapture(ev.pointerId);
+});
+svg.addEventListener("pointermove", (ev) => {
+  if (!panning) return;
+  const dx = (ev.clientX - panning.startX) / (panning.mode === "node" ? view.k : 1);
+  const dy = (ev.clientY - panning.startY) / (panning.mode === "node" ? view.k : 1);
+  if (panning.mode === "pan") { view.x = panning.origX + dx * 1; view.y = panning.origY + dy * 1; applyView(); }
+  else {
+    const n = panning.node.data;
+    n.x = panning.origX + dx; n.y = panning.origY + dy;
+    panning.node.el.setAttribute("transform", `translate(${n.x},${n.y})`);
+    redrawEdges();
+  }
+});
+svg.addEventListener("pointerup", () => { panning = null; svg.classList.remove("dragging"); });
+
+function redrawEdges() {
+  for (const ee of edgeEls) {
+    const { a, b, path, label } = ee;
+    const ax = a.x + a.w, ay = a.y + a.h / 2;
+    const bx = b.x, by = b.y + b.h / 2;
+    const mx = (ax + bx) / 2;
+    path.setAttribute("d", `M ${ax} ${ay} C ${mx} ${ay}, ${mx} ${by}, ${bx - 6} ${by}`);
+    if (label) { label.setAttribute("x", mx); label.setAttribute("y", (ay + by) / 2 - 6); }
+  }
+}
+
+document.getElementById("btnReset").addEventListener("click", () => {
+  const box = svg.getBoundingClientRect();
+  view = { k: Math.max(0.3, Math.min(box.width / width, box.height / height, 1.15)), x: 0, y: 0 };
+  view.x = (box.width - width * view.k) / 2;
+  view.y = Math.max(6, (box.height - height * view.k) / 2);
+  applyView(); clearHighlight();
+});
+document.getElementById("btnLabels").addEventListener("click", () => {
+  showAllLabels = !showAllLabels;
+  for (const ee of edgeEls) if (ee.label) {
+    const a = ee.a;
+    const visibleByDefault = a.sev === "critical" || a.sev === "high";
+    ee.label.style.display = visibleByDefault || showAllLabels ? "" : "none";
+  }
+});
+
+// ─── boot ────────────────────────────────────────────────────────────────────
+const { zoneStart, height, width } = layout();
+for (const e of EDGES) drawEdge(e);
+for (const n of NODES) drawNode(n);
+drawZones(zoneStart, height);
+// fit the whole graph on first paint: 1 user unit = 1 px, pan/zoom via transform
+const svgBox = svg.getBoundingClientRect();
+view = { k: Math.max(0.3, Math.min(svgBox.width / width, svgBox.height / height, 1.15)), x: 0, y: 0 };
+view.x = (svgBox.width - width * view.k) / 2;
+view.y = Math.max(6, (svgBox.height - height * view.k) / 2);
+applyView();
+
+// header chips
+const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+for (const n of NODES) if (n.kind === "issue") counts[n.sev]++;
+document.getElementById("chips").innerHTML =
+  `<span class="chip critical">1 critical \u00b7 RLS forgeable \u2014 resolved in revision</span>` +
+  `<span class="chip high">${counts.high} high</span>` +
+  `<span class="chip medium">${counts.medium} medium</span>` +
+  `<span class="chip low">${counts.low} low / nits</span>` +
+  `<span class="chip good">16 findings \u00b7 8 verified-sound items</span>`;
+
+// verdict
+document.getElementById("verdictBox").innerHTML =
+  `<b>Verdict.</b> The architecture is sound and unusually well grounded in the repo: every factual claim about current code checked out (one superlative did not, N5). <b class="critical">The original critical flaw (S1)</b> \u2014 <code>app.user_id</code> as RLS key is a session-settable GUC, re-keyable by <code>SELECT set_config(...)</code> \u2014 is <span class="ok">resolved in the RFC revision</span>: one login role per user (<code>agent_ro_&lt;uid&gt;</code>), policy keyed on <code>session_user</code> (fixed at authentication), manager-created passwords, per-role <code>CONNECTION LIMIT 4</code> (also mitigating S3). Still open: <b class="high">S2</b> \u2014 the 660 s synchronous parse is docker-stopped by the 600 s idle-eviction, so worst-case PDFs can never ingest \u2014 plus the three medium coherence gaps (C1 delete-orphan markdown, C2 unreconciled two-phase write, C3 ownerless backfill). Fix S2 before Phase B merges; the rest are bounded edits.`;
+
+// positives
+document.getElementById("positives").innerHTML = POSITIVES.map((p) => `<li><span class="ok">\u2713</span> ${p}</li>`).join("");
+
+// matrix index
+const rows = NODES.filter((n) => n.kind === "issue").sort((a, b) => {
+  const rank = { critical: 0, high: 1, medium: 2, low: 3 };
+  return rank[a.sev] - rank[b.sev];
+});
+document.getElementById("matrix").innerHTML =
+  `<tr><th>ID</th><th>Sev</th><th>Finding</th><th>\u00a7</th></tr>` +
+  rows.map((n) => {
+    const section = (n.sub.match(/§([\d.]+)/) ?? ["", "?"])[1];
+    return `<tr><td class="id" data-id="${n.id}">${n.id}</td><td class="sev ${n.sev}">${SEV[n.sev].label}</td><td>${esc(n.title)}</td><td>${esc(n.sub.split("·")[0].trim())}</td></tr>`;
+  }).join("");
+document.getElementById("matrix").addEventListener("click", (ev) => {
+  const td = ev.target.closest("td.id");
+  if (td) select(td.dataset.id);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+# ===== Secrets & environment =====
+# Local env files (keep the committed template)
+.env
+.env.*
+!.env.example
+
+# API keys mounted as Docker secrets — never commit
+secrets/
+
+# ===== Node / TypeScript =====
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.python-version
+
+# ===== Logs & runtime state =====
+*.log
+*.pid
+*.seed
+
+# ===== Editors & IDEs =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.code-workspace
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini

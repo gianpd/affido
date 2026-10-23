@@ -1,0 +1,32 @@
+{
+	"name": "md-to-docx",
+	"version": "1.0.0",
+	"description": "Convert markdown notes into a branded .docx proposal, with cover page, styled headings, tables, and footers. Output lands in artifacts/ ready to download.",
+	"requires": {
+		"nodeLibraries": [
+			"docx"
+		]
+	},
+	"files": [
+		{
+			"path": "references/brand-palettes.md",
+			"sha256": "f7e319a94ee14340ae92ca9b4e8ed65d2e5427dce7713f9de49359bb7c881287",
+			"bytes": 6601
+		},
+		{
+			"path": "references/generator-template.js",
+			"sha256": "d392326f2d7054723e3cb26fa34b504ae203c5f2f903a8f7949681270c0b730c",
+			"bytes": 16239
+		},
+		{
+			"path": "references/logo-palette.js",
+			"sha256": "a7f8166816570cf97e3e324a102fb940f9541a812c15334ef412aa996165fc07",
+			"bytes": 5857
+		},
+		{
+			"path": "SKILL.md",
+			"sha256": "6fc15800853307270c3e33b4a0e1f6a0bde248fe4018092a772211775cf013cd",
+			"bytes": 14108
+		}
+	]
+}

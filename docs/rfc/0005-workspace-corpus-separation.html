@@ -1,0 +1,1129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RFC 0005 — Workspace / corpus separation, visually</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=IBM+Plex+Mono:wght@400;500;600&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   RFC 0005 — workspace / corpus separation
+   language: same dossier aesthetic as docs/rfc/explainer.html
+   colour code (kept identical in every diagram and every table):
+     client      ink / grey
+     control     blue
+     converter   amber (dashed = external worker)
+     sandbox     red
+     storage     teal
+   ============================================================ */
+:root{
+	--paper:#f4eddd; --paper-2:#fbf6ea; --paper-3:#ece3cd;
+	--ink:#22303f; --ink-soft:#5a6672;
+	--rule:#d3c7a8; --rule-soft:#e2d8bf;
+	--red:#bd3f1d; --red-soft:#f3ddd2;
+	--teal:#0e7568; --teal-soft:#ddeae4;
+	--blue:#2b5d92; --blue-soft:#e0e8ef;
+	--amber:#a96f14; --amber-soft:#f0e4c8;
+	--gray-soft:#e7e1d2;
+	--serif:"Fraunces",Georgia,serif;
+	--body:"Spectral",Georgia,serif;
+	--mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+	background:
+		radial-gradient(ellipse at 18% -5%, rgba(255,252,240,.92), transparent 55%),
+		radial-gradient(ellipse at 96% 104%, rgba(214,197,160,.34), transparent 52%),
+		var(--paper);
+	color:var(--ink); font-family:var(--body); font-size:16.5px; line-height:1.62;
+}
+body::before{
+	content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+	background-image:
+		linear-gradient(rgba(83,94,110,.055) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(83,94,110,.055) 1px, transparent 1px);
+	background-size:28px 28px;
+}
+.page{position:relative; z-index:1; max-width:1180px; margin:0 auto; padding:0 28px 90px;}
+
+/* ---------- masthead ---------- */
+.masthead{border-bottom:3px double var(--ink); padding:34px 0 22px; position:relative;}
+.masthead .meta{
+	display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;
+	font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+	color:var(--ink-soft); border-bottom:1px solid var(--rule); padding-bottom:10px; margin-bottom:22px;
+}
+.masthead h1{
+	font-family:var(--serif); font-weight:900; font-size:clamp(34px,5.6vw,62px);
+	line-height:1; letter-spacing:-.015em; max-width:900px;
+}
+.masthead h1 em{font-style:italic; font-weight:400; color:var(--red);}
+.masthead .sub{margin-top:18px; font-size:18px; color:var(--ink-soft); max-width:720px; font-style:italic;}
+.stamp{
+	position:absolute; right:0; top:74px; transform:rotate(6deg);
+	font-family:var(--mono); font-weight:600; font-size:11px; letter-spacing:.2em;
+	color:var(--red); border:2.5px solid var(--red); padding:8px 15px; border-radius:4px;
+	opacity:.78; text-transform:uppercase; line-height:1.6; text-align:center;
+}
+@media (max-width:900px){ .stamp{display:none;} }
+
+/* ---------- toc ---------- */
+.toc{display:flex; flex-wrap:wrap; gap:10px; margin:26px 0 8px;}
+.toc a{
+	font-family:var(--mono); font-size:12px; letter-spacing:.06em; text-decoration:none;
+	color:var(--ink); border:1px solid var(--ink); padding:6px 12px; border-radius:2px;
+	background:var(--paper-2); transition:all .18s ease; text-transform:uppercase;
+}
+.toc a:hover{background:var(--ink); color:var(--paper-2); transform:translate(-1px,-1px); box-shadow:2px 2px 0 var(--red);}
+
+/* ---------- sections ---------- */
+section{margin-top:64px;}
+.sec-head{display:flex; align-items:baseline; gap:18px; border-bottom:1.5px solid var(--ink); padding-bottom:10px; margin-bottom:8px;}
+.sec-no{font-family:var(--serif); font-weight:900; font-size:44px; line-height:1; color:var(--red); min-width:60px;}
+.sec-head h2{font-family:var(--serif); font-weight:600; font-size:clamp(23px,3.2vw,32px); letter-spacing:-.01em;}
+.sec-q{font-family:var(--mono); font-size:11.5px; letter-spacing:.1em; color:var(--ink-soft); text-transform:uppercase; margin:10px 0 18px;}
+.lede{font-size:18px; max-width:840px; margin-bottom:22px;}
+.lede strong{font-weight:600;}
+p.note{font-size:15px; color:var(--ink-soft); border-left:3px solid var(--red); padding:2px 0 2px 14px; margin:18px 0; max-width:860px; font-style:italic;}
+p.note b{color:var(--ink); font-style:normal;}
+code{font-family:var(--mono); font-size:.86em; background:rgba(34,48,63,.07); border-radius:3px; padding:1px 5px;}
+.mono{font-family:var(--mono);}
+
+/* ---------- flow strip (problem) ---------- */
+.strip{
+	display:flex; flex-wrap:wrap; align-items:stretch; gap:8px;
+	background:var(--paper-2); border:1px solid var(--rule); border-radius:4px;
+	padding:18px 18px 16px; margin:22px 0 8px;
+}
+.strip .node{
+	font-family:var(--mono); font-size:10.8px; line-height:1.32; padding:8px 10px;
+	border:1.4px solid var(--ink); background:#fff; border-radius:3px; max-width:200px;
+}
+.strip .node b{display:block; font-family:var(--body); font-size:12.5px; font-weight:600; margin-bottom:3px;}
+.strip .node.bad{border-color:var(--red); background:var(--red-soft);}
+.strip .node.store{border-color:var(--teal); background:var(--teal-soft);}
+.strip .arrow{
+	align-self:center; font-family:var(--mono); font-size:12px; color:var(--ink-soft);
+	padding:0 2px; white-space:nowrap;
+}
+.strip .arrow small{display:block; font-size:9.5px; color:var(--ink-soft); opacity:.85;}
+.strip-cap{font-family:var(--mono); font-size:11px; color:var(--ink-soft); letter-spacing:.04em; margin-bottom:26px;}
+
+/* ---------- cards ---------- */
+.grid-2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+.grid-4{display:grid; grid-template-columns:repeat(4,1fr); gap:14px;}
+.grid-3{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.card{background:var(--paper-2); border:1px solid var(--rule); border-radius:4px; padding:16px 18px;}
+.card h3{font-family:var(--serif); font-size:18px; font-weight:600; margin-bottom:6px;}
+.card p{font-size:14.5px; color:var(--ink-soft);}
+.card .flag{
+	font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+	color:var(--red); display:block; margin-bottom:8px;
+}
+.card.bad{border-left:4px solid var(--red);}
+.card.ok{border-left:4px solid var(--teal);}
+@media (max-width:980px){ .grid-4{grid-template-columns:1fr 1fr;} .grid-3,.grid-2{grid-template-columns:1fr;} }
+@media (max-width:620px){ .grid-4{grid-template-columns:1fr;} }
+
+/* ---------- tables ---------- */
+table{border-collapse:collapse; width:100%; font-size:13.6px; margin-top:14px;}
+th,td{text-align:left; vertical-align:top; padding:9px 11px; border-bottom:1px solid var(--rule-soft);}
+thead th{
+	font-family:var(--mono); font-size:10.5px; letter-spacing:.09em; text-transform:uppercase;
+	color:var(--ink-soft); border-bottom:1.4px solid var(--ink); white-space:nowrap;
+}
+tbody tr:hover{background:rgba(255,255,255,.5);}
+td.id{font-family:var(--mono); font-size:11.5px; color:var(--red); font-weight:600; white-space:nowrap;}
+td.mono,th.mono{font-family:var(--mono); font-size:11.5px;}
+td.k{white-space:nowrap; font-weight:600;}
+.tbl-note{font-size:13px; color:var(--ink-soft); margin-top:10px; font-style:italic;}
+.tbl-wrap{overflow-x:auto;}
+table.fixed{table-layout:fixed;}
+table.fixed td.k{white-space:normal;}
+
+/* legend chips */
+.legend{display:flex; flex-wrap:wrap; gap:16px; margin:18px 0 12px; font-size:12px; color:var(--ink-soft);}
+.legend span{display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:11px; letter-spacing:.03em;}
+.sw{width:20px; height:12px; border-radius:2px; display:inline-block;}
+.sw-client{background:var(--gray-soft); border:1.4px solid var(--ink-soft);}
+.sw-control{background:var(--blue-soft); border:1.6px solid var(--blue);}
+.sw-conv{background:var(--amber-soft); border:1.6px dashed var(--amber);}
+.sw-agent{background:var(--red-soft); border:1.6px solid var(--red);}
+.sw-store{background:var(--teal-soft); border:1.6px solid var(--teal);}
+.sw-scratch{background:var(--paper); border:1.4px dashed var(--ink-soft);}
+.sw-line{height:0; width:22px; border-top:2.4px solid var(--blue);}
+.sw-line-ret{border-top:2.4px solid var(--red);}
+
+/* canvas */
+.canvas{background:var(--paper-2); border:1px solid var(--rule); border-radius:4px; padding:8px; overflow:hidden;}
+.canvas.bleed{position:relative; left:50%; transform:translateX(-50%); width:min(1560px, calc(100vw - 24px));}
+svg{display:block; width:100%; height:auto;}
+svg text{font-family:var(--body);}
+.tt{font-size:15px; font-weight:600; fill:var(--ink);}
+.tt-lg{font-size:17px; font-weight:700; fill:var(--ink);}
+.tt-w{font-size:17px; font-weight:700; fill:#fbf6ea;}
+.ts{font-size:12.2px; fill:var(--ink-soft);}
+.tm{font-family:var(--mono); font-size:10.8px; fill:#3d4b5b;}
+.tm-b{font-family:var(--mono); font-size:11.2px; font-weight:600; fill:var(--ink);}
+.tm-w{font-family:var(--mono); font-size:11px; fill:rgba(251,246,234,.85);}
+.tl{font-family:var(--mono); font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; fill:var(--ink-soft);}
+.band-lbl{font-family:var(--mono); font-size:13px; letter-spacing:.12em; text-transform:uppercase; fill:var(--ink); font-weight:600;}
+.band-lbl.sm{font-size:11.5px; letter-spacing:.06em; fill:var(--ink-soft); font-weight:400;}
+
+.box{fill:#fff; stroke:var(--ink); stroke-width:1.4;}
+.plane-client{fill:var(--gray-soft); stroke:var(--ink-soft); stroke-width:1.4;}
+.plane-control{fill:var(--blue-soft); stroke:var(--blue); stroke-width:1.8;}
+.plane-conv{fill:var(--amber-soft); stroke:var(--amber); stroke-width:1.8; stroke-dasharray:7 4;}
+.plane-agent{fill:var(--red-soft); stroke:var(--red); stroke-width:1.8;}
+.store{fill:var(--teal-soft); stroke:var(--teal); stroke-width:1.6;}
+.scratch{fill:var(--paper); stroke:var(--ink-soft); stroke-width:1.3; stroke-dasharray:5 4;}
+.ghost{fill:var(--paper-2); stroke:var(--ink-soft); stroke-width:1.2; stroke-dasharray:4 4;}
+.actor{fill:var(--ink); stroke:var(--ink);}
+.band{fill:rgba(255,255,255,.42); stroke:var(--rule); stroke-width:1.2; stroke-dasharray:2 5;}
+.inner{fill:#fff; stroke:rgba(34,48,63,.28); stroke-width:1.1;}
+.inner-store{fill:#fff; stroke:var(--teal); stroke-width:1.1;}
+.inner-scratch{fill:#fff; stroke:var(--ink-soft); stroke-width:1.1; stroke-dasharray:4 3;}
+
+.edge{fill:none; stroke:var(--blue); stroke-width:2.1;}
+.edge-ret{fill:none; stroke:var(--red); stroke-width:2.1;}
+.halo{fill:none; stroke:var(--paper-2); stroke-width:7;}
+.n circle{stroke:var(--paper-2); stroke-width:2;}
+.n text{font-family:var(--mono); font-size:12px; font-weight:600; fill:#fff; text-anchor:middle;}
+.n-in circle{fill:var(--blue);}
+.n-ret circle{fill:var(--red);}
+.n-num text{font-size:11px;}
+
+/* ---------- phases ---------- */
+.lane{border:1px solid var(--rule); border-radius:4px; background:var(--paper-2); margin-top:26px; overflow:hidden;}
+.lane-head{
+	display:flex; flex-wrap:wrap; align-items:baseline; gap:14px;
+	padding:14px 18px; border-bottom:1.4px solid var(--ink); background:#fff;
+}
+.lane-head .tag{font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;}
+.lane-head h3{font-family:var(--serif); font-size:21px; font-weight:600;}
+.lane-a .tag{color:var(--blue);}
+.lane-b .tag{color:var(--red);}
+.lane-head .state{margin-left:auto;}
+.lane ol{list-style:none;}
+.lane li{
+	display:grid; grid-template-columns:46px minmax(0,1fr) 134px; gap:14px; align-items:start;
+	padding:14px 18px; border-bottom:1px dashed var(--rule-soft);
+}
+.lane li:last-child{border-bottom:0;}
+.lane .step{
+	font-family:var(--mono); font-size:11.5px; font-weight:600; text-align:center;
+	color:#fff; border-radius:50%; width:26px; height:26px; line-height:26px; margin-top:2px;
+}
+.lane-a .step{background:var(--blue);}
+.lane-b .step{background:var(--red);}
+.lane .what b{display:block; font-family:var(--body); font-size:15.5px; font-weight:600;}
+.lane .what .call{display:block; font-family:var(--mono); font-size:11.5px; color:var(--ink); margin:3px 0 4px;}
+.lane .what p{font-size:14px; color:var(--ink-soft);}
+.lane .state{
+	font-family:var(--mono); font-size:9.6px; letter-spacing:.05em; text-transform:uppercase;
+	text-align:center; padding:5px 6px; border-radius:2px; border:1px solid; line-height:1.35;
+}
+.state.cold{color:var(--blue); border-color:var(--blue); background:var(--blue-soft);}
+.state.warm{color:var(--red); border-color:var(--red); background:var(--red-soft);}
+.state.store{color:var(--teal); border-color:var(--teal); background:var(--teal-soft);}
+.state.clean{color:var(--ink-soft); border-color:var(--rule); background:#fff;}
+.lane-foot{padding:12px 18px; background:var(--paper-3); font-size:13.5px; color:var(--ink-soft); border-top:1px solid var(--rule);}
+.lane-foot b{color:var(--ink);}
+@media (max-width:720px){ .lane li{grid-template-columns:34px 1fr;} .lane .state{grid-column:2;} }
+
+/* ---------- actors ---------- */
+.actor-card{background:var(--paper-2); border:1px solid var(--rule); border-top:5px solid var(--ink-soft); border-radius:3px; padding:16px 17px 18px;}
+.actor-card.client{border-top-color:var(--ink-soft);}
+.actor-card.control{border-top-color:var(--blue);}
+.actor-card.conv{border-top-color:var(--amber);}
+.actor-card.agent{border-top-color:var(--red);}
+.actor-card h3{font-family:var(--serif); font-size:19px; font-weight:600; line-height:1.2;}
+.actor-card .role{font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); margin:4px 0 12px;}
+.actor-card dt{font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); margin-top:13px;}
+.actor-card dd{font-size:14px; margin-top:2px;}
+.actor-card ul{list-style:none; margin-top:4px;}
+.actor-card li{font-size:14px; padding-left:14px; position:relative; margin:3px 0;}
+.actor-card li::before{content:"·"; position:absolute; left:2px; color:var(--ink-soft); font-weight:700;}
+.actor-card .refuse li::before{content:"✕"; font-size:10px; color:var(--red); top:2px;}
+.actor-card code{font-size:11.5px;}
+
+/* matrix */
+.matrix td.c{text-align:center; width:96px;}
+.dot{display:inline-block; width:11px; height:11px; border-radius:50%; background:var(--ink);}
+.dot.o{background:transparent; border:1.6px solid var(--ink-soft); width:9px; height:9px;}
+.dot.none{background:var(--rule-soft); width:4px; height:4px;}
+.mhead{font-family:var(--mono); font-size:10px; letter-spacing:.06em;}
+.mhead.client{color:var(--ink-soft);}
+.mhead.control{color:var(--blue);}
+.mhead.conv{color:var(--amber);}
+.mhead.agent{color:var(--red);}
+.mkey{display:flex; flex-wrap:wrap; gap:20px; font-size:12.5px; color:var(--ink-soft); margin-top:12px;}
+.mkey span{display:inline-flex; align-items:center; gap:7px;}
+
+/* invariants */
+.inv{display:grid; grid-template-columns:repeat(2,1fr); gap:14px 28px; margin-top:16px;}
+.inv div{border-top:1px solid var(--rule); padding-top:10px;}
+.inv dt{font-family:var(--mono); font-size:11px; letter-spacing:.06em; color:var(--red); text-transform:uppercase;}
+.inv dd{font-size:14px; color:var(--ink-soft); margin-top:2px;}
+.inv dd b{color:var(--ink); font-weight:600;}
+@media (max-width:820px){ .inv{grid-template-columns:1fr;} }
+
+.foot{margin-top:60px; padding-top:16px; border-top:1.5px solid var(--ink); font-size:13px; color:var(--ink-soft); display:flex; flex-wrap:wrap; gap:12px 28px; justify-content:space-between;}
+.foot .mono{font-size:11px; letter-spacing:.06em;}
+@media print{
+	body{background:#fff;}
+	body::before,body::after{display:none;}
+	.page{max-width:none; padding:0;}
+	section{break-inside:avoid;}
+	.canvas{border:0; padding:0;}
+	.toc{display:none;}
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="masthead">
+	<div class="meta">
+		<span>RFC 0005 · pi-durable-containers</span>
+		<span>Target: agent/ · frontend/ · sandbox-manager/ · object storage · Postgres</span>
+		<span>Status: draft · 2026-10-20</span>
+	</div>
+	<h1>Two lifetimes,<br><em>one corpus</em></h1>
+	<p class="sub">The workspace is scratch. The corpus is durable shared knowledge. This is the separation, the two phases it creates, and who owns what after it.</p>
+	<div class="stamp">RFC 0005<br>draft</div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+	<a href="#problem">01 Problem</a>
+	<a href="#assumption">02 Assumption</a>
+	<a href="#solution">03 Solution</a>
+	<a href="#c4">04 C4 containers</a>
+	<a href="#phases">05 Ingest / retrieval</a>
+	<a href="#actors">06 Responsibilities</a>
+	<a href="#invariants">07 Invariants</a>
+</nav>
+
+<!-- ============================================================ 01 -->
+<section id="problem">
+	<div class="sec-head"><span class="sec-no">01</span><h2>The problem: one directory, two incompatible jobs</h2></div>
+	<div class="sec-q">Today the corpus is <code>corpus/raw/</code> inside the sandbox workspace</div>
+
+	<p class="lede">The upload path and the retrieval path both go through the sandbox volume. That is fine for a handful of documents and breaks on every axis that the product needs next: sharing, durability, size, and retrieval quality.</p>
+
+	<div class="strip" role="img" aria-label="Current ingest and retrieval trace through the sandbox workspace">
+		<div class="node"><b>Browser</b>dashboard<br>upload</div>
+		<div class="arrow">→<small>POST /ingest</small></div>
+		<div class="node"><b>Frontend</b>SvelteKit server</div>
+		<div class="arrow">→<small>10 MiB cap</small></div>
+		<div class="node bad"><b>Sandbox</b>IngestRawTool<br>needs a live sandbox</div>
+		<div class="arrow">→<small>stageRaw()</small></div>
+		<div class="node store"><b>/workspace</b>corpus/raw/&lt;doc&gt;&lt;ext&gt;<br>per-user volume</div>
+		<div class="arrow">⇢<small>ls + read</small></div>
+		<div class="node bad"><b>Agent</b>bash ls<br>read full file</div>
+	</div>
+	<p class="strip-cap">↑ ingest and retrieval share one medium, so the corpus inherits every limit of the sandbox volume.</p>
+
+	<div class="grid-2">
+		<div class="card bad">
+			<span class="flag">lifecycle</span>
+			<h3>Uploading requires a live sandbox</h3>
+			<p>A 660 s synchronous parse keeps the sandbox active, so a single ingest defeats idle pause. Two hundred uploads pin one container for hours.</p>
+		</div>
+		<div class="card bad">
+			<span class="flag">limits</span>
+			<h3>Three limits that do not agree</h3>
+			<p>Browser cap 10 MiB, parser cap 50 MB, workspace volume finite and per user. The smallest of the three decides the product.</p>
+		</div>
+		<div class="card bad">
+			<span class="flag">retrieval</span>
+			<h3>Retrieval is <code>ls</code> plus <code>read</code></h3>
+			<p>At 100 documents the model cannot tell which ones matter. Context fills with file listings and full text. At 10<sup>5</sup> documents the listing is useless and the bucket walk is O(N) head requests.</p>
+		</div>
+		<div class="card bad">
+			<span class="flag">durability</span>
+			<h3>Nothing survives the sandbox</h3>
+			<p>No versioning, no citation pinned to a version, no sharing between sandboxes, no way for a new sandbox to read the old corpus. The knowledge dies with the volume.</p>
+		</div>
+	</div>
+
+	<p class="note"><b>One sentence:</b> the corpus is not a file in a container. It is a catalog plus immutable objects with a different lifetime than the process that reads them.</p>
+</section>
+
+<!-- ============================================================ 02 -->
+<section id="assumption">
+	<div class="sec-head"><span class="sec-no">02</span><h2>The assumptions the design rests on</h2></div>
+	<div class="sec-q">Each one is load-bearing: remove it and a specific guarantee disappears</div>
+
+	<p class="lede">These are not goals. They are the beliefs that make a five-tool facade, a Postgres catalog and a content-addressed bucket sufficient. The last column is what breaks if the assumption is false.</p>
+
+	<div class="tbl-wrap">
+	<table class="fixed">
+		<colgroup><col style="width:42px"><col style="width:31%"><col style="width:33%"><col style="width:33%"></colgroup>
+		<thead>
+			<tr><th>#</th><th>Assumption</th><th>Why it is believed</th><th>If it is false</th></tr>
+		</thead>
+		<tbody>
+			<tr>
+				<td class="id">A1</td>
+				<td class="k">Workspace and corpus have different lifetimes and different access rules.</td>
+				<td>Workspace is scratch for one sandbox; corpus is shared, must survive stop, recreation and host change.</td>
+				<td>Keep one directory: no sharing, no versioning, capacity bounded by the volume.</td>
+			</tr>
+			<tr>
+				<td class="id">A2</td>
+				<td class="k">The model needs domain verbs, not a storage protocol.</td>
+				<td>Five tools fit under 4 KB of JSON Schema; the 17 raw storage tools cost about 3k prompt tokens per turn.</td>
+				<td>Expose the raw plane: <code>opId</code>, <code>ifVersion</code>, <code>branch</code>, <code>merge</code> leak into the model.</td>
+			</tr>
+			<tr>
+				<td class="id">A3</td>
+				<td class="k">Sources are immutable, derived text is deterministic, agent records are append-only, only the canonical page is mutable.</td>
+				<td>Most writes never touch a shared key, so independent agents cannot conflict.</td>
+				<td>N writers on one document: merge becomes the product, and the merge is not free.</td>
+			</tr>
+			<tr>
+				<td class="id">A4</td>
+				<td class="k">Content addressing makes idempotency free.</td>
+				<td>The key names the hash, so the same bytes converge on the same object. A cache key is the hash.</td>
+				<td>Every caller reimplements dedupe and retry; a retried upload becomes a duplicate document.</td>
+			</tr>
+			<tr>
+				<td class="id">A5</td>
+				<td class="k">Ingest is a control-plane job, not a sandbox request.</td>
+				<td>The parser is an async worker; a 660 s parse must not pin a user's container.</td>
+				<td>Upload wakes the sandbox and defeats idle pause; the browser limit becomes a technical constant.</td>
+			</tr>
+			<tr>
+				<td class="id">A6</td>
+				<td class="k">The catalog is the index; the bucket is never the catalog.</td>
+				<td>Postgres full-text returns a bounded top-k. <code>list(detail:"heads")</code> is one head GET per key.</td>
+				<td><code>corpus_search</code> degrades to bucket enumeration, O(N), and the answer set is unbounded.</td>
+			</tr>
+			<tr>
+				<td class="id">A7</td>
+				<td class="k">The sandbox never holds bucket bytes or bucket credentials.</td>
+				<td>No FUSE, no NFS, no synced directory. A tool call is the only path, so every access is attributable.</td>
+				<td><code>bash</code> can read the credentials; every agent reimplements the protocol; ACL is unenforceable.</td>
+			</tr>
+			<tr>
+				<td class="id">A8</td>
+				<td class="k">Reproducibility comes from versions pinned in the catalog.</td>
+				<td><code>(docId, sourceSha256, parserVersion, labelSetVersion)</code> makes ingest idempotent and citations auditable.</td>
+				<td>Audit cannot tell a verified citation from a stale one; a parser upgrade silently rewrites evidence.</td>
+			</tr>
+		</tbody>
+	</table>
+	</div>
+
+	<p class="note"><b>Explicit non-goals</b> that follow from the assumptions: no vector search or RAG yet, no semantic merge inside the storage layer, no cross-corpus transactions, no general-purpose file browser over the bucket, no replacing the session database with the corpus.</p>
+</section>
+
+<!-- ============================================================ 03 -->
+<section id="solution">
+	<div class="sec-head"><span class="sec-no">03</span><h2>The proposed solution: three planes, five tools, one port</h2></div>
+	<div class="sec-q">Bytes leave the workspace; the model never learns the storage protocol</div>
+
+	<div class="grid-3">
+		<div class="card">
+			<span class="flag" style="color:var(--red)">workspace · scratch</span>
+			<h3><code>/workspace</code></h3>
+			<p>Per sandbox, on a volume, disposable. Coding tools: <code>read</code>, <code>write</code>, <code>edit</code>, <code>bash</code>. Charts, unpacked archives, intermediate files.</p>
+			<p style="margin-top:8px"><b>Dies with the sandbox. That is correct.</b></p>
+		</div>
+		<div class="card">
+			<span class="flag" style="color:var(--teal)">corpus · durable</span>
+			<h3>Object storage + catalog</h3>
+			<p>Shared, versioned, survives stop, recreation and host change. Reached only through <code>corpus_*</code>. Postgres holds ownership, roles, hashes, status, search index.</p>
+			<p style="margin-top:8px"><b>Outlives every sandbox that reads it.</b></p>
+		</div>
+		<div class="card">
+			<span class="flag" style="color:var(--blue)">session · unchanged</span>
+			<h3><code>/data/session.sqlite</code></h3>
+			<p>The conversation, on the data volume, managed by the pi-durable Harness. Open, resume and pause stay serialized on one promise chain.</p>
+			<p style="margin-top:8px"><b>Not touched by this RFC.</b></p>
+		</div>
+	</div>
+
+	<h3 style="font-family:var(--serif);font-size:21px;font-weight:600;margin:32px 0 4px">The whole model-facing surface</h3>
+	<div class="tbl-wrap">
+	<table>
+		<thead><tr><th>Tool</th><th>Reads / writes</th><th>Bound</th><th>Guarantee</th></tr></thead>
+		<tbody>
+			<tr><td class="mono">corpus_search</td><td>catalog only</td><td>top-20, snippets ≤ 400 chars</td><td>never lists the bucket</td></tr>
+			<tr><td class="mono">corpus_read</td><td>one version, one window</td><td>≤ 16 KB, absolute code-point offsets</td><td>no version silently falls back to head</td></tr>
+			<tr><td class="mono">corpus_annotate</td><td>append-only record</td><td>one contribution</td><td>no shared key, so no conflict</td></tr>
+			<tr><td class="mono">corpus_publish</td><td>canonical page</td><td>one page, one base version</td><td><code>stale_base</code>, never a silent overwrite</td></tr>
+			<tr><td class="mono">corpus_history</td><td>lineage metadata</td><td>20 versions</td><td>no bytes, no blob hashes</td></tr>
+		</tbody>
+	</table>
+	</div>
+	<p class="tbl-note">Target: five tools under 4 KB of JSON Schema. No <code>capabilities</code>, <code>head</code>, <code>write</code>, <code>branch</code>, <code>merge</code>, <code>put_blob</code>, <code>get_blob</code>, leases.</p>
+
+	<div class="grid-2" style="margin-top:24px">
+		<div class="card ok">
+			<span class="flag" style="color:var(--teal)">object layout</span>
+			<h3>Content-addressed, immutable</h3>
+			<p class="mono" style="font-size:11.5px;line-height:1.75;color:var(--ink)">
+				&lt;tenant&gt;/corpus/&lt;id&gt;/&lt;doc&gt;/source/&lt;sha&gt;.ext<br>
+				&lt;tenant&gt;/corpus/&lt;id&gt;/&lt;doc&gt;/text/&lt;sha&gt;.md<br>
+				&lt;tenant&gt;/corpus/&lt;id&gt;/&lt;doc&gt;/entities/&lt;sha&gt;.json<br>
+				&lt;tenant&gt;/corpus/&lt;id&gt;/&lt;doc&gt;/records/&lt;author&gt;/&lt;id&gt;.json<br>
+				&lt;tenant&gt;/corpus/&lt;id&gt;/&lt;doc&gt;/knowledge/&lt;version&gt;.md
+			</p>
+			<p style="margin-top:10px">One mutable pointer: the <code>knowledge/head</code> row in Postgres, updated in a transaction with a <code>version</code> precondition.</p>
+		</div>
+		<div class="card ok">
+			<span class="flag" style="color:var(--teal)">write protocol</span>
+			<h3>Three paths, three guarantees</h3>
+			<p><b>1 · source ingest</b> — immutable. The presigned PUT writes the source object; <code>POST /corpus/ingest</code> verifies it, recomputes <code>sourceSha256</code>, and is idempotent by <code>(docId, sourceSha256, parserVersion, labelSetVersion)</code>; a different hash on the same <code>docId</code> is <code>409</code>.</p>
+			<p style="margin-top:8px"><b>2 · agent annotation</b> — append-only record under <code>records/&lt;author&gt;/</code>. No shared key, no conflict.</p>
+			<p style="margin-top:8px"><b>3 · canonical publish</b> — optimistic concurrency on <code>baseVersion</code>. A stale base returns <code>stale_base</code> plus the current version and writes nothing.</p>
+		</div>
+	</div>
+
+	<p class="note"><b>Storage stays an implementation detail</b> behind the <code>CorpusStore</code> port (<code>putSource</code>, <code>putText</code>, <code>getText</code>, <code>putRecord</code>, <code>getHead</code>, <code>compareAndSetHead</code>, <code>signUpload</code>). Baseline: bucket + Postgres. Casplane: optional backend when same-key branches and merge lineage are required. The tool contract is identical, and an in-memory fake runs the five tools with no database and no network.</p>
+</section>
+
+<!-- ============================================================ 04 -->
+<section id="c4">
+	<div class="sec-head"><span class="sec-no">04</span><h2>C4 level 2 — from the browser to the storage</h2></div>
+	<div class="sec-q">Read the numbers in order; both phases are on the same canvas</div>
+
+	<div class="legend" aria-label="Legend">
+		<span><i class="sw sw-client"></i>client</span>
+		<span><i class="sw sw-control"></i>data control plane</span>
+		<span><i class="sw sw-conv"></i>knowledge converter</span>
+		<span><i class="sw sw-agent"></i>agent sandbox</span>
+		<span><i class="sw sw-store"></i>durable store</span>
+		<span><i class="sw sw-scratch"></i>scratch</span>
+		<span><i class="sw-line"></i>1–6 ingest</span>
+		<span><i class="sw sw-line-ret"></i>7–11 prompt / retrieval</span>
+	</div>
+
+	<p class="strip-cap" style="margin:-4px 0 14px">Phase A (blue, 1–6): the browser writes bytes and the control plane turns them into searchable text, with the sandbox untouched. Phase B (red, 7–11): a prompt wakes the sandbox and the model reaches the corpus only through the five <code>corpus_*</code> tools.</p>
+
+	<div class="canvas bleed">
+	<svg viewBox="0 0 1640 1180" role="img" aria-labelledby="c4title c4desc">
+		<title id="c4title">C4 container diagram of RFC 0005 — workspace and corpus separation</title>
+		<desc id="c4desc">Ingest phase: browser through Caddy and the frontend into the data control plane, which signs an upload and calls the knowledge converter; the converter writes text and entities to object storage and status to the Postgres catalog. Prompt phase: browser posts to Caddy, forward_auth resolves the user through the sandbox-manager, the agent sandbox activates and calls five corpus tools on the control plane, which queries the same catalog and objects. The sandbox also holds the session SQLite file and the scratch workspace.</desc>
+
+		<defs>
+			<marker id="mk-blue" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="7" orient="auto-start-reverse">
+				<path d="M0,0 L10,4 L0,8 z" fill="#2b5d92"/>
+			</marker>
+			<marker id="mk-red" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="7" orient="auto-start-reverse">
+				<path d="M0,0 L10,4 L0,8 z" fill="#bd3f1d"/>
+			</marker>
+		</defs>
+
+		<!-- phases -->
+		<rect class="band" x="456" y="104" width="800" height="420" rx="6"/>
+		<rect class="band" x="456" y="548" width="800" height="562" rx="6"/>
+
+		<text class="band-lbl" x="460" y="92">A · INGEST</text>
+		<text class="band-lbl sm" x="584" y="92">— the sandbox stays cold</text>
+		<text class="band-lbl" x="460" y="538">B · PROMPT</text>
+		<text class="band-lbl sm" x="584" y="538">— the sandbox is woken</text>
+
+		<!-- ============ client rail ============ -->
+		<rect class="actor" x="40" y="160" width="200" height="130" rx="4"/>
+		<text class="tt-w" x="140" y="196" text-anchor="middle">User + browser</text>
+		<text class="tm-w" x="140" y="216" text-anchor="middle">dashboard · 1–200 files</text>
+		<text class="tm-w" x="140" y="232" text-anchor="middle">upload · preview</text>
+		<text class="tm-w" x="140" y="256" text-anchor="middle">no storage credentials</text>
+		<text class="tm" x="40" y="322">↳ PUT uploadUrl</text>
+		<text class="tm" x="40" y="338">bytes bypass Caddy</text>
+		<text class="tm" x="40" y="354">and the control plane</text>
+
+		<rect class="actor" x="40" y="760" width="200" height="130" rx="4"/>
+		<text class="tt-w" x="140" y="796" text-anchor="middle">User + browser</text>
+		<text class="tm-w" x="140" y="816" text-anchor="middle">chat · asks a question</text>
+		<text class="tm-w" x="140" y="832" text-anchor="middle">POST /prompt</text>
+		<text class="tm-w" x="140" y="856" text-anchor="middle">sees streamed tokens</text>
+
+		<!-- caddy -->
+		<rect class="box" x="290" y="170" width="140" height="710" rx="4"/>
+		<text class="tt-lg" x="360" y="204" text-anchor="middle">Caddy</text>
+		<text class="tm" x="360" y="222" text-anchor="middle">:18080 · edge</text>
+		<text class="tm" x="360" y="246" text-anchor="middle">/u/&lt;user&gt;/…</text>
+		<text class="ts" x="360" y="268" text-anchor="middle">forward_auth</text>
+		<text class="ts" x="360" y="284" text-anchor="middle">one public port</text>
+		<text class="ts" x="360" y="300" text-anchor="middle">no agent routes</text>
+		<text class="ts" x="360" y="340" text-anchor="middle">strips a</text>
+		<text class="ts" x="360" y="356" text-anchor="middle">client-supplied</text>
+		<text class="ts" x="360" y="372" text-anchor="middle">X-Sandbox-</text>
+		<text class="ts" x="360" y="388" text-anchor="middle">Endpoint</text>
+		<text class="ts" x="360" y="700" text-anchor="middle">both phases</text>
+		<text class="ts" x="360" y="716" text-anchor="middle">enter through</text>
+		<text class="ts" x="360" y="732" text-anchor="middle">this one port</text>
+
+		<!-- ============ phase A boxes ============ -->
+		<rect class="plane-client" x="480" y="160" width="210" height="140" rx="4"/>
+		<text class="tt" x="496" y="184">Frontend</text>
+		<text class="ts" x="496" y="201">SvelteKit · chat + dashboard</text>
+		<text class="tm" x="496" y="224">upload · preview</text>
+		<text class="tm" x="496" y="240">citation drawer</text>
+		<text class="ts" x="496" y="266">10 MiB becomes a</text>
+		<text class="ts" x="496" y="281">product quota</text>
+
+		<rect class="plane-control" x="480" y="330" width="420" height="180" rx="4"/>
+		<text class="tt" x="496" y="352">Data control plane</text>
+		<text class="ts" x="496" y="366">stateless · owns keys, ACL, versions, hashes · no model</text>
+
+		<rect class="inner" x="492" y="376" width="200" height="124" rx="3"/>
+		<text class="tm-b" x="504" y="394">/corpus/*</text>
+		<text class="tm" x="504" y="412">POST /uploads</text>
+		<text class="tm" x="504" y="427">POST /ingest</text>
+		<text class="tm" x="504" y="442">GET /citations</text>
+		<text class="tm" x="504" y="457">GET /history</text>
+		<text class="ts" x="504" y="478">ACL · roles · quota</text>
+
+		<rect class="inner" x="704" y="376" width="184" height="124" rx="3"/>
+		<text class="tm-b" x="716" y="394">CorpusStore</text>
+		<text class="tm" x="716" y="412">putSource</text>
+		<text class="tm" x="716" y="427">putText / getText</text>
+		<text class="tm" x="716" y="442">putRecord</text>
+		<text class="tm" x="716" y="457">compareAndSetHead</text>
+		<text class="tm" x="716" y="472">signUpload</text>
+		<text class="ts" x="716" y="491">fake in unit tests</text>
+
+		<rect class="plane-conv" x="940" y="330" width="280" height="120" rx="4"/>
+		<text class="tt" x="956" y="352">Knowledge converter</text>
+		<text class="tm" x="956" y="368">knowledge-extractor worker</text>
+		<text class="ts" x="956" y="388">async · 660 s parse budget</text>
+		<text class="ts" x="956" y="404">source → text + entities</text>
+		<text class="ts" x="956" y="420">pins parserVersion</text>
+		<text class="ts" x="956" y="438" style="font-style:italic">returns artifacts · commits nothing</text>
+
+		<!-- ============ durable stores ============ -->
+		<text class="tl" x="1284" y="136">durable · outside the sandbox</text>
+
+		<rect class="store" x="1284" y="150" width="280" height="210" rx="4"/>
+		<text class="tt" x="1300" y="174">Postgres catalog</text>
+		<text class="ts" x="1300" y="190">the ACL, the index, the versions</text>
+		<text class="tm" x="1300" y="214">corpus · corpus_member</text>
+		<text class="tm" x="1300" y="230">document · record</text>
+		<text class="tm" x="1300" y="246">citation</text>
+		<text class="ts" x="1300" y="270">FTS over title, entities,</text>
+		<text class="ts" x="1300" y="285">text chunks → bounded top-k</text>
+		<text class="ts" x="1300" y="310">knowledge/head row</text>
+		<text class="ts" x="1300" y="325">compare-and-set on version</text>
+		<text class="ts" x="1300" y="347" style="font-style:italic">never stores document bytes</text>
+
+		<rect class="store" x="1284" y="390" width="280" height="220" rx="4"/>
+		<text class="tt" x="1300" y="414">Object storage</text>
+		<text class="ts" x="1300" y="430">immutable · content-addressed</text>
+		<text class="tm" x="1300" y="454">…/&lt;doc&gt;/source/&lt;sha&gt;.ext</text>
+		<text class="tm" x="1300" y="470">…/&lt;doc&gt;/text/&lt;sha&gt;.md</text>
+		<text class="tm" x="1300" y="486">…/&lt;doc&gt;/entities/&lt;sha&gt;.json</text>
+		<text class="tm" x="1300" y="502">…/&lt;doc&gt;/records/&lt;author&gt;/…</text>
+		<text class="tm" x="1300" y="518">…/&lt;doc&gt;/knowledge/&lt;v&gt;.md</text>
+		<text class="ts" x="1300" y="542">same bytes → same key</text>
+		<text class="ts" x="1300" y="557">→ retries are idempotent</text>
+		<text class="ts" x="1300" y="581" style="font-style:italic">1 MiB inline · 16 MiB blob</text>
+		<text class="ts" x="1300" y="596" style="font-style:italic">larger → multipart direct</text>
+
+		<!-- ============ phase B boxes ============ -->
+		<rect class="plane-client" x="480" y="580" width="200" height="120" rx="4"/>
+		<text class="tt" x="496" y="604">sandbox-manager</text>
+		<text class="ts" x="496" y="621">resolve user → sandbox</text>
+		<text class="ts" x="496" y="637">create · start on demand</text>
+		<text class="tm" x="496" y="661">X-Sandbox-Endpoint</text>
+		<text class="ts" x="496" y="681">binds no host port</text>
+
+		<rect class="plane-agent" x="480" y="730" width="640" height="340" rx="4"/>
+		<text class="tt" x="498" y="754">Agent sandbox — pi-durable-agent:latest · per user</text>
+
+		<rect class="inner" x="498" y="772" width="290" height="50" rx="3"/>
+		<text class="tm-b" x="512" y="792">server.ts · HttpTool registry</text>
+		<text class="ts" x="512" y="808">each route declares: activates or not</text>
+
+		<rect class="inner" x="498" y="838" width="290" height="56" rx="3"/>
+		<text class="tm-b" x="512" y="858">DurableHarness</text>
+		<text class="ts" x="512" y="874">open · resume · pause, one chain</text>
+
+		<rect class="inner" x="498" y="906" width="290" height="56" rx="3"/>
+		<text class="tm-b" x="512" y="926">POST /prompt</text>
+		<text class="ts" x="512" y="942">idempotent by requestId</text>
+
+		<rect class="inner" x="808" y="772" width="296" height="64" rx="3" style="fill:#fff;stroke:#bd3f1d;stroke-width:1.4"/>
+		<text class="tm-b" x="822" y="792">tools.ts · corpus_* facade</text>
+		<text class="ts" x="822" y="808">search · read · annotate</text>
+		<text class="ts" x="822" y="823">publish · history</text>
+
+		<rect class="inner-store" x="808" y="850" width="296" height="48" rx="3"/>
+		<text class="tm-b" x="822" y="870">/data/session.sqlite</text>
+		<text class="ts" x="822" y="886">durable · conversation only</text>
+
+		<rect class="inner-scratch" x="808" y="910" width="296" height="48" rx="3"/>
+		<text class="tm-b" x="822" y="930">/workspace</text>
+		<text class="ts" x="822" y="946">scratch · disposable</text>
+
+		<text class="ts" x="498" y="996">corpus bytes never land here · no mount · no bucket credentials</text>
+		<text class="ts" x="498" y="1016">idle → Harness closed · /health and /status never activate</text>
+		<text class="ts" x="498" y="1036">the corpus path does not exist in this filesystem</text>
+
+		<rect class="ghost" x="1284" y="850" width="280" height="130" rx="4"/>
+		<text class="tt" x="1300" y="874">LLM provider</text>
+		<text class="ts" x="1300" y="891">external · via pi-ai</text>
+		<text class="ts" x="1300" y="914">sees the prompt, snippets,</text>
+		<text class="ts" x="1300" y="929">offsets and citation ids</text>
+		<text class="ts" x="1300" y="950">never object keys, hashes,</text>
+		<text class="ts" x="1300" y="965">branch ids or bucket tokens</text>
+
+		<!-- ============ edges ============ -->
+		<!-- 1 -->
+		<path class="edge" d="M240,225 H284" marker-end="url(#mk-blue)"/>
+		<!-- 2 -->
+		<path class="edge" d="M430,225 H474" marker-end="url(#mk-blue)"/>
+		<!-- 3 -->
+		<path class="edge" d="M585,300 V324" marker-end="url(#mk-blue)"/>
+		<!-- 4 control <-> converter : parse job in, artifacts out -->
+		<path class="edge" d="M900,400 H934" marker-start="url(#mk-blue)" marker-end="url(#mk-blue)"/>
+		<!-- 5 control -> object storage : every PUT except the presigned source -->
+		<path class="edge" d="M900,480 H1278" marker-end="url(#mk-blue)"/>
+		<!-- 6 control -> catalog : every row, head CAS -->
+		<path class="edge" d="M900,340 H920 V310 H1278" marker-end="url(#mk-blue)"/>
+
+		<!-- 9 -->
+		<path class="edge-ret" d="M240,825 H284" marker-end="url(#mk-red)"/>
+		<!-- 10 -->
+		<path class="edge-ret" d="M430,640 H474" marker-end="url(#mk-red)"/>
+		<!-- 11 -->
+		<path class="edge-ret" d="M580,700 V724" marker-end="url(#mk-red)"/>
+		<!-- 12 sandbox tools -> control plane -->
+		<path class="edge-ret" d="M880,772 V516" marker-end="url(#mk-red)"/>
+		<text class="tm" x="894" y="702">five corpus_* tools</text>
+		<!-- 13 sandbox <-> provider -->
+		<path class="edge-ret" d="M1104,820 H1230 V880 H1278" marker-start="url(#mk-red)" marker-end="url(#mk-red)"/>
+
+		<!-- numbers -->
+		<g class="n n-in"><circle cx="265" cy="225" r="11"/><text x="265" y="229">1</text></g>
+		<g class="n n-in"><circle cx="455" cy="225" r="11"/><text x="455" y="229">2</text></g>
+		<g class="n n-in"><circle cx="585" cy="312" r="11"/><text x="585" y="316">3</text></g>
+		<g class="n n-in"><circle cx="920" cy="400" r="11"/><text x="920" y="404">4</text></g>
+		<g class="n n-in"><circle cx="1090" cy="480" r="11"/><text x="1090" y="484">5</text></g>
+		<g class="n n-in"><circle cx="1100" cy="310" r="11"/><text x="1100" y="314">6</text></g>
+		<g class="n n-ret"><circle cx="265" cy="825" r="11"/><text x="265" y="829">7</text></g>
+		<g class="n n-ret"><circle cx="455" cy="640" r="11"/><text x="455" y="644">8</text></g>
+		<g class="n n-ret"><circle cx="580" cy="714" r="11"/><text x="580" y="718">9</text></g>
+		<g class="n n-ret"><circle cx="880" cy="620" r="11"/><text x="880" y="624">10</text></g>
+		<g class="n n-ret"><circle cx="1230" cy="850" r="11"/><text x="1230" y="854">11</text></g>
+	</svg>
+	</div>
+
+	<div class="tbl-wrap">
+	<table>
+		<thead><tr><th>#</th><th>From → to</th><th>What crosses</th><th>Contract</th></tr></thead>
+		<tbody>
+			<tr><td class="id">1</td><td class="mono">user → caddy</td><td>POST /u/&lt;u&gt;/corpus/uploads + bytes</td><td>the browser limit is now a quota; large files use the presigned PUT</td></tr>
+			<tr><td class="id">2</td><td class="mono">caddy → frontend</td><td>forwarded request</td><td>no sandbox on this path</td></tr>
+			<tr><td class="id">3</td><td class="mono">frontend → control</td><td>{corpusId, docId, filename, sha256?}</td><td>the control plane owns the flow</td></tr>
+			<tr><td class="id">4</td><td class="mono">control ↔ converter</td><td>parse job out; {text, entities, parserVersion} back</td><td>the converter produces, it never commits</td></tr>
+			<tr><td class="id">5</td><td class="mono">control → objects</td><td>putSource · putText · putEntity · putRecord · knowledge head</td><td>the only committer; content-addressed, object before catalog</td></tr>
+			<tr><td class="id">6</td><td class="mono">control → catalog</td><td>document · corpus_member · citation · status · head CAS</td><td>the catalog is the ACL, the index and the version</td></tr>
+			<tr><td class="id">7</td><td class="mono">user → caddy</td><td>POST /u/&lt;u&gt;/prompt {requestId}</td><td>idempotent by requestId</td></tr>
+			<tr><td class="id">8</td><td class="mono">caddy → manager</td><td>forward_auth GET /resolve?user_id</td><td>starts the sandbox on demand</td></tr>
+			<tr><td class="id">9</td><td class="mono">manager → sandbox</td><td>X-Sandbox-Endpoint, then POST /prompt</td><td>the only edge that wakes a sandbox</td></tr>
+			<tr><td class="id">10</td><td class="mono">sandbox → control</td><td>corpus_search · read · annotate · publish · history</td><td>five tools, under 4 KB of schema</td></tr>
+			<tr><td class="id">11</td><td class="mono">sandbox ↔ provider</td><td>messages, tool calls, tokens</td><td>the model never sees keys, hashes or branches</td></tr>
+		</tbody>
+	</table>
+	</div>
+
+	<div class="grid-2" style="margin-top:20px">
+		<div class="card bad">
+			<span class="flag">not drawn, because it must not exist</span>
+			<h3>No edge from the sandbox to object storage</h3>
+			<p>No FUSE mount, no NFS, no synced directory, no S3 SDK. Bytes are reached only by a tool call, which is what makes every access attributable and keeps credentials out of a container where <code>bash</code> can read them.</p>
+		</div>
+		<div class="card ok">
+			<span class="flag" style="color:var(--teal)">drawn as a container on purpose</span>
+			<h3>The control plane is a contract, not a deployment</h3>
+			<p>Today the <code>/corpus/*</code> routes can live in the SvelteKit server. The rectangle exists because the control plane owns keys, ACL, versions and hashes; it can split into its own service without changing the five tools or the agent.</p>
+		</div>
+	</div>
+</section>
+
+<!-- ============================================================ 05 -->
+<section id="phases">
+	<div class="sec-head"><span class="sec-no">05</span><h2>Two phases that must not be confused</h2></div>
+	<div class="sec-q">Ingest never touches the sandbox; retrieval never touches the bucket directly</div>
+
+	<p class="lede">The split is what buys the guarantees: an upload is a control-plane operation with its own worker, a question is a sandbox operation that calls a bounded tool. The right-hand column of each lane is the state of the sandbox at that step.</p>
+
+	<article class="lane lane-a">
+		<header class="lane-head">
+			<h3>Phase A · Ingest</h3>
+			<span class="tag">bytes → objects → text → catalog</span>
+			<span class="state cold">sandbox: cold, stays cold</span>
+		</header>
+		<ol>
+			<li>
+				<span class="step">1</span>
+				<div class="what">
+					<b>Browser asks for a place to put the file</b>
+					<span class="call">POST /u/&lt;u&gt;/corpus/uploads {corpusId, docId, filename, bytes, sha256?}</span>
+					<p>The UI sends intent, not necessarily the bytes. A small file may stream directly in the same call.</p>
+				</div>
+				<span class="state cold">cold</span>
+			</li>
+			<li>
+				<span class="step">2</span>
+				<div class="what">
+					<b>The control plane signs the upload</b>
+					<span class="call">201 { uploadUrl, key, expiresAt }</span>
+					<p>Presigned PUT for large sources. The control plane never buffers the body, so a 40 MB PDF does not pass through it.</p>
+				</div>
+				<span class="state cold">cold</span>
+			</li>
+			<li>
+				<span class="step">3</span>
+				<div class="what">
+					<b>Bytes go straight to object storage</b>
+					<span class="call">PUT &lt;uploadUrl&gt;</span>
+					<p>The browser has a scoped, expiring URL. It has no list, read or delete permission on the bucket.</p>
+				</div>
+				<span class="state store">bucket</span>
+			</li>
+			<li>
+				<span class="step">4</span>
+				<div class="what">
+					<b>The browser declares the upload finished</b>
+					<span class="call">POST /corpus/ingest {corpusId, docId, sourceKey, sourceSha256}</span>
+					<p>The server verifies the object and recomputes the hash. A supplied hash is a hint, never the truth.</p>
+				</div>
+				<span class="state cold">cold</span>
+			</li>
+			<li>
+				<span class="step">5</span>
+				<div class="what">
+					<b>The catalog row exists before the text does</b>
+					<span class="call">202 { ingestId, status: "parsing" }</span>
+					<p>The document is visible as <code>parsing</code>. <code>corpus_search</code> hides it unless the model asks for that status explicitly, so a half-ingested document is never evidence.</p>
+				</div>
+				<span class="state cold">cold</span>
+			</li>
+			<li>
+				<span class="step">6</span>
+				<div class="what">
+					<b>The knowledge converter parses, off the request path</b>
+					<span class="call">source → text + entities · parserVersion pinned</span>
+					<p>A worker, not a route in the sandbox. The 660 s parse budget costs a worker minute instead of pinning a user's container.</p>
+				</div>
+				<span class="state clean">cold</span>
+			</li>
+			<li>
+				<span class="step">7</span>
+				<div class="what">
+					<b>Derived objects are written</b>
+					<span class="call">text/&lt;textSha&gt;.md · entities/&lt;textSha&gt;.json</span>
+					<p>Content-addressed, so the same parse of the same source under the same parser version converges on the same object.</p>
+				</div>
+				<span class="state store">bucket</span>
+			</li>
+			<li>
+				<span class="step">8</span>
+				<div class="what">
+					<b>The document becomes searchable</b>
+					<span class="call">status: ready · textVersion · textSha256 · FTS row</span>
+					<p>Idempotent by <code>(docId, sourceSha256, parserVersion, labelSetVersion)</code>. Same <code>docId</code> with a different hash is <code>409</code>, not an overwrite.</p>
+				</div>
+				<span class="state store">ready</span>
+			</li>
+		</ol>
+		<div class="lane-foot"><b>Cost of the phase:</b> the sandbox is never started. Two hundred uploads leave the container stopped, so idle pause keeps working and per-user cost stays at storage plus requests.</div>
+	</article>
+
+	<article class="lane lane-b">
+		<header class="lane-head">
+			<h3>Phase B · Prompt and retrieval</h3>
+			<span class="tag">question → bounded window → verified citation → page</span>
+			<span class="state warm">sandbox: woken, then paused again</span>
+		</header>
+		<ol>
+			<li>
+				<span class="step">1</span>
+				<div class="what">
+					<b>The question arrives</b>
+					<span class="call">POST /u/&lt;u&gt;/prompt { requestId, message }</span>
+					<p>Same <code>requestId</code> returns the admitted submission instead of running a second one. This is unchanged by the RFC.</p>
+				</div>
+				<span class="state cold">cold</span>
+			</li>
+			<li>
+				<span class="step">2</span>
+				<div class="what">
+					<b>Caddy resolves the user to a sandbox</b>
+					<span class="call">forward_auth GET /resolve?user_id → X-Sandbox-Endpoint</span>
+					<p>The manager creates or starts the container and returns its upstream. A client-supplied endpoint header is stripped before the dial.</p>
+				</div>
+				<span class="state warm">waking</span>
+			</li>
+			<li>
+				<span class="step">3</span>
+				<div class="what">
+					<b>The harness resumes the same conversation</b>
+					<span class="call">Harness.activate → open / resume / #syncAgent</span>
+					<p>SQLite at <code>/data/session.sqlite</code> on the data volume. A provider or thinking-level change rewrites the stored agent config; it does not wipe the session.</p>
+				</div>
+				<span class="state warm">awake</span>
+			</li>
+			<li>
+				<span class="step">4</span>
+				<div class="what">
+					<b>The model finds candidates without reading them</b>
+					<span class="call">corpus_search { corpusId, query, docIds?, labels?, limit ≤ 20 }</span>
+					<p>Postgres full-text or trigram, returning snippets of at most 400 characters. Never a bucket listing. <code>docIds</code> is intersected with the caller's ACL; an unauthorized id is omitted, not leaked.</p>
+				</div>
+				<span class="state warm">awake</span>
+			</li>
+			<li>
+				<span class="step">5</span>
+				<div class="what">
+					<b>The model reads a window, not a document</b>
+					<span class="call">corpus_read { docId, version, needle | lineRange, maxChars }</span>
+					<p>At most 16 KB by default, absolute code-point offsets computed by the server, an explicit <code>truncated</code> and <code>next</code>. A bare call returns a table of contents or an error.</p>
+				</div>
+				<span class="state warm">awake</span>
+			</li>
+			<li>
+				<span class="step">6</span>
+				<div class="what">
+					<b>Contributions are append-only, the page is single-writer</b>
+					<span class="call">corpus_annotate → record + citation · corpus_publish → knowledge/&lt;v+1&gt;</span>
+					<p>The server re-reads the version, recomputes <code>textSha256</code> and checks the exact slice: <code>hash_mismatch</code>, <code>out_of_bounds</code>, <code>quote_mismatch</code>. Publish with a stale <code>baseVersion</code> returns <code>stale_base</code> and writes nothing.</p>
+				</div>
+				<span class="state warm">awake</span>
+			</li>
+			<li>
+				<span class="step">7</span>
+				<div class="what">
+					<b>The answer streams; the evidence stays auditable</b>
+					<span class="call">citation rows in the catalog · session stream to the browser</span>
+					<p>The conversation remains in SQLite. The citation rows live in the catalog, so <code>GET /corpus/citations?runId=…</code> can verify the same run from any sandbox, after a restart, without calling a model.</p>
+				</div>
+				<span class="state clean">pauses when idle</span>
+			</li>
+		</ol>
+		<div class="lane-foot"><b>Cost of the phase:</b> the sandbox is awake only while the conversation runs. The corpus is read through the control plane, so a new sandbox with an empty workspace still sees every document and every citation.</div>
+	</article>
+
+	<p class="note"><b>Why keep them apart:</b> ingest is long, retryable and user-independent; retrieval is short, interactive and conversation-bound. One shared medium forces the container lifetime of the second onto the work of the first.</p>
+</section>
+
+<!-- ============================================================ 06 -->
+<section id="actors">
+	<div class="sec-head"><span class="sec-no">06</span><h2>Who does what</h2></div>
+	<div class="sec-q">Four actors, four jobs, four things each one is not allowed to do</div>
+
+	<div class="grid-2" style="gap:20px">
+		<div class="actor-card client">
+			<h3>Client</h3>
+			<div class="role">browser + frontend · uploads and asks</div>
+			<dl>
+				<dt>Owns</dt>
+				<dd>
+					<ul>
+						<li>the user intent: this file, this corpus, this question</li>
+						<li>the presigned PUT: bytes go from the browser to the bucket</li>
+						<li>the <code>requestId</code> of a prompt and the streamed answer</li>
+						<li>presentation of status, citations and <code>stale_base</code> recovery</li>
+					</ul>
+				</dd>
+				<dt>Refuses</dt>
+				<dd>
+					<ul class="refuse">
+						<li>holding bucket credentials or list/delete rights</li>
+						<li>parsing, chunking or computing offsets</li>
+						<li>being the place where ingest blocks</li>
+						<li>deciding what the corpus contains</li>
+					</ul>
+				</dd>
+				<dt>Artifacts</dt>
+				<dd>an upload intent, a prompt, a rendered answer.</dd>
+			</dl>
+		</div>
+
+		<div class="actor-card conv">
+			<h3>Knowledge converter</h3>
+			<div class="role">parser worker · source becomes text</div>
+			<dl>
+				<dt>Owns</dt>
+				<dd>
+					<ul>
+						<li>the parse: source bytes → text plus entities</li>
+						<li><code>parserVersion</code>, and therefore text reproducibility</li>
+						<li>the async worker pool and its 660 s budget</li>
+						<li>the <code>parsing → ready | failed</code> transition</li>
+					</ul>
+				</dd>
+				<dt>Refuses</dt>
+				<dd>
+					<ul class="refuse">
+						<li>writing the bucket or any catalog row</li>
+						<li>owning ACL, roles or quotas</li>
+						<li>minting citations or verifying slices</li>
+						<li>answering a user request</li>
+					</ul>
+				</dd>
+				<dt>Artifacts</dt>
+				<dd>text + entities bytes and a <code>parserVersion</code>, returned to the control plane. No key, no row.</dd>
+			</dl>
+		</div>
+
+		<div class="actor-card control">
+			<h3>Data control plane</h3>
+			<div class="role">/corpus/* + CorpusStore + catalog</div>
+			<dl>
+				<dt>Owns</dt>
+				<dd>
+					<ul>
+						<li>keys, versions, hashes, and the <code>knowledge/head</code> compare-and-set</li>
+						<li>ACL: corpus membership, roles, tenancy, quotas</li>
+						<li>the search index and the bounded result shape</li>
+						<li>citation verification and retention pinning</li>
+						<li>idempotency, retries, orphan reconciliation</li>
+					</ul>
+				</dd>
+				<dt>Refuses</dt>
+				<dd>
+					<ul class="refuse">
+						<li>running a model or generating text</li>
+						<li>deciding which evidence matters</li>
+						<li>letting the sandbox mount or sign its own upload</li>
+						<li>trusting a hash or offset supplied by the model</li>
+					</ul>
+				</dd>
+				<dt>Artifacts</dt>
+				<dd>catalog rows, object keys, citation status, presigned URLs.</dd>
+			</dl>
+		</div>
+
+		<div class="actor-card agent">
+			<h3>Agent sandbox</h3>
+			<div class="role">pi-durable agent · the only reader</div>
+			<dl>
+				<dt>Owns</dt>
+				<dd>
+					<ul>
+						<li>the conversation, in <code>/data/session.sqlite</code></li>
+						<li>the scratch workspace and coding tools</li>
+						<li>the decision of what to search, read and cite</li>
+						<li>composing the answer, and recovering from <code>stale_base</code></li>
+					</ul>
+				</dd>
+				<dt>Refuses</dt>
+				<dd>
+					<ul class="refuse">
+						<li>seeing object keys, blob hashes or branch ids</li>
+						<li>reaching the corpus with <code>bash</code>, <code>ls</code> or <code>read</code></li>
+						<li>holding bucket credentials</li>
+						<li>publishing without a <code>baseVersion</code></li>
+					</ul>
+				</dd>
+				<dt>Artifacts</dt>
+				<dd>tool calls, records, a publish request, the resumed session.</dd>
+			</dl>
+		</div>
+	</div>
+
+	<h3 style="font-family:var(--serif);font-size:21px;font-weight:600;margin:34px 0 2px">Responsibility matrix</h3>
+	<div class="tbl-wrap">
+	<table class="matrix">
+		<thead>
+			<tr>
+				<th>Responsibility</th>
+				<th class="mhead client c">client</th>
+				<th class="mhead conv c">converter</th>
+				<th class="mhead control c">control plane</th>
+				<th class="mhead agent c">sandbox</th>
+				<th>Contract it protects</th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr><td>Move source bytes to the bucket</td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot o"></span></td><td class="c"><span class="dot none"></span></td><td>sandbox never uploads; the PUT is scoped and expires</td></tr>
+			<tr><td>Commit every other object and every catalog row</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot none"></span></td><td>one committer, one key namespace, one hash</td></tr>
+			<tr><td>Sign, scope and expire the upload</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot none"></span></td><td>no credentials in the browser or sandbox</td></tr>
+			<tr><td>Parse source into text and entities</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td>the sandbox is not pinned by a parse</td></tr>
+			<tr><td>Own catalog, ACL, roles, quotas</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot none"></span></td><td>a non-member gets <code>not_found</code></td></tr>
+			<tr><td>Index and return a bounded candidate set</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot o"></span></td><td>no bucket enumeration, ever</td></tr>
+			<tr><td>Choose which documents matter</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td>retrieval policy stays in the agent</td></tr>
+			<tr><td>Verify hash, bounds and the exact slice</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot o"></span></td><td>a citation is a tuple, not an assertion</td></tr>
+			<tr><td>Append a record (annotation)</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot o"></span></td><td>N writers, zero conflicts</td></tr>
+			<tr><td>Enforce <code>baseVersion</code> and advance the head</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot o"></span></td><td>no lost update on a canonical page</td></tr>
+			<tr><td>Compose the answer markdown</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td>the model, not the store, does synthesis</td></tr>
+			<tr><td>Keep the conversation</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td><code>/data/session.sqlite</code> is unchanged</td></tr>
+			<tr><td>Keep scratch files</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td><code>/workspace</code> stays disposable</td></tr>
+			<tr><td>Pin cited versions against retention</td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot none"></span></td><td>audit says verified or unavailable, never false</td></tr>
+		</tbody>
+	</table>
+	</div>
+	<div class="mkey">
+		<span><span class="dot"></span> owns and executes</span>
+		<span><span class="dot o"></span> participates / calls</span>
+		<span><span class="dot none"></span> not involved</span>
+	</div>
+
+	<div class="grid-2" style="margin-top:26px">
+		<div class="card">
+			<span class="flag" style="color:var(--ink-soft)">the seams</span>
+			<h3>Only two contracts can leak</h3>
+			<p><b>control plane → converter</b>: source key plus hash in, text bytes plus <code>parserVersion</code> out. The converter sees content, never ACL, credentials or a key to mint.</p>
+			<p style="margin-top:8px"><b>sandbox → control plane</b>: five tools, no keys. If this seam ever grows a <code>write</code>, a <code>head</code> or a <code>branch</code>, the RFC has been undone.</p>
+		</div>
+		<div class="card">
+			<span class="flag" style="color:var(--ink-soft)">the failure story</span>
+			<h3>Every actor can be restarted alone</h3>
+			<p>The converter can re-run: ingest is idempotent by hash and parser version. The control plane can restart: it is stateless and the catalog holds the truth. The sandbox can stop: the session is on a volume and the corpus never was. The browser can close: the run continues, citations are in the catalog.</p>
+		</div>
+	</div>
+</section>
+
+<!-- ============================================================ 07 -->
+<section id="invariants">
+	<div class="sec-head"><span class="sec-no">07</span><h2>What the separation must not break</h2></div>
+	<div class="sec-q">Existing durability invariants that survive the RFC unchanged</div>
+
+	<dl class="inv">
+		<div><dt>session stays</dt><dd><b>SQLite at <code>/data/session.sqlite</code></b>, on the data volume. The corpus is more durable than the sandbox, not a replacement for the session.</dd></div>
+		<div><dt>probing stays free</dt><dd><b><code>GET /health</code> and <code>GET /status</code> never open storage.</b> The new catalog is not touched by a probe, or idle pause dies.</dd></div>
+		<div><dt>prompt stays idempotent</dt><dd><b>Same <code>requestId</code>, same admitted submission.</b> No second run, no matter which sandbox serves it.</dd></div>
+		<div><dt>lifecycle stays serialized</dt><dd><b>Open, resume and pause on one promise chain</b> inside <code>DurableHarness</code>. Routes and tools go through <code>Harness.activate</code>.</dd></div>
+		<div><dt>paths stay confined</dt><dd><b>Workspace paths stay inside <code>WORKSPACE</code></b> through <code>NodeExecutionEnv</code>. Corpus paths simply stop existing there.</dd></div>
+		<div><dt>routes stay declared</dt><dd><b>Every new route is an <code>HttpTool</code></b> and declares whether it activates the agent. <code>/corpus/*</code> routes do not.</dd></div>
+		<div><dt>rotation stays cheap</dt><dd><b>Changing provider or model must not wipe a session.</b> <code>#syncAgent</code> rewrites <code>pi.agent</code>; thinking level follows <code>THINKING_LEVEL</code>.</dd></div>
+		<div><dt>topology stays a manager job</dt><dd><b>Sandboxes are created by <code>create_args</code></b> in the manager, not by compose. Corpus topology follows the same rule.</dd></div>
+	</dl>
+
+	<div class="tbl-wrap" style="margin-top:28px">
+	<table>
+		<thead><tr><th>Spot check</th><th>Pass condition</th></tr></thead>
+		<tbody>
+			<tr><td class="k">No bytes in the workspace</td><td><code>bash find /workspace -name '*.pdf'</code> returns nothing for uploads; <code>bash</code> cannot read a corpus document.</td></tr>
+			<tr><td class="k">Cold stays cold</td><td>A stopped sandbox stays stopped while <code>POST /corpus/uploads</code> and <code>POST /corpus/ingest</code> complete and Postgres reaches <code>ready</code>.</td></tr>
+			<tr><td class="k">No bucket listing</td><td>10<sup>4</sup> documents, bounded result, bounded p95. <code>corpus_search</code> queries Postgres.</td></tr>
+			<tr><td class="k">Offsets are exact</td><td>ASCII, accented and astral text return exact code-point <code>start</code>/<code>end</code> and an exact slice.</td></tr>
+			<tr><td class="k">Bad evidence is refused</td><td>A wrong slice, an out-of-bounds span or a stale hash writes no record: <code>quote_mismatch</code>, <code>out_of_bounds</code>, <code>hash_mismatch</code>.</td></tr>
+			<tr><td class="k">No lost update</td><td>Two publishes on one <code>baseVersion</code>: one succeeds, one gets <code>stale_base</code> with the actual version.</td></tr>
+			<tr><td class="k">Audit never lies</td><td>After restart and past <code>KeepVersions</code>, a citation is <code>attribution_verified</code> or <code>version_unavailable</code>. Never a false pass.</td></tr>
+			<tr><td class="k">Surface stays small</td><td>Five corpus tool schemas under 4 KB; raw storage tools absent from the default model surface.</td></tr>
+		</tbody>
+	</table>
+	</div>
+
+	<p class="note"><b>The decision requested:</b> approve the separation and the five-tool facade as the target design; approve the baseline backend (object storage + Postgres catalog + immutable content-addressed objects); defer the casplane-versus-bucket choice to a one-week spike behind the <code>CorpusStore</code> port. The tool contract does not change with the backend.</p>
+</section>
+
+<footer class="foot">
+	<span>Source of truth: <span class="mono">docs/rfc/0005-workspace-corpus-separation.md</span> · status draft · 2026-10-20</span>
+	<span class="mono">pi-durable-containers · workspace / corpus separation</span>
+</footer>
+
+</div>
+</body>
+</html>

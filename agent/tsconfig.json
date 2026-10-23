@@ -1,0 +1,20 @@
+{
+	"compilerOptions": {
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"target": "ES2023",
+		"lib": ["ES2023"],
+		"types": ["node"],
+		"module": "NodeNext",
+		"moduleResolution": "nodenext",
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"verbatimModuleSyntax": true,
+		"isolatedModules": true,
+		"erasableSyntaxOnly": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true
+	},
+	"include": ["*.ts"],
+	"exclude": ["node_modules"]
+}

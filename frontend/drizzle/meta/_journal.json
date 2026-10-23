@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1792411742947,
+      "tag": "0000_green_sheva_callister",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792416675071,
+      "tag": "0001_drop_document_content",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792416675598,
+      "tag": "0002_document_metadata_and_ingest_event",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792700555992,
+      "tag": "0003_certain_owl",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792703815080,
+      "tag": "0004_harsh_king_cobra",
+      "breakpoints": true
+    }
+  ]
+}
