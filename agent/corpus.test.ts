@@ -6,7 +6,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import test from "node:test";
+import type { IncomingMessage } from "node:http";
 import {
 	derivedTextRelativePath,
 	indexedAsText,
@@ -22,6 +24,8 @@ import {
 	uploadsDocIdOf,
 } from "./corpus.ts";
 import { HttpError } from "./http.ts";
+import { IngestRawTool } from "./tools.ts";
+import type { AgentApi } from "./types.ts";
 
 const workspace = (): Promise<string> => mkdtemp(join(tmpdir(), "corpus-"));
 
@@ -125,4 +129,27 @@ test("stageDerivedText extracts a PDF into corpus/text and reports success", asy
 	await removeDerivedText({ workspace: root, docId: "doc9" });
 	await assert.rejects(stat(join(root, derivedTextRelativePath("doc9"))));
 	await removeDerivedText({ workspace: root, docId: "doc9" }); // twice: not an error
+});
+
+// The control plane records what this tool returns: an ingest response
+// without bytes/sourceSha256 wrote NOT NULL violations upstream (the missing
+// `await` spread a Promise, which has no properties). stageRaw's own tests
+// cannot reach the handle() seam, so this one does.
+test("IngestRawTool answers with the staged hash and byte count", async () => {
+	const root = await workspace();
+	const tool = new IngestRawTool(root);
+	const bytes = new TextEncoder().encode("il contratto si rinnova a marzo");
+	const req = Readable.from([bytes]) as unknown as IncomingMessage;
+	let noted = 0;
+	const agent = { noteCorpusChange: () => { noted += 1; } } as unknown as AgentApi;
+	const url = new URL("http://sandbox/ingest?docId=doc7&filename=contratto.txt");
+
+	const out = (await tool.handle({ req, url, agent })) as Record<string, unknown>;
+
+	assert.equal(out.docId, "doc7");
+	assert.equal(out.path, "corpus/raw/doc7.txt");
+	assert.equal(out.bytes, bytes.length);
+	assert.equal(out.sourceSha256, sha256(bytes));
+	assert.equal(out.searchable, true);
+	assert.equal(noted, 1);
 });

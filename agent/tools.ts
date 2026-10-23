@@ -472,7 +472,7 @@ export class IngestRawTool extends HttpTool {
 		const title = url.searchParams.get("title") ?? "";
 		const bytes = await readRawBody(req, MAX_UPLOAD_BYTES);
 		if (bytes.length === 0) throw new HttpError(400, { error: "empty_body", message: "the upload is empty" });
-		const staged = stageRaw({ workspace: this.#workspace, docId, filename, bytes });
+		const staged = await stageRaw({ workspace: this.#workspace, docId, filename, bytes });
 		await writeMeta({ workspace: this.#workspace, docId, meta: { title: title === "" ? filename : title, filename } });
 		const derived = await stageDerivedText({ workspace: this.#workspace, docId, filename, bytes });
 		agent.noteCorpusChange();

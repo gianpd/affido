@@ -23,6 +23,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `corpus_read` answer over both ingestion modes, `/uploads/*` responses
   report `searchable`, and `/ingest` PDFs get the same extraction.
 
+### Fixed
+
+- `POST /ingest` answered only `{"searchable":true}`: `IngestRawTool` spread
+  the `stageRaw` promise instead of awaiting it, so `bytes` and `sourceSha256`
+  never reached the control plane. Document rows landed with `size=0`, no
+  hash, and the `ingest_event` audit row violated its NOT NULL constraint
+  (HTTP 500 after the row was written). Regression test added at the tool
+  seam.
+
 ## [0.1.0] - 2026-10-23
 
 First public release.
