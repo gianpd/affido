@@ -54,27 +54,27 @@ test("stageUploadFile writes nested files with their parents and reports the has
 		path: "md-to-docx/SKILL.md",
 		bytes,
 	});
-	assert.equal(staged.path, "uploads/md-to-docx/SKILL.md");
+	assert.equal(staged.path, "corpus/uploads/md-to-docx/SKILL.md");
 	assert.equal(staged.bytes, bytes.length);
 	assert.equal(staged.sha256, sha256(bytes));
 
 	const guide = new TextEncoder().encode("style guide");
 	const nested = await stageUploadFile({ workspace: root, path: "md-to-docx/references/style-guide.md", bytes: guide });
-	assert.equal(nested.path, "uploads/md-to-docx/references/style-guide.md");
+	assert.equal(nested.path, "corpus/uploads/md-to-docx/references/style-guide.md");
 	assert.deepEqual(new Uint8Array(await readFile(join(root, nested.path))), guide);
 
 	// Same path twice: overwrite, not two files.
 	await stageUploadFile({ workspace: root, path: "md-to-docx/SKILL.md", bytes: new TextEncoder().encode("second") });
-	assert.equal(await readFile(join(root, "uploads/md-to-docx/SKILL.md"), "utf8"), "second");
+	assert.equal(await readFile(join(root, "corpus/uploads/md-to-docx/SKILL.md"), "utf8"), "second");
 });
 
 test("createUploadDir is idempotent and refuses a file in the way", async () => {
 	const root = await workspace();
 	assert.deepEqual(await createUploadDir({ workspace: root, path: "md-to-docx/references" }), {
-		path: "uploads/md-to-docx/references",
+		path: "corpus/uploads/md-to-docx/references",
 	});
 	assert.deepEqual(await createUploadDir({ workspace: root, path: "md-to-docx/references" }), {
-		path: "uploads/md-to-docx/references",
+		path: "corpus/uploads/md-to-docx/references",
 	});
 	await stageUploadFile({ workspace: root, path: "a-file", bytes: new TextEncoder().encode("x") });
 	await assert.rejects(createUploadDir({ workspace: root, path: "a-file" }), HttpError);
@@ -83,7 +83,7 @@ test("createUploadDir is idempotent and refuses a file in the way", async () => 
 test("listUploadTree returns a flat sorted tree and an empty root when nothing exists", async () => {
 	const root = await workspace();
 	assert.deepEqual(await listUploadTree({ workspace: root, path: "" }), {
-		path: "uploads",
+		path: "corpus/uploads",
 		truncated: false,
 		entries: [],
 	});
@@ -93,7 +93,7 @@ test("listUploadTree returns a flat sorted tree and an empty root when nothing e
 	await createUploadDir({ workspace: root, path: "md-to-docx/empty" });
 
 	assert.deepEqual(await listUploadTree({ workspace: root, path: "md-to-docx" }), {
-		path: "uploads/md-to-docx",
+		path: "corpus/uploads/md-to-docx",
 		truncated: false,
 		entries: [
 			{ path: "md-to-docx/empty", kind: "dir", bytes: null },
@@ -112,11 +112,11 @@ test("removeUploadPath drops a subtree, a single file, and is idempotent", async
 	await stageUploadFile({ workspace: root, path: "md-to-docx/SKILL.md", bytes: new TextEncoder().encode("# skill") });
 	await stageUploadFile({ workspace: root, path: "solo.txt", bytes: new TextEncoder().encode("x") });
 
-	assert.deepEqual(await removeUploadPath({ workspace: root, path: "md-to-docx" }), { path: "uploads/md-to-docx" });
-	await assert.rejects(stat(join(root, "uploads/md-to-docx")));
+	assert.deepEqual(await removeUploadPath({ workspace: root, path: "md-to-docx" }), { path: "corpus/uploads/md-to-docx" });
+	await assert.rejects(stat(join(root, "corpus/uploads/md-to-docx")));
 	await removeUploadPath({ workspace: root, path: "md-to-docx" }); // twice: not an error
 
-	assert.deepEqual(await removeUploadPath({ workspace: root, path: "solo.txt" }), { path: "uploads/solo.txt" });
+	assert.deepEqual(await removeUploadPath({ workspace: root, path: "solo.txt" }), { path: "corpus/uploads/solo.txt" });
 	const tree = await listUploadTree({ workspace: root, path: "" });
 	assert.deepEqual(tree.entries, []);
 	// The uploads root itself is not a deletable path: it has no path above it.

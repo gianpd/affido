@@ -189,11 +189,17 @@ check is the same per-run scoping as free-hall.
 v1 reads the staged bytes directly:
 
 - Documents are the files in `corpus/raw/` (metadata from the Postgres upload
-  row: title, original filename). Text is decoded server-side; `version` is `1`;
-  `textSha256` is computed server-side from the decoded text.
+  row: title, original filename) plus the uploads tree under `corpus/uploads/`
+  (one bucket, two ingestion modes: tree files carry their tree path as the
+  title). Text is decoded server-side; `version` is `1`; `textSha256` is
+  computed server-side from the decoded text. A PDF of either root is indexed
+  through the text derived at staging time into `corpus/text/<docId>.txt`
+  (unpdf); other binaries are staged but never indexed. Uploads-tree doc ids are
+  derived from the tree path (`u-<readable>-<hash>`), so staging and indexing
+  agree without a sidecar.
 - The store indexes documents lazily on first access: line table (start offset
   per 1-based line) and, later, lexical chunks. No write ever touches
-  `corpus/raw/`.
+  `corpus/raw/` or `corpus/uploads/`.
 
 The port's methods are the free-hall store's, minus what no chat run needs:
 

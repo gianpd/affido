@@ -2,8 +2,8 @@
 // files arrive from the platform's curated catalog, one file per request at a
 // client-chosen path — the PRD 0003 uploads contract applied to `skills/`.
 // Two provenances share the invocation convention: `skills/<name>/` (installed
-// from the marketplace) and `uploads/<name>/` (a user-shared tree). Nothing
-// here touches the conversation, so install, listing, and verify never
+// from the marketplace) and `corpus/uploads/<name>/` (a user-shared tree).
+// Nothing here touches the conversation, so install, listing, and verify never
 // activate the agent and cannot defeat the idle pause.
 
 import { lstat, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";

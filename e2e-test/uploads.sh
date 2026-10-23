@@ -18,9 +18,9 @@ dir_json="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE}" \
 	-H 'content-type: application/json' \
 	-d '{"path":"md-to-docx"}' \
 	"${BASE}/u/${USER_ID}/uploads/dir")" || fail "create dir through caddy failed"
-[[ "$(printf '%s' "${dir_json}" | field "d['path']")" == "uploads/md-to-docx" ]] \
+[[ "$(printf '%s' "${dir_json}" | field "d['path']")" == "corpus/uploads/md-to-docx" ]] \
 	|| fail "create dir answered ${dir_json}"
-pass "uploads/md-to-docx created"
+pass "corpus/uploads/md-to-docx created"
 
 echo "== upload phase: each file with its complete path (POST /uploads/file) =="
 staged="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE}" \
@@ -29,9 +29,11 @@ staged="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE}" \
 
 Read the references before converting.' \
 	"${BASE}/u/${USER_ID}/uploads/file?path=md-to-docx/SKILL.md")" || fail "SKILL.md upload failed"
-[[ "$(printf '%s' "${staged}" | field "d['path']")" == "uploads/md-to-docx/SKILL.md" ]] \
+[[ "$(printf '%s' "${staged}" | field "d['path']")" == "corpus/uploads/md-to-docx/SKILL.md" ]] \
 	|| fail "SKILL.md staged at ${staged}"
 [[ "$(printf '%s' "${staged}" | field "d['bytes']")" != "0" ]] || fail "SKILL.md is empty: ${staged}"
+[[ "$(printf '%s' "${staged}" | field "d['searchable']")" == "True" ]] \
+	|| fail "a markdown upload must report searchable=True: ${staged}"
 
 # Subfolders are implicit: references/ does not exist yet.
 curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE}" \
@@ -54,10 +56,10 @@ pass "tree lists the file, the subfolder, and the nested file"
 
 echo "== the agent sees the files at those paths (GET /file, activating) =="
 read_back="$(curl -fsS --max-time 120 -H "Cookie: ${COOKIE}" \
-	"${BASE}/u/${USER_ID}/file?path=uploads/md-to-docx/SKILL.md")" || fail "agent could not read the uploaded file"
+	"${BASE}/u/${USER_ID}/file?path=corpus/uploads/md-to-docx/SKILL.md")" || fail "agent could not read the uploaded file"
 [[ "$(printf '%s' "${read_back}" | field "d['content']")" == *"md-to-docx skill"* ]] \
 	|| fail "content round-trip failed: ${read_back}"
-pass "agent reads uploads/md-to-docx/SKILL.md through its own file API"
+pass "agent reads corpus/uploads/md-to-docx/SKILL.md through its own file API"
 
 echo "== confinement: a path that escapes uploads/ is refused =="
 code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H "Cookie: ${COOKIE}" \

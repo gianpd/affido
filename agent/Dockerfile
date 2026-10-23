@@ -5,9 +5,10 @@ WORKDIR /app
 # Install dependencies first so the layer is cached across server edits.
 # Dev dependencies (typescript, @types/node) are only for the typecheck gate,
 # not the runtime: Node 24 runs the .ts sources with native type stripping.
-# `docx` and `unpdf` are runtime libraries of the image, not of the server:
-# nothing in the agent source imports them — generation and parsing scripts
-# the model writes use them through NODE_PATH (RFC 0009 D3).
+# `docx` is a runtime library of the image, not of the server: parsing scripts
+# the model writes use it through NODE_PATH (RFC 0009 D3). `unpdf` is both:
+# the server derives a PDF's text at staging time (corpus.ts), and model
+# scripts use it through NODE_PATH the same way.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 

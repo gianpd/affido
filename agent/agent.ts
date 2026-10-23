@@ -35,7 +35,7 @@ export const containerSection = (name: string, workspace: string): string =>
 	'docx (Word document generation) and unpdf (PDF text extraction). To read a PDF, run a Node script that loads its bytes and calls unpdf\'s getDocumentProxy and extractText; ' +
 	"that extracts the embedded text only, so a scanned image PDF yields none. There is no pdftotext, no Python, no LibreOffice, and no npm/npx/corepack: " +
 	"nothing can be installed, so never attempt or suggest installing anything.\n" +
-	`Documents the user uploads are stored in ${workspace}/corpus/raw/ under an opaque id with the original extension (for example corpus/raw/<docId>.md). The title and original filename are not written there. When a request may refer to an uploaded document, list that directory with bash and read the matching file before answering.`;
+	`Documents the user uploads are stored under ${workspace}/corpus: documents uploaded one by one at corpus/raw/<docId>.<ext> (opaque id, original extension; the title and original filename are not written there) and directory uploads at corpus/uploads/<collection>/<path> (original names and paths). Both are searchable through corpus_grep and corpus_read — a PDF through its extracted text. When a request may refer to an uploaded document, search the corpus first; open the files directly with bash and read only when you need more than the indexed text.`;
 
 export const createAgentRegistry = (options: {
 	readonly name: string;

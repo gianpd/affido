@@ -107,6 +107,46 @@ verified="$(curl -fsS --max-time 120 -H "Cookie: ${COOKIE}" \
 	|| fail "re-verified line changed: ${verified}"
 pass "citation re-verified against the stored text after restart"
 
-rm -f "${FIXTURE}"
+echo "== an uploads-tree PDF is citable through its derived text (corpus bucket) =="
+USER2="citepdf-${RUN_ID}"
+TOKEN2="tok-${USER2}"
+seed_session "${USER2}" "${TOKEN2}"
+PDF_FIXTURE="$(mktemp /tmp/contratto-pdf-XXXX.pdf)"
+{
+	printf '%%PDF-1.4\n'
+	printf '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n'
+	printf '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n'
+	printf '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n'
+	printf '4 0 obj<</Length 74>>stream\nBT /F1 24 Tf 72 720 Td (Il contratto si rinnova il 1 marzo 2027) Tj ET\nendstream endobj\n'
+	printf '5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n'
+	printf 'trailer<</Root 1 0 R>>'
+} >"${PDF_FIXTURE}"
+staged_pdf="$(curl -fsS --max-time 120 -X POST -H "Cookie: better-auth.session_token=${TOKEN2}" \
+	-H 'content-type: application/pdf' \
+	--data-binary @"${PDF_FIXTURE}" \
+	"${BASE}/u/${USER2}/uploads/file?path=persona-finanza/contratto.pdf")" \
+	|| fail "PDF upload through caddy failed"
+[[ "$(printf '%s' "${staged_pdf}" | field "d['searchable']")" == "True" ]] \
+	|| fail "the PDF upload must report searchable=True (derived text): ${staged_pdf}"
+pass "PDF staged under corpus/uploads with extracted text"
+
+pdf_reply="$(curl -fsS --max-time 120 -X POST -H "Cookie: better-auth.session_token=${TOKEN2}" \
+	-H 'content-type: application/json' \
+	-d "{\"prompt\":\"When does the uploaded contract renew?\",\"requestId\":\"pdf-${RUN_ID}\",\"citations\":\"required\"}" \
+	"${BASE}/u/${USER2}/prompt")" || fail "PDF strict prompt failed: ${pdf_reply:-}"
+[[ "$(printf '%s' "${pdf_reply}" | field "d['status']")" == "done" ]] || fail "PDF strict run not done: ${pdf_reply}"
+[[ "$(printf '%s' "${pdf_reply}" | field "d['evidence']")" == "cited" ]] \
+	|| fail "PDF run is not cited (grep did not see the derived text?): ${pdf_reply}"
+[[ "$(printf '%s' "${pdf_reply}" | field "d['citations'][0]['docId']")" == u-* ]] \
+	|| fail "citation does not point at the uploads-tree docId: ${pdf_reply}"
+[[ "$(printf '%s' "${pdf_reply}" | field "d['citations'][0]['title']")" == "persona-finanza/contratto.pdf" ]] \
+	|| fail "uploads-tree title is not the tree path: ${pdf_reply}"
+[[ "$(printf '%s' "${pdf_reply}" | field "d['citations'][0]['quote']")" == *rinnova* ]] \
+	|| fail "quote does not come from the derived text: ${pdf_reply}"
+[[ "$(printf '%s' "${pdf_reply}" | field "d['citations'][0]['status']")" == "attribution_verified" ]] \
+	|| fail "PDF citation is not verified: ${pdf_reply}"
+pass "strict citation published from the uploads-tree PDF's extracted text"
+rm -f "${PDF_FIXTURE}"
+
 echo
 echo "CITATIONS E2E PASSED"

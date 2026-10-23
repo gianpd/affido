@@ -1,8 +1,11 @@
-// User-driven uploads: a directory tree under WORKSPACE/uploads that the web
-// app controls directly (PRD 0003). Unlike the corpus of RFC 0006, the paths
-// here are dictated by the client — one file arrives with its complete
-// destination path and is written exactly there — so this module owns the one
-// validation rule that keeps client-chosen paths inside the uploads root.
+// User-driven uploads: a directory tree under WORKSPACE/corpus/uploads that
+// the web app controls directly (PRD 0003). The tree is part of the corpus
+// namespace — the bucket of everything the user handed the agent — so its
+// text files and PDF-derived text are indexed by the citation store like any
+// corpus/raw document. Unlike corpus/raw, the paths here are dictated by the
+// client — one file arrives with its complete destination path and is written
+// exactly there — so this module owns the one validation rule that keeps
+// client-chosen paths inside the uploads root.
 //
 // Nothing here touches the conversation: the tools that call these functions
 // write through `fs` and never activate the agent, so an upload cannot defeat
@@ -14,7 +17,7 @@ import type { Dirent } from "node:fs";
 import { HttpError, safeTreePath, workspacePath } from "./http.ts";
 import { sha256 } from "./corpus.ts";
 
-export const UPLOADS_DIR = "uploads";
+export const UPLOADS_DIR = "corpus/uploads";
 
 const uploadsRelativePath = (path: string): string => `${UPLOADS_DIR}/${path}`;
 

@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The uploads tree moved inside the corpus bucket: `WORKSPACE/uploads/` is now
+  `WORKSPACE/corpus/uploads/`, and the citation index sees it — text files
+  directly, PDFs through text extracted at upload time into `corpus/text/`
+  (unpdf, server-side), other binaries staged but not indexed. `corpus_grep`
+  and `corpus_read` answer over both ingestion modes, `/uploads/*` responses
+  report `searchable`, and `/ingest` PDFs get the same extraction.
+
 ## [0.1.0] - 2026-10-23
 
 First public release.

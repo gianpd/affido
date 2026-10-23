@@ -247,6 +247,9 @@ export type StagedUploadFile = {
 	path: string;
 	bytes: number;
 	sha256: string;
+	/** Whether corpus_grep can see the file now: text files directly, PDFs
+	 * through their staging-time extracted text, other binaries never. */
+	searchable?: boolean;
 };
 
 /** Create (or confirm) a directory in the user's uploads tree. */
@@ -256,7 +259,7 @@ export const createSandboxUploadDir = (
 ): Promise<{ path: string }> =>
 	sandboxFetch(event, '/uploads/dir', { method: 'POST', body: JSON.stringify({ path }) });
 
-/** Write one uploaded file at its complete client-chosen path under `uploads/`.
+/** Write one uploaded file at its complete client-chosen path under `corpus/uploads/`.
  * Like `ingestSandbox`, the bytes go straight to the sandbox workspace. */
 export const uploadSandboxFile = (
 	event: RequestEvent,
@@ -274,7 +277,7 @@ export const uploadSandboxFile = (
 export const listSandboxUploads = (event: RequestEvent, path = ''): Promise<UploadTree> =>
 	sandboxFetch<UploadTree>(event, `/uploads?${new URLSearchParams({ path })}`);
 
-/** Remove a file or a whole subtree under `uploads/`. */
+/** Remove a file or a whole subtree under `corpus/uploads/`. */
 export const deleteSandboxUploads = (
 	event: RequestEvent,
 	path: string

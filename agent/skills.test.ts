@@ -221,14 +221,14 @@ test("buildSkillHint resolves, strips, and names reality for unknown names", asy
 	await stageUploadFile({ workspace: root, path: "my-skill/SKILL.md", bytes: encoder.encode("---\ndescription: mine\n---\n# mine") });
 	const uploaded = await buildSkillHint({ workspace: root, prompt: "/my-skill go" });
 	assert.equal(uploaded?.kind, "resolved");
-	assert.ok(uploaded?.content.includes(`${root}/uploads/my-skill/SKILL.md`));
+	assert.ok(uploaded?.content.includes(`${root}/corpus/uploads/my-skill/SKILL.md`));
 
 	const unresolved = await buildSkillHint({ workspace: root, prompt: "/nope summarize this" });
 	assert.equal(unresolved?.kind, "unresolved");
 	assert.equal(
 		unresolved?.content,
 		`/nope summarize this\n\n[skill hint] The user invoked the skill "nope", which is not installed.\n` +
-			`Installed skills: md-to-docx (${root}/skills/md-to-docx/SKILL.md), my-skill (${root}/uploads/my-skill/SKILL.md).\n` +
+			`Installed skills: md-to-docx (${root}/skills/md-to-docx/SKILL.md), my-skill (${root}/corpus/uploads/my-skill/SKILL.md).\n` +
 			"Answer in plain text without pretending to use it.",
 	);
 

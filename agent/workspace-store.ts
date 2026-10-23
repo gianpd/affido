@@ -1,9 +1,13 @@
 // WorkspaceCitationStore: the v1 `CitationStore` over the staged corpus
-// (RFC 0006 §5.2). Documents are the files in `corpus/raw/<docId><ext>`; titles
-// and original filenames come from the sidecar `corpus/meta/<docId>.json` the
-// ingest endpoint writes (the control plane owns the metadata; the bytes never
-// leave the volume). When RFC 0005 lands, a CatalogStore implements the same
-// port against Postgres + object storage; nothing here or in the tools changes.
+// (RFC 0006 §5.2). Documents are the files in `corpus/raw/<docId><ext>` plus
+// the uploads tree under `corpus/uploads/` — one bucket, two ingestion modes.
+// Titles and original filenames of raw documents come from the sidecar
+// `corpus/meta/<docId>.json` the ingest endpoint writes (the control plane
+// owns the metadata; the bytes never leave the volume); uploads-tree files
+// carry their tree path as the title. PDFs of either root are indexed through
+// the derived text of `corpus/text/<docId>.txt`. When RFC 0005 lands, a
+// CatalogStore implements the same port against Postgres + object storage;
+// nothing here or in the tools changes.
 //
 // Reads go through the injected execution env, read-only; no write ever touches
 // `corpus/raw/`. Text is decoded server-side; `version` is always 1 here.
@@ -36,7 +40,8 @@ import {
 	type ReadWindow,
 	type VerifyReason,
 } from "./citation-store.ts";
-import { listRawDocuments } from "./corpus.ts";
+import { derivedTextRelativePath, isPdfFilename, isTextFilename, listRawDocuments, uploadsDocIdOf } from "./corpus.ts";
+import { UPLOADS_DIR } from "./uploads.ts";
 
 /** Scan budget of one grep, in lines: bounds a slow pattern over a big corpus. */
 const GREP_SCAN_BUDGET_LINES = 200_000;
@@ -76,13 +81,40 @@ const retreatCodePoints = (text: string, from: number, count: number): number =>
 /** The first `count` code points of `text`, as a string. */
 const prefixCodePoints = (text: string, count: number): string => text.slice(0, advanceCodePoints(text, 0, count));
 
-/** Load and decode every staged document once per store lifetime. */
+/** Load and decode every staged document once per store lifetime: the staged
+ * documents of corpus/raw, then the uploads tree. A text file (by extension)
+ * is indexed from its bytes; a PDF from its derived text under corpus/text/;
+ * any other binary is staged but never indexed — grep over undecoded bytes is
+ * noise, not evidence. An uploads file whose docId collides with a corpus/raw
+ * document loses: raw ids are the control plane's, tree ids are derived. */
+const UPLOADS_INDEX_FILES = 500;
+
+const walkUploadFiles = async (
+	env: ExecutionEnv,
+	directory: string,
+	out: string[],
+	context: Context,
+): Promise<void> => {
+	const listed = await env.listDir(directory, context);
+	if (!listed.ok) return; // no uploads tree yet: nothing to index
+	for (const info of [...listed.value].sort((a, b) => a.name.localeCompare(b.name))) {
+		if (out.length >= UPLOADS_INDEX_FILES) return;
+		const child = directory === UPLOADS_DIR ? `${UPLOADS_DIR}/${info.name}` : `${directory}/${info.name}`;
+		if (info.kind === "directory") await walkUploadFiles(env, child, out, context);
+		else if (info.kind === "file") out.push(child);
+	}
+};
+
+const basename = (path: string): string => path.split("/").pop() ?? path;
+
 const loadDocuments = async (env: ExecutionEnv, context: Context): Promise<readonly CorpusDocument[]> => {
 	const staged = await listRawDocuments(env, context);
 	const documents: CorpusDocument[] = [];
+	const docIds = new Set<string>();
 	for (const item of staged) {
 		const read = await env.readTextFile(item.path, context);
 		if (!read.ok) continue; // raced with a delete; the document is simply absent
+		docIds.add(item.docId);
 		documents.push({
 			docId: item.docId,
 			filename: item.filename,
@@ -90,6 +122,31 @@ const loadDocuments = async (env: ExecutionEnv, context: Context): Promise<reado
 			version: 1,
 			text: read.value,
 			textSha256: sha256OfText(read.value),
+		});
+	}
+	const uploadFiles: string[] = [];
+	await walkUploadFiles(env, UPLOADS_DIR, uploadFiles, context);
+	for (const path of uploadFiles) {
+		const name = path.slice(UPLOADS_DIR.length + 1);
+		const docId = uploadsDocIdOf(name);
+		if (docIds.has(docId)) continue;
+		let text: string | null = null;
+		if (isTextFilename(name)) {
+			const read = await env.readTextFile(path, context);
+			text = read.ok ? read.value : null;
+		} else if (isPdfFilename(name)) {
+			const read = await env.readTextFile(derivedTextRelativePath(docId), context);
+			text = read.ok ? read.value : null;
+		}
+		if (text === null || text === "") continue; // binary without derived text: staged, not indexed
+		docIds.add(docId);
+		documents.push({
+			docId,
+			filename: basename(name),
+			title: name,
+			version: 1,
+			text,
+			textSha256: sha256OfText(text),
 		});
 	}
 	return documents;

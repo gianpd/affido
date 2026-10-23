@@ -63,7 +63,7 @@
 			<p class="text-sm text-muted-foreground">Workspace</p>
 			<h1 class="mt-1 font-display text-4xl tracking-tight">Uploads</h1>
 			<p class="mt-2 max-w-xl text-sm text-muted-foreground">
-				Directory trees your agent reads as workspace files, under <code>uploads/</code>. The
+				Directory trees your agent reads as workspace files, under <code>corpus/uploads/</code>. The
 				structure is yours: every file keeps its path, folders and subfolders included.
 			</p>
 		</div>
@@ -100,7 +100,7 @@
 				<Empty.Title>Nothing shared yet</Empty.Title>
 				<Empty.Description>
 					Upload a directory — a skill, a project folder — and the agent reads it at
-					<code>uploads/&lt;your path&gt;</code>. Up to {data.maxDirFiles} files, {data.maxDirTotalLabel}
+					<code>corpus/uploads/&lt;your path&gt;</code>. Up to {data.maxDirFiles} files, {data.maxDirTotalLabel}
 					in total.
 				</Empty.Description>
 			</Empty.Header>
@@ -114,7 +114,7 @@
 	{:else if data.tree}
 		<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 			<p class="text-xs text-muted-foreground">
-				{formatNumber(files.length)} files · {formatBytes(totalBytes)} under uploads/
+				{formatNumber(files.length)} files · {formatBytes(totalBytes)} under corpus/uploads/
 			</p>
 			{#if data.tree.truncated}
 				<p class="text-xs text-muted-foreground">
@@ -273,7 +273,7 @@
 					<Field.Label for="folder-path">Path</Field.Label>
 					<Input id="folder-path" name="path" placeholder="md-to-docx/references" required />
 					<Field.Description
-						>It lands at <code>uploads/&lt;path&gt;</code> in your agent's workspace.</Field.Description
+						>It lands at <code>corpus/uploads/&lt;path&gt;</code> in your agent's workspace.</Field.Description
 					>
 				</Field.Field>
 			</Field.Group>
@@ -292,8 +292,9 @@
 		<Dialog.Header>
 			<Dialog.Title>Share a directory</Dialog.Title>
 			<Dialog.Description>
-				The tree goes straight to your agent's workspace under <code>uploads/</code>, paths intact.
-				Up to {data.maxDirFiles} files, {data.maxUploadLabel} each, {data.maxDirTotalLabel} in total.
+				The tree goes straight to your agent's workspace under <code>corpus/uploads/</code>, paths
+				intact. Up to {data.maxDirFiles} files, {data.maxUploadLabel} each, {data.maxDirTotalLabel} in
+				total.
 			</Dialog.Description>
 		</Dialog.Header>
 		<form
@@ -370,7 +371,7 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title>Delete “{deleteTarget ?? ''}”?</AlertDialog.Title>
 			<AlertDialog.Description>
-				The whole subtree under <code>uploads/{deleteTarget ?? ''}</code> disappears from the workspace.
+				The whole subtree under <code>corpus/uploads/{deleteTarget ?? ''}</code> disappears from the workspace.
 				This cannot be undone.
 			</AlertDialog.Description>
 		</AlertDialog.Header>

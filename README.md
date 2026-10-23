@@ -296,11 +296,11 @@ workspace filesystem, like `/ingest`, and never activate the agent.
 | GET | `/entry?id=11` | yes | one entry unprojected: stored messages (tool results, thinking), tool-call arguments, `data` |
 | GET | `/files?path=.` | yes | list a workspace directory |
 | GET | `/file?path=...` | yes | read a workspace text file |
-| POST | `/ingest?docId=...&filename=...` | no | raw body -> `{ docId, path, bytes, sourceSha256 }`; stages the bytes at `corpus/raw/<docId><ext>` |
+| POST | `/ingest?docId=...&filename=...` | no | raw body -> `{ docId, path, bytes, sourceSha256, searchable }`; stages the bytes at `corpus/raw/<docId><ext>`, derives PDF text into `corpus/text/` |
 | GET | `/raw?docId=...&filename=...` | yes | read the staged bytes of a document back |
 | DELETE | `/ingest?docId=...&filename=...` | no | remove the staged bytes of a document |
-| POST | `/uploads/dir` | no | `{ path }` -> create/confirm a directory under `uploads/` (PRD 0003) |
-| POST | `/uploads/file?path=md-to-docx/SKILL.md` | no | raw body -> `{ path, bytes, sha256 }`; writes the file at `uploads/<path>` |
+| POST | `/uploads/dir` | no | `{ path }` -> create/confirm a directory under `corpus/uploads/` (PRD 0003) |
+| POST | `/uploads/file?path=md-to-docx/SKILL.md` | no | raw body -> `{ path, bytes, sha256, searchable }`; writes the file at `corpus/uploads/<path>`; a PDF also gets its text derived into `corpus/text/` |
 | GET | `/uploads?path=md-to-docx` | no | recursive tree of the uploads root or of one subtree |
 | DELETE | `/uploads?path=md-to-docx` | no | remove a file or a subtree under `uploads/` |
 | POST | `/skills/file?skill=md-to-docx&path=SKILL.md` | no | raw body -> `{ skill, path, bytes, sha256 }`; installs one bundle file at `skills/<skill>/<path>` (RFC 0009) |
@@ -322,12 +322,14 @@ ingestion event; the bytes and any parsed markdown stay on the volume.
 
 `/uploads` is a different contract (PRD 0003): the client dictates every path.
 A directory tree a user shares with the agent — a skill with `SKILL.md` and a
-`references/` folder, say — lands under `WORKSPACE/uploads/<path>` with the
-structure intact, and the agent reads those files with its own tools. The tree
-is workspace material, not corpus: nothing under `uploads/` is citable, and the
-control plane records no rows for it. The sandbox validates each path
-(`safeTreePath`: relative, no `..`, bounded depth) and prefixes `uploads/`
-itself, so a crafted request cannot write outside the workspace.
+`references/` folder, say — lands under `WORKSPACE/corpus/uploads/<path>` with
+the structure intact, and the agent reads those files with its own tools. The
+tree lives inside the corpus bucket: text files are indexed directly and PDFs
+through text extracted at upload time (`corpus/text/`), so `corpus_grep` sees
+them like any ingested document; other binaries are staged but not indexed.
+The sandbox validates each path (`safeTreePath`: relative, no `..`, bounded
+depth) and prefixes `corpus/uploads/` itself, so a crafted request cannot
+write outside the workspace.
 
 ## Skills and artifacts (RFC 0009)
 

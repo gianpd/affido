@@ -220,7 +220,7 @@ Two provenances of skills, both on the per-user volume:
 | Root | Provenance | Trust |
 |---|---|---|
 | `WORKSPACE/skills/<name>/` | marketplace install (R2) | platform: curated, bundled, tested in the repo |
-| `WORKSPACE/uploads/<name>/SKILL.md` | user-shared tree (PRD 0003) | user content, same trust as the user's own prompt |
+| `WORKSPACE/corpus/uploads/<name>/SKILL.md` | user-shared tree (PRD 0003; the uploads root is part of the corpus bucket) | user content, same trust as the user's own prompt |
 
 The image ships **no skills** — only runtime capability. Knowledge is
 marketplace content; capability is image content; the two never mix. A skill
@@ -356,7 +356,7 @@ In `ContainerAgent.prompt`, before building the submission draft:
 
 1. Match `^/([a-z0-9][a-z0-9-]{0,63})(?:\s+|$)` on the trimmed prompt.
 2. If it matches, look for `WORKSPACE/skills/<name>/SKILL.md` (one `stat`;
-   also accept `uploads/<name>/SKILL.md` so user-shared trees are invocable
+   also accept `corpus/uploads/<name>/SKILL.md` so user-shared trees are invocable
    the same way).
 3. Build the note and append it to the submitted content:
 
