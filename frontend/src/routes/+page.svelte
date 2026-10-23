@@ -40,12 +40,14 @@
 
 <div class="flex min-h-svh flex-col">
 	<header class="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-6">
-		<a href="/" class="flex items-center gap-2.5">
-			<span
-				class="flex size-8 items-center justify-center rounded-lg bg-primary font-display text-xl leading-none text-primary-foreground"
-				>d</span
-			>
-			<span class="font-display text-2xl leading-none">durable</span>
+		<a href="/" class="flex items-center gap-2.5" aria-label="Affido">
+			<img
+				src="/brand/affido-wordmark.png"
+				alt="Affido"
+				width="512"
+				height="208"
+				class="h-8 w-auto"
+			/>
 		</a>
 		<nav class="hidden items-center gap-6 text-sm text-muted-foreground md:flex">
 			<a class="transition-colors hover:text-foreground" href="#features">Product</a>
@@ -64,7 +66,7 @@
 	<main class="flex-1">
 		<section class="mx-auto max-w-6xl px-6 pt-16 pb-20 md:pt-24">
 			<div class="mx-auto flex max-w-3xl flex-col items-center text-center">
-				<Badge variant="secondary" class="mb-6 gap-1.5 rounded-full px-3 py-1 font-normal">
+				<Badge variant="secondary" class="mb-6 gap-1.5 px-3 py-1 font-normal">
 					<Sparkles class="text-primary" />
 					Pi-durable containers · RFC 0003
 				</Badge>
@@ -96,7 +98,7 @@
 					{#each prompts as prompt (prompt)}
 						<a
 							href="/login"
-							class="rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+							class="border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 						>
 							{prompt}
 						</a>

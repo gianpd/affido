@@ -157,7 +157,7 @@
 							<Badge variant="outline" class="font-normal">needs {library}</Badge>
 						{/each}
 						{#if installed?.verified === 'ok'}
-							<Badge variant="outline" class="gap-1 font-normal text-emerald-600">
+							<Badge variant="outline" class="gap-1 font-normal text-ok">
 								<ShieldCheck class="size-3" />
 								verified
 							</Badge>
@@ -172,7 +172,7 @@
 					{#if report}
 						<div class="rounded-lg border border-border p-3 text-xs">
 							{#if report.ok}
-								<p class="flex items-center gap-1.5 font-medium text-emerald-600">
+								<p class="flex items-center gap-1.5 font-medium text-ok">
 									<ShieldCheck class="size-3.5" /> All {report.files.length} files match the catalog.
 								</p>
 							{:else}

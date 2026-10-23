@@ -10,7 +10,25 @@ user's sandbox, and a trace page for the durable session.
 - better-auth (email + password)
 - Drizzle ORM / Postgres
 - shadcn-svelte components, Tailwind CSS 4
-- AI SDK (`ai` + `@ai-sdk/svelte`), Perplexity-inspired theme
+- AI SDK (`ai` + `@ai-sdk/svelte`), Affido brand theme (see below)
+
+## Design system (mandatory)
+
+Every screen in this app follows the Affido brand: oxblood chrome, cream type,
+amber accents, paper content surfaces, 4px notched frames and **no border
+radius**. The normative document is
+[`../docs/rfc/0011-affido-brand-design-system.md`](../docs/rfc/0011-affido-brand-design-system.md);
+the tokens ship in `src/routes/layout.css` and the brand art in `static/brand/`
+(copied from `pi-durable-containers/landing/`).
+
+- Use semantic utilities (`bg-background`, `bg-card`, `text-muted-foreground`,
+  `border-border`) for anything that must flip between light and dark.
+- Use brand utilities (`bg-field`, `text-cream`, `text-amber`, `bg-plum`,
+  `font-pixel`) only for fixed chrome and pixel numerals.
+- No raw hex in Svelte files, no Tailwind default palette colours, no
+  `rounded-*` above 0 (avatars and status dots excepted).
+- `pnpm check` and `pnpm lint` before opening a PR; the grep checks in RFC 0011
+  §13 catch palette and radius drift.
 
 ## Routes
 

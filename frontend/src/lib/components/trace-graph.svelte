@@ -345,7 +345,7 @@
 							<p class="text-xs text-muted-foreground">Reading the call…</p>
 						{:else}
 							<pre
-								class="max-h-[40vh] overflow-auto rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-xs leading-relaxed">{JSON.stringify(
+								class="max-h-[40vh] overflow-auto rounded-lg border border-border bg-muted/30 p-3 text-xs leading-relaxed">{JSON.stringify(
 									call.arguments,
 									null,
 									2

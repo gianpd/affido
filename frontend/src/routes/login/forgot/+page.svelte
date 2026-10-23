@@ -21,12 +21,14 @@
 
 <div class="flex min-h-svh flex-col">
 	<header class="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-6">
-		<a href="/" class="flex items-center gap-2.5">
-			<span
-				class="flex size-8 items-center justify-center rounded-lg bg-primary font-display text-xl leading-none text-primary-foreground"
-				>d</span
-			>
-			<span class="font-display text-2xl leading-none">durable</span>
+		<a href="/" class="flex items-center gap-2.5" aria-label="Affido">
+			<img
+				src="/brand/affido-wordmark.png"
+				alt="Affido"
+				width="512"
+				height="208"
+				class="h-8 w-auto"
+			/>
 		</a>
 		<Button variant="ghost" size="sm" href="/login">Back to sign in</Button>
 	</header>

@@ -66,7 +66,7 @@
 					<Brand wordmark={false} />
 				</div>
 				<span
-					class="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium tracking-wide text-muted-foreground uppercase group-data-[collapsible=icon]:hidden"
+					class="bg-muted px-2 py-0.5 text-[10px] font-medium tracking-wide text-muted-foreground uppercase group-data-[collapsible=icon]:hidden"
 				>
 					alpha
 				</span>

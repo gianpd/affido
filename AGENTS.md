@@ -80,6 +80,7 @@ These are the product. Do not break them casually.
 
 - Routes live in `src/routes`; server-only code (auth, db, sandbox clients) in `src/lib/server`; UI in `src/lib/components` including `ui/` (shadcn-svelte). Imports go through `$lib` / `#lib`.
 - Svelte 5 with runes. Use the existing bits-ui / shadcn-svelte components instead of hand-rolled widgets.
+- Visual style is normative: `docs/rfc/0011-affido-brand-design-system.md`. Tokens ship in `frontend/src/routes/layout.css`, brand art in `frontend/static/brand/`. Do not inline hex colours, Tailwind default palette colours, or border radius in components; extend RFC 0011 first.
 - Schema changes: edit the Drizzle schema, run `pnpm db:generate`, then `pnpm db:migrate`. Do not hand-edit a migration that is already committed; add a new one.
 - The web app reaches sandboxes in two modes (Caddy gateway or trusted manager `/resolve`). Keep both working; a change to one must check the other.
 - The chat route forwards `POST /prompt` and streams an AI SDK UI message stream. Do not change the prompt contract without updating the agent side and the e2e/frontend path together.

@@ -1,86 +1,178 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn-svelte/tailwind.css';
-@import '@fontsource-variable/inter';
-@import '@fontsource/instrument-serif/400.css';
 
 @custom-variant dark (&:is(.dark *));
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 
-/* Perplexity-inspired palette: warm paper background, ink text, teal accent. */
+/* Affido brand system. Normative reference: docs/rfc/0011-affido-brand-design-system.md.
+   Every hex below is sampled from landing/styles.css. Do not add colours here:
+   edit the design document first, then both files. */
 :root {
-	--background: #fcfcf9;
-	--foreground: #13343b;
-	--card: #ffffff;
-	--card-foreground: #13343b;
-	--popover: #ffffff;
-	--popover-foreground: #13343b;
-	--primary: #20808d;
-	--primary-foreground: #ffffff;
-	--secondary: #f1f1ea;
-	--secondary-foreground: #13343b;
-	--muted: #f3f3ee;
-	--muted-foreground: #6b726e;
-	--accent: #e8f3f2;
-	--accent-foreground: #0f5e68;
-	--destructive: #c0392b;
-	--border: #e8e8e1;
-	--input: #deded5;
-	--ring: #20808d;
-	--chart-1: #20808d;
-	--chart-2: #2aa3b0;
-	--chart-3: #7cc4c9;
-	--chart-4: #b6dedf;
-	--chart-5: #dcefee;
-	--radius: 0.75rem;
-	--sidebar: #f7f7f2;
-	--sidebar-foreground: #13343b;
-	--sidebar-primary: #20808d;
-	--sidebar-primary-foreground: #ffffff;
-	--sidebar-accent: #e8f3f2;
-	--sidebar-accent-foreground: #0f5e68;
-	--sidebar-border: #e8e8e1;
-	--sidebar-ring: #20808d;
+	/* the pixel unit: hero art, notches, seams and strip heights derive from it */
+	--c: 8px;
+
+	/* brand field: the dusk sky, sampled from the wordmark and the keep */
+	--field: #200412;
+	--night: #160610;
+	--night-2: #12060b;
+	--plum: #2a0a18;
+	--plum-2: #3a1020;
+	--dusk: #22102e;
+	--dusk-2: #2e1a44;
+
+	/* type on the dark half */
+	--cream: #fbf2e8;
+	--cream-2: #e9d8ce;
+	--muted-ink: #bfa69e;
+	--dim: #a98d93;
+
+	/* rules and ink */
+	--line: #40202a;
+	--line-soft: #2c1119;
+	--ink: #0e0409;
+
+	/* accent: the beacons */
+	--amber: #ff6f30;
+	--amber-hi: #ffa66e;
+	--amber-deep: #b4431a;
+
+	/* paper: light surfaces and receipts */
+	--paper: #fbf2e8;
+	--paper-ink: #1a1215;
+	--paper-muted: #5c5255;
+	--paper-line: #d9cbc3;
+	--paper-accent: #efe3da;
+
+	/* status tones (landing: --ok/--bad pairs) */
+	--ok: #0b6b3a;
+	--ok-t: #ddefe3;
+	--bad: #9e141b;
+	--bad-t: #fbe1de;
+
+	/* the 4px corner notch, reused by every framed surface */
+	--notch4: polygon(
+		4px 0,
+		calc(100% - 4px) 0,
+		calc(100% - 4px) 4px,
+		100% 4px,
+		100% calc(100% - 4px),
+		calc(100% - 4px) calc(100% - 4px),
+		calc(100% - 4px) 100%,
+		4px 100%,
+		4px calc(100% - 4px),
+		0 calc(100% - 4px),
+		0 4px,
+		4px 4px
+	);
+
+	/* ---- semantic mapping: light = newsprint, ink on paper ---- */
+	--background: var(--paper);
+	--foreground: var(--paper-ink);
+	--card: var(--paper);
+	--card-foreground: var(--paper-ink);
+	--popover: var(--paper);
+	--popover-foreground: var(--paper-ink);
+	--primary: var(--amber);
+	--primary-foreground: var(--field);
+	--secondary: var(--paper-accent);
+	--secondary-foreground: var(--paper-ink);
+	--muted: #f1e7df;
+	--muted-foreground: var(--paper-muted);
+	--accent: var(--paper-accent);
+	--accent-foreground: var(--paper-ink);
+	--destructive: var(--bad);
+	--destructive-foreground: var(--bad-t);
+	--border: var(--paper-line);
+	--input: var(--paper-line);
+	--ring: var(--amber-deep);
+	--chart-1: var(--amber-deep);
+	--chart-2: var(--amber);
+	--chart-3: var(--dusk-2);
+	--chart-4: var(--ok);
+	--chart-5: var(--paper-muted);
+	/* zero radius everywhere: corners are notched, never rounded */
+	--radius: 0px;
+	--sidebar: var(--field);
+	--sidebar-foreground: var(--cream-2);
+	--sidebar-primary: var(--amber);
+	--sidebar-primary-foreground: var(--field);
+	--sidebar-accent: var(--plum);
+	--sidebar-accent-foreground: var(--cream);
+	--sidebar-border: var(--line);
+	--sidebar-ring: var(--amber);
 }
 
+/* dark = the dusk block: light on oxblood */
 .dark {
-	--background: #101212;
-	--foreground: #edede7;
-	--card: #171a19;
-	--card-foreground: #edede7;
-	--popover: #171a19;
-	--popover-foreground: #edede7;
-	--primary: #2aa3b0;
-	--primary-foreground: #062021;
-	--secondary: #202624;
-	--secondary-foreground: #edede7;
-	--muted: #1d2120;
-	--muted-foreground: #9ba8a4;
-	--accent: #143033;
-	--accent-foreground: #a8e5e8;
-	--destructive: #e06c5f;
-	--border: #2a2f2d;
-	--input: #343a37;
-	--ring: #2aa3b0;
-	--chart-1: #2aa3b0;
-	--chart-2: #7cc4c9;
-	--chart-3: #b6dedf;
-	--chart-4: #143033;
-	--chart-5: #0f2224;
-	--sidebar: #141716;
-	--sidebar-foreground: #edede7;
-	--sidebar-primary: #2aa3b0;
-	--sidebar-primary-foreground: #062021;
-	--sidebar-accent: #1b2a2c;
-	--sidebar-accent-foreground: #a8e5e8;
-	--sidebar-border: #2a2f2d;
-	--sidebar-ring: #2aa3b0;
+	--background: var(--night);
+	--foreground: var(--cream);
+	--card: var(--field);
+	--card-foreground: var(--cream);
+	--popover: var(--field);
+	--popover-foreground: var(--cream);
+	--primary: var(--amber);
+	--primary-foreground: var(--field);
+	--secondary: var(--plum);
+	--secondary-foreground: var(--cream);
+	--muted: var(--plum);
+	--muted-foreground: var(--muted-ink);
+	--accent: var(--plum-2);
+	--accent-foreground: var(--amber-hi);
+	--destructive: var(--bad);
+	--destructive-foreground: var(--bad-t);
+	--border: var(--line);
+	--input: var(--line);
+	--ring: var(--amber);
+	--chart-1: var(--amber);
+	--chart-2: var(--amber-hi);
+	--chart-3: var(--dusk-2);
+	--chart-4: var(--ok);
+	--chart-5: var(--cream-2);
+	--sidebar: var(--field);
+	--sidebar-foreground: var(--cream-2);
+	--sidebar-primary: var(--amber);
+	--sidebar-primary-foreground: var(--field);
+	--sidebar-accent: var(--plum-2);
+	--sidebar-accent-foreground: var(--cream);
+	--sidebar-border: var(--line);
+	--sidebar-ring: var(--amber);
 }
 
 @theme inline {
-	--font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
-	--font-display: 'Instrument Serif', ui-serif, Georgia, serif;
+	--font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+	--font-pixel: 'Jersey 10', 'Geist Mono', ui-monospace, monospace;
+	--font-display: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+	/* brand colours exposed as utilities (bg-field, text-cream, border-line, ...) */
+	--color-field: var(--field);
+	--color-night: var(--night);
+	--color-night-2: var(--night-2);
+	--color-plum: var(--plum);
+	--color-plum-2: var(--plum-2);
+	--color-dusk: var(--dusk);
+	--color-dusk-2: var(--dusk-2);
+	--color-cream: var(--cream);
+	--color-cream-2: var(--cream-2);
+	--color-dim: var(--dim);
+	--color-line: var(--line);
+	--color-line-soft: var(--line-soft);
+	--color-ink: var(--ink);
+	--color-amber: var(--amber);
+	--color-amber-hi: var(--amber-hi);
+	--color-amber-deep: var(--amber-deep);
+	--color-paper: var(--paper);
+	--color-paper-ink: var(--paper-ink);
+	--color-paper-muted: var(--paper-muted);
+	--color-paper-line: var(--paper-line);
+	--color-paper-accent: var(--paper-accent);
+	--color-ok: var(--ok);
+	--color-ok-t: var(--ok-t);
+	--color-bad: var(--bad);
+	--color-bad-t: var(--bad-t);
+
 	--color-sidebar-ring: var(--sidebar-ring);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -132,10 +224,72 @@
 		@apply bg-background text-foreground antialiased;
 	}
 	::selection {
-		@apply bg-primary/20 text-foreground;
+		background: var(--amber);
+		color: var(--field);
+	}
+	:focus-visible {
+		outline: 3px solid var(--ring);
+		outline-offset: 3px;
 	}
 	.font-display {
 		font-family: var(--font-display);
-		letter-spacing: -0.01em;
+		font-weight: 600;
+		letter-spacing: -0.04em;
+	}
+	.font-pixel {
+		font-family: var(--font-pixel);
+		font-weight: 400;
+		letter-spacing: 0.03em;
+		line-height: 1;
+	}
+	code,
+	kbd,
+	pre,
+	samp {
+		font-family: var(--font-mono);
+	}
+}
+
+@layer components {
+	/* §6.1: the corner is cut, not rounded. Borders are stacked frames. */
+	.notch {
+		clip-path: var(--notch4);
+	}
+	/* §6.2: depth is one pixel cell of solid shadow, never blur. */
+	.brand-shadow {
+		filter: drop-shadow(8px 8px 0 #060205);
+	}
+	.frame-ink {
+		background: var(--ink);
+		clip-path: var(--notch4);
+		padding: 4px;
+	}
+	.frame-amber {
+		background: var(--amber);
+		clip-path: var(--notch4);
+		padding: 4px;
+	}
+	/* §6.3: a 2-tone checkerboard replaces every gradient. */
+	.dither {
+		height: 8px;
+		background-size: 8px 8px;
+		background-image: repeating-conic-gradient(var(--field) 0 25%, var(--night-2) 0 50%);
+	}
+	/* §7.5: status is a pair of colours applied on the wrapper, never per child. */
+	.tone-ok {
+		background: var(--ok-t);
+		color: var(--ok);
+	}
+	.tone-bad {
+		background: var(--bad-t);
+		color: var(--bad);
+	}
+	.tone-unknown {
+		background: var(--paper-accent);
+		color: var(--paper-muted);
+	}
+	.dark .tone-unknown {
+		background: var(--plum);
+		color: var(--muted-ink);
 	}
 }
