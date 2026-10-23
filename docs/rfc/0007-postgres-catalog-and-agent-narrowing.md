@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Author | pi-durable containers maintainers |
+| Author | Affido maintainers |
 | Date | 2026-10-22 |
 | Target | `agent/`, `frontend/`, `sandbox-manager/`, `docker-compose.yml`, knowledge-extractor deployment |
 | Related | RFC 0005, RFC 0006, PRD 0001 §4/§6.2/§6.4, `agent/corpus.ts`, `agent/citation-tools.ts`, `frontend/src/lib/server/db/schema.ts`, knowledge-extractor README (`/convert` contract) |
@@ -23,7 +23,8 @@ already runs, and makes it the agent's first point of contact with the corpus:
 ```
 user query
   -> agent extracts the intent (which parties, dates, amounts, codes matter)
-  -> catalog_query: SQL against document  (per-user read-only role, RLS on session_user)
+  -> catalog_query: one fixed SELECT over document, keywords bound as $1
+     (per-user read-only role, RLS on session_user)
   -> a small set of docIds
   -> narrowed investigation: corpus_grep / corpus_read on those docIds only
   -> citations verified against corpus/docs/<docId>.md, as in RFC 0006
@@ -35,17 +36,24 @@ Decisions already taken, recorded here:
   PDF/DOCX/text to markdown at ingest time. The agent never converts; it
   analyzes text that is deterministic, hashed and stored before any run.
   Rationale in §5.2; this is the PRD 0001 §6.2 position, unchanged.
-- **D2 — Raw SQL, per-user read-only role, RLS keyed on `session_user`.** The
-  agent writes `SELECT` statements against the catalog through one tool. The
-  security boundary is Postgres itself: one login role per user
+- **D2 — One fixed narrowing query, raw SQL as escape hatch; per-user
+  read-only role, RLS keyed on `session_user`.** The default interface of
+  `catalog_query` is a single `SELECT` fixed in the tool (§5.6): the agent
+  supplies keywords, bound as one `$1::text[]` parameter, and gets the ids
+  and paths of the parsed documents whose entity values, title or filename
+  contain them — ripgrep semantics over metadata, executed by Postgres. The
+  agent writes SQL text only through a secondary `sql` input, for what
+  keywords cannot express (date ranges, amounts, exact containment on one
+  bucket). The security boundary is Postgres itself: one login role per user
   (`agent_ro_<userId>`, member of the no-login group `agent_ro_group`) with
   `SELECT` on `document` only, and row level security whose policy derives the
   user from `session_user` — the one identity a session cannot change without
   superuser — plus per-role `statement_timeout`, read-only default
   transactions, and a per-role connection limit. No session setting carries
   identity: a custom GUC (`app.user_id`) is writable by any `SELECT
-  set_config(...)` and is not a boundary. The tool's own syntax check is UX,
-  not the boundary (§5.4).
+  set_config(...)` and is not a boundary. In keywords mode there is no SQL
+  surface at all; the `sql` input's syntax check is UX, not the boundary
+  (§5.4).
 - **D3 — Bytes stay in the workspace for now.** This RFC lands the catalog and
   the narrowing step of RFC 0005 early; it does not move bytes to object
   storage. When RFC 0005 lands, the same subset flow drives object fetch and
@@ -121,7 +129,7 @@ survives sandbox destruction by construction.
 | ID | Goal |
 |---|---|
 | G1 | Every parsed document is queryable by its extracted metadata (entities, docDate, title, hashes, status) from both dashboard and agent. |
-| G2 | The agent's first corpus contact is a metadata query that returns docIds, never text. |
+| G2 | The agent's first corpus contact is a metadata query that returns docIds, never text. That query is fixed in the tool: the agent passes keywords as a bound parameter, not SQL text. |
 | G3 | A sandbox can only ever read its own user's rows, enforced by the database, not by tool code. |
 | G4 | PDF uploads up to 15 MB parse end-to-end; binary raw files never enter the citation index. |
 | G5 | The write path keeps PRD 0001 §6.2 guarantees: sandbox verifies `source_hash`, owns bytes and parsed markdown; the control plane owns metadata rows. |
@@ -148,7 +156,7 @@ survives sandbox destruction by construction.
 | R2 | One login role per user (`agent_ro_<userId>`, member of the no-login group `agent_ro_group`) has `SELECT` on `document` only. | As any agent role: `UPDATE`/`DELETE`/`INSERT`/DDL fail with `permission denied`; other tables yield no data (their names remain listable via `information_schema` — public metadata, not data). |
 | R3 | RLS derives the user from `session_user`; no session setting carries identity. | Sandbox A's query returns zero rows of user B; `SELECT set_config('app.user_id', …)` or any `SET` before the same query changes nothing; a stolen role-A password, used on a direct connection, still reads only user A. |
 | R4 | The catalog connection is unreachable from sandboxes unless provisioned. | With `CATALOG_URL` absent, the agent starts, answers, and the tool reports `catalog_unavailable`. |
-| R5 | `catalog_query` accepts one read-only statement. | Non-`SELECT`/`WITH` input or any `;` is rejected with `not_a_read_query` before any connection is opened. |
+| R5 | `catalog_query` runs either its fixed statement (`keywords`, the default) or one caller-written read-only statement (`sql`). | `keywords` never becomes SQL text: a keyword like `' OR '1'='1` or `x; DROP TABLE` is a literal substring and returns zero rows. `sql` input that is not `SELECT`/`WITH` or contains `;` is rejected with `not_a_read_query` before any connection is opened. |
 | R6 | Queries are bounded server-side. | Role `statement_timeout` (2 s) aborts a heavy query; the tool truncates at 50 rows / 4 KB per cell and sets `truncated: true`. |
 | R7 | Probes never open the catalog. | `GET /health` and `GET /status` on a fresh sandbox open zero Postgres connections (`pg_stat_activity` empty). |
 | R8 | Upload limit is 15 MB on both sides; `.pdf` is accepted. | A 15 MB PDF ingests; a 15.1 MB file is refused by the form and by the sandbox with the same message. |
@@ -157,6 +165,7 @@ survives sandbox destruction by construction.
 | R11 | Strict-citation runs count catalog calls in the corpus-call budget. | A run that only loops `catalog_query` exhausts `MAX_CORPUS_CALLS` and is rejected. |
 | R12 | E2E exercises the full narrowing path through Caddy only. | `e2e-test` uploads a PDF, prompts for an entity-scoped question, and shows a `catalog_query` call preceding grep on the returned docIds. |
 | R13 | A guard stage in the stack gate asserts the boundary (§5.9, I3–I6). | Red matrix: with the policy dropped, `FORCE` removed, an `agent_ro_%` role granted `rolsuper`, a trust line replacing scram in `pg_hba`, or a foreign row visible, `./verify.sh` fails; on a healthy stack it passes. |
+| R14 | The keywords mode is deterministic: one statement per `match` value, byte-identical across runs, keywords as the only external input. | A curated-corpus test asserts the statement returns exactly the parsed documents containing all (or, with `match: "any"`, any) keyword across entity buckets, title and filename; `raw_only` and foreign-tenant rows never appear; more than 50 matches return 50 rows with `truncated: true` (§8 T15). |
 
 ## 5. Design
 
@@ -175,9 +184,9 @@ dashboard lists" to "index the agent queries".
 
 ### 5.2 Parse: knowledge-extractor at ingest (D1)
 
-The parser is the existing service at
-`/home/jaco/develops/RESEARCH/INFRA/knowledge-extractor/`. Deployment follows
-the `pi-durable-agent:latest` pattern: the image is built from that repo,
+The parser is the existing knowledge-extractor service, a separate
+repository. Deployment follows
+the `affido-agent:latest` pattern: the image is built from that repo,
 tagged `knowledge-extractor:latest`, and declared in compose as a control-plane
 service (`knowledge-extractor`, `agents` network, token via env). The sandbox
 manager attaches it to every per-user network alongside `oltp` (§5.5). The e2e
@@ -298,10 +307,13 @@ Properties, in order of importance:
    they are friction, not walls (a session can `SET statement_timeout = 0`).
    The floor is the privilege system: grants, RLS on `session_user`, and the
    connection limit.
-4. **Tool checks are UX.** `catalog_query` rejects input that is not a single
+4. **Tool checks are UX.** In keywords mode there is no SQL text to check:
+   the statement is fixed and the keywords travel as a bound parameter, so
+   `' OR '1'='1` is a literal substring like any other (validated on a live
+   cluster, §5.6). The `sql` input rejects anything that is not a single
    statement starting with `SELECT` or `WITH`, or that contains `;`, with
-   `not_a_read_query` — a fast, clear error. It is not the security boundary;
-   the role is. A hostile statement that passes the check still dies at
+   `not_a_read_query` — a fast, clear error. Neither check is the security
+   boundary; the role is. A hostile statement that passes still dies at
    `permission denied`, zero rows, or the timeout.
 
 Connection: `pg` (node-postgres), exact-pinned, one `Pool` with `max: 1`,
@@ -355,25 +367,88 @@ parser token, as env at `docker create`, so a change requires `dev.sh reload`
 
 ### 5.6 The `catalog_query` tool
 
-One `defineTool` in `agent/` beside the RFC 0006 citation tools:
+One `defineTool` in `agent/` beside the RFC 0006 citation tools, with two
+inputs: `keywords` (the default) and `sql` (a secondary input for structured
+predicates). In keywords mode the statement is fixed in the tool and the
+agent's keywords travel as one bound `$1::text[]` parameter — ripgrep
+semantics over metadata, executed by Postgres. A document matches when every
+keyword (`match: "all"`, the default) or any keyword (`match: "any"`) appears,
+case-insensitively and as a substring, in one of its entity values, its title,
+or its filename. The statements, verbatim:
+
+```sql
+-- match: "all" — every keyword must hit somewhere
+SELECT d.id, d.title, d.filename, d."docDate", d.chars,
+       'corpus/docs/' || d.id || '.md' AS path
+FROM document d
+WHERE d.ingestStatus = 'parsed'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM unnest($1::text[]) AS kw(k)
+    WHERE d.title    NOT ILIKE '%' || kw.k || '%'
+      AND d.filename NOT ILIKE '%' || kw.k || '%'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM jsonb_each(d.entities) AS b(bucket, vals)
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+          CASE WHEN jsonb_typeof(vals) = 'array' THEN vals ELSE '[]'::jsonb END) AS v(txt)
+        WHERE v.txt ILIKE '%' || kw.k || '%'))
+ORDER BY d."docDate" DESC NULLS LAST, d.id
+LIMIT 51;
+
+-- match: "any" — the outer NOT EXISTS becomes three OR'd EXISTS
+SELECT d.id, d.title, d.filename, d."docDate", d.chars,
+       'corpus/docs/' || d.id || '.md' AS path
+FROM document d
+WHERE d.ingestStatus = 'parsed'
+  AND (
+    EXISTS (SELECT 1 FROM unnest($1::text[]) AS kw(k)
+            WHERE d.title ILIKE '%' || kw.k || '%'
+               OR d.filename ILIKE '%' || kw.k || '%')
+    OR EXISTS (
+      SELECT 1
+      FROM jsonb_each(d.entities) AS b(bucket, vals)
+      CROSS JOIN LATERAL jsonb_array_elements_text(
+        CASE WHEN jsonb_typeof(vals) = 'array' THEN vals ELSE '[]'::jsonb END) AS v(txt)
+      CROSS JOIN unnest($1::text[]) AS kw(k)
+      WHERE v.txt ILIKE '%' || kw.k || '%'))
+ORDER BY d."docDate" DESC NULLS LAST, d.id
+LIMIT 51;
+```
+
+Notes on the shape: only `parsed` rows have a deterministic path, so the
+filter doubles as the R9 guarantee; the bucket guard (`jsonb_typeof`) makes a
+non-array bucket inert instead of fatal; `entities` NULL yields no rows from
+`jsonb_each` while the title/filename branches still match; `%` and `_` in a
+keyword act as ILIKE wildcards — documented behavior, never SQL text. The
+statement fetches 51; the tool returns 50 rows and sets `truncated: true`
+when the 51st exists. Both statements were validated against the schema and
+policy of §5.4 on `postgres:17-alpine` (the image the stack pins): AND/any
+semantics, injection strings as literals, non-array buckets, NULL entities,
+`raw_only` exclusion, cross-tenant invisibility, the 51-fetch cap (§8 T15).
 
 ```json
-// input
-{ "sql": "SELECT id, title, filename, \"docDate\", \"textSha256\", chars\nFROM document\nWHERE ingestStatus = 'parsed'\n  AND entities @> '{\"parties\": [\"Comune di Trento\"]}'\nLIMIT 20" }
+// input (default: keywords — fixed statement, bound parameter)
+{ "keywords": ["comune di trento", "giugno 2026"], "match": "all" }
+// input (escape hatch: one read-only statement for what keywords cannot express)
+{ "sql": "SELECT id, \"docDate\" FROM document\nWHERE ingestStatus = 'parsed' AND \"docDate\" >= '2026-06-01' LIMIT 20" }
 
-// output (JSON text, stable shape)
-{ "columns": ["id", "title", "filename", "docDate", "textSha256", "chars"],
-  "rows": [ ["doc_42", "Bando servizi 2026", "bando_42.pdf", "2026-02-10", "a1b2…", 48210] ],
+// output (JSON text, stable shape, both modes)
+{ "columns": ["id", "title", "filename", "docDate", "chars", "path"],
+  "rows": [ ["doc_42", "Bando servizi 2026", "bando_42.pdf", "2026-02-10", 48210, "corpus/docs/doc_42.md"] ],
   "rowCount": 1, "truncated": false, "elapsedMs": 12 }
 ```
 
 Rules:
 
-- Input is one read-only statement (`SELECT`/`WITH`), at most 4000 characters,
-  no `;`. Output is capped: 50 rows, 4096 characters per cell, `truncated`
-  flags both. Errors return `{ error, detail }` with the Postgres SQLSTATE:
-  `42501` permission, `57014` timeout, `42P01` unknown table (schema drift),
-  `catalog_unavailable` connection.
+- `keywords`: 1–8 keywords, each 1–128 characters after trim, `match` one of
+  `all` (default) / `any`; otherwise `invalid_keywords` before any connection
+  is opened. `sql`: one read-only statement (`SELECT`/`WITH`), at most 4000
+  characters, no `;`, else `not_a_read_query` (R5). Output is capped in both
+  modes: 50 rows, 4096 characters per cell, `truncated` flags both. Errors
+  return `{ error, detail }` with the Postgres SQLSTATE: `42501` permission,
+  `57014` timeout, `42P01` unknown table (schema drift), `catalog_unavailable`
+  connection.
 - The tool result carries a standing instruction: these rows name documents;
   to read them, call `corpus_grep`/`corpus_read` with the returned ids as
   `docIds`. The catalog has no text.
@@ -387,17 +462,23 @@ document is the catalog of this user's parsed documents: id, title, filename,
 mimeType, size, chars, docDate, entities (jsonb: parties, dates, amounts,
 codes, locations, …), structure (jsonb), sourceSha256, textSha256,
 ingestStatus. It holds metadata only — never text.
-Start every investigation with catalog_query: select the ids that match the
-intent (entities @> '{"parties": ["…"]}', docDate ranges, title ILIKE), then
-grep and read only those docIds. If the catalog is unavailable, fall back to
-corpus_grep over all documents and say so.
+Start every investigation with catalog_query keywords: pass the parties,
+dates and codes the question is about; match "all" unless the question is an
+OR. You get the ids and paths of the parsed documents whose entities, title
+or filename contain the keywords. Then grep and read only those docIds.
+Use the sql input only for what keywords cannot express: docDate ranges,
+amounts, exact containment on one bucket (entities @> '{"parties": ["…"]}',
+jsonb_array_elements_text(entities->'parties') ILIKE '%trento%'). If the
+catalog is unavailable, fall back to corpus_grep over all documents and say
+so.
 ```
 
 A curated skill (shipped in the image, loaded by the agent) teaches the full
-bucket vocabulary, the containment-vs-unnest patterns
+bucket vocabulary, when keywords suffice versus when the `sql` escape hatch
+is worth it, the containment-vs-unnest patterns
 (`jsonb_array_elements_text(entities->'parties') ILIKE '%trento%'` for partial
 names), and the id/filename conventions. The schema knowledge lives in the
-skill; the tool stays minimal.
+skill; the tool stays minimal — keywords mode needs none of it.
 
 ### 5.7 Citation consistency
 
@@ -532,23 +613,24 @@ is harmless without the others.
 | T2 | Identity games are inert: `SELECT set_config('app.user_id','B',false)`, `SET app.user_id`, and `SET SESSION AUTHORIZATION` all fail or change nothing — zero rows of B either way. |
 | T3 | `UPDATE`/`DELETE`/`INSERT`/`CREATE TABLE` as an agent role fail with `permission denied`; `SELECT` of data from any other table fails. |
 | T4 | A query slower than 2 s aborts with SQLSTATE `57014`; the tool reports `query_timeout`. |
-| T5 | Tool rejects `;`, `DELETE …`, empty input as `not_a_read_query` without opening a connection. |
+| T5 | `sql` input rejects `;`, `DELETE …`, empty input as `not_a_read_query` without opening a connection. |
 | T6 | 60-row result truncates at 50 with `truncated: true`; a 10 KB cell truncates at 4096. |
 | T7 | Fresh sandbox: `GET /health`, `GET /status`, then `pg_stat_activity` shows no `agent_ro_%` connections. |
 | T8 | Unit: binary exclusion — a staged `.pdf` is absent from `documents()` until `corpus/docs/<docId>.md` appears. |
 | T9 | Unit: ingest response mapping, `source_hash` mismatch leaves no file, idempotent replay, `409` on different hash. |
 | T10 | Strict run: `catalog_query` calls counted; exhausting the budget rejects with `turn_budget_exhausted`. |
 | T11 | Degraded: `CATALOG_URL` unset or oltp stopped → `catalog_unavailable`, the run still answers via full-corpus grep. |
-| T12 | E2E through Caddy (`localhost:18080/u/<user>/…`): upload 15 MB PDF → parsed row with entities → prompt "in which documents is X a party" → trace shows `catalog_query` → grep only on returned docIds → citations verify. |
+| T12 | E2E through Caddy (`localhost:18080/u/<user>/…`): upload 15 MB PDF → parsed row with entities → prompt "in which documents is X a party" → trace shows a `catalog_query` keywords call → grep only on returned docIds → citations verify. |
 | T13 | Guard red matrix (R13): each injected failure — policy dropped, `FORCE` removed, `rolsuper` on an agent role, a trust `pg_hba` line, one visible foreign row — fails `./verify.sh`; the healthy stack passes. |
 | T14 | Secret rotation (I3): change `CATALOG_RO_SECRET`, `dev.sh reload`; old derived DSNs are rejected with an auth failure, new DSNs still read only their own tenant. |
+| T15 | Fixed statements on a live cluster (schema and policy of §5.4, `postgres:17-alpine`): `match:"all"`/`"any"` return exactly the parsed docs containing all/any keyword across buckets, title and filename; injection strings (` OR '1'='1`, `x; DROP TABLE document;--`) are literals — zero rows, no error, table intact; non-array buckets and NULL `entities` are safe; `raw_only` and foreign-tenant rows never appear; 51 fetched, 50 returned with `truncated: true`. |
 
 ## 9. Alternatives considered
 
 | Alternative | Why not |
 |---|---|
 | Agent parses PDFs itself with curated skills | Breaks D1's rationale: unstable evidence text, model-verified-by-model circularity, tokens burned on OCR, ingest pinned to conversation lifetime. |
-| Structured filter tool (`search_documents(filters)`) instead of SQL | A fixed vocabulary must predict every query shape over evolving JSONB buckets; SQL is the native language of the index and the skill can teach it. Rejected for flexibility, with the role as the safety answer. |
+| Structured filter tool (`search_documents(filters)`) | A fixed vocabulary must predict every query shape over evolving JSONB buckets; rejected as the only interface. What v1 ships instead is narrower and covers the common path: one fixed keyword statement (§5.6) — a filter vocabulary of exactly one concept, grep — with raw SQL as the escape hatch for everything else. |
 | HTTP metadata-search endpoint on the control plane, sandbox calls it | Keeps Postgres off user networks, but adds a hop, a second query language to maintain, and a middleman that must re-implement RLS. Postgres auth + RLS is the purpose-built primitive. |
 | Catalog in the sandbox (SQLite in workspace or `pi.corpus` doc per PRD §6.3) | Dies with the volume, not shared with the dashboard, no concurrent writer story, re-implements what `oltp` already provides. |
 | One database per user | Isolation by construction, but N databases × migrations × backups; RLS on a shared table gives the same boundary at a fraction of the operational cost. Postgres RLS is the standard answer here. |
@@ -557,11 +639,12 @@ is harmless without the others.
 
 ## 10. Risks and open questions
 
-1. **Text-to-SQL quality.** The model may write wrong-but-legal SQL and narrow
-   to the wrong subset. Mitigation: the skill's patterns, `LIMIT` discipline,
-   and the fallback grep; the answer's correctness is still gated by
-   citations, and a wrong subset surfaces as `no_evidence`, not as a false
-   verified claim.
+1. **Text-to-SQL quality, scoped to the `sql` escape hatch.** The default
+   narrowing path is the fixed keywords statement: no model-written SQL, no
+   wrong-but-legal query, and a wrong keyword surfaces as `no_evidence`, not
+   as a false verified claim. The escape hatch keeps the original risk;
+   mitigation there is the skill's patterns, `LIMIT` discipline, and the
+   fallback grep, with citations still gating correctness.
 2. **`pg` in the sandbox image.** New exact-pinned dependency; `npm ci
    --ignore-scripts` per the dependency rules. One pooled connection inside a
    512 MB sandbox is a few MB — measured, not assumed.
@@ -592,7 +675,9 @@ Approve:
 
 1. knowledge-extractor as the external parser at ingest, bytes and parsed
    markdown in the workspace, metadata in `oltp` (D1, §5.2).
-2. Raw SQL narrowing via `catalog_query`, backed by one login role per user
+2. Narrowing via `catalog_query` — one fixed, parameter-bound statement
+   driven by keywords (§5.6), with raw SQL as a secondary input for
+   structured predicates — backed by one login role per user
    (`agent_ro_<userId>`, member of `agent_ro_group`) with `SELECT` on
    `document` only, RLS keyed on `session_user`, per-role timeout, read-only
    transactions and connection limit (D2, §5.4).

@@ -3,9 +3,9 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Author | pi-durable containers maintainers |
+| Author | Affido maintainers |
 | Date | 2026-10-16 |
-| Target | `packages/ai` (`@earendil-works/pi-ai`) in the pi monorepo; consumer change in `pi-durable-containers/agent` |
+| Target | `packages/ai` (`@earendil-works/pi-ai`) in the pi monorepo; consumer change in `affido/agent` |
 | Related | "Bundling and Tree Shaking" in `packages/ai/README.md` |
 
 ## 1. Summary
@@ -24,7 +24,7 @@ packages on every machine.
 
 ### 2.1 The install-cost problem
 
-Measured on `pi-durable-containers/agent` (Node 24, npm 11.6.2). `node_modules` is
+Measured on `affido/agent` (Node 24, npm 11.6.2). `node_modules` is
 139 MB. Traversing `package-lock.json` and summing the subtrees of the provider SDKs:
 
 | SDK | Subtree | Packages |
@@ -174,7 +174,7 @@ Update the "Installation" and "Bundling and Tree Shaking" sections of
   selected provider).
 - List which package each provider factory needs.
 
-### 5.4 Consumer: `pi-durable-containers/agent`
+### 5.4 Consumer: `affido/agent`
 
 1. Add the SDK for the selected provider as a direct dependency. For OpenRouter with an
    `openai-completions` model:
@@ -275,7 +275,7 @@ npm run check          # biome, pinned-deps, runtime-deps, ts, install-lock, bro
 Add a unit test that simulates a missing SDK (mock the dynamic import to throw
 `ERR_MODULE_NOT_FOUND`) and asserts the actionable message. Exercise each lazy wrapper.
 
-Consumer (`pi-durable-containers`):
+Consumer (`affido`):
 
 ```
 cd agent
@@ -341,11 +341,11 @@ diff.
    `*.lazy.ts` wrapper? (Leaning to a helper per wrapper for explicit SDK lists.)
 2. Does the Browser/Cloudflare smoke build need any adjustment if the SDKs are optional?
    Expected no, to be confirmed by `npm run check:browser-smoke`.
-3. Should `pi-durable-containers/agent` ship two images (faux-only vs real provider), or
+3. Should `affido/agent` ship two images (faux-only vs real provider), or
    one image with `openai` plus the `.npmrc` flag?
 
 ## 13. Decision
 
 Pending review. Recommended path: adopt 5.1–5.4, implement Phase 1 upstream, then Phase 2
-in `pi-durable-containers/agent`. Expected outcome: `node_modules` from 139 MB to ~75 MB
+in `affido/agent`. Expected outcome: `node_modules` from 139 MB to ~75 MB
 (OpenRouter, `openai` kept) with no RAM change and no default-install behavior change.

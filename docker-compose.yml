@@ -1,5 +1,5 @@
 {
-	"name": "pi-durable-containers",
+	"name": "affido",
 	"services": {
 		"caddy": {
 			"image": "caddy:2.11.4-alpine",
@@ -37,7 +37,7 @@
 			"container_name": "sandbox-manager",
 			"environment": {
 				"DATABASE_URL": "postgresql://pi:pi@oltp:5432/pi",
-				"AGENT_IMAGE": "pi-durable-agent:latest",
+				"AGENT_IMAGE": "affido-agent:latest",
 				"MANAGER_TOKEN": "${MANAGER_TOKEN:-dev-manager-token}",
 				"MANAGER_CONTAINER": "sandbox-manager",
 				"CADDY_CONTAINER": "caddy",

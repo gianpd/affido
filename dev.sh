@@ -23,9 +23,9 @@
 # reload keeps the current images and only recreates the containers.
 #
 # Provider:
-#   fake        pi-durable-agent:latest, no secrets mounted. model.ts falls
+#   fake        affido-agent:latest, no secrets mounted. model.ts falls
 #               through to the keyless faux provider. Default.
-#   openrouter  pi-durable-agent:openrouter (ENV OPENROUTER_MODEL and
+#   openrouter  affido-agent:openrouter (ENV OPENROUTER_MODEL and
 #               THINKING_LEVEL baked in) plus secrets/ mounted read-only at
 #               /run/secrets. One key for every sandbox: single-tenant, see
 #               docs/rfc/0004.
@@ -44,9 +44,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 ROOT="$(pwd)"
-PROJECT="pi-durable-containers"
-BASE_IMAGE="pi-durable-agent:latest"
-OPENROUTER_IMAGE="pi-durable-agent:openrouter"
+PROJECT="affido"
+BASE_IMAGE="affido-agent:latest"
+OPENROUTER_IMAGE="affido-agent:openrouter"
 PROVIDER="fake"
 BUILD=1
 DRY_RUN=0
@@ -144,7 +144,7 @@ build_openrouter() {
 	cat >"${ctx}/Dockerfile" <<'EOF'
 # Derived from the agent image; only adds the model id and reasoning effort the
 # manager cannot pass.
-ARG BASE_IMAGE=pi-durable-agent:latest
+ARG BASE_IMAGE=affido-agent:latest
 FROM ${BASE_IMAGE}
 ARG OPENROUTER_MODEL
 ARG THINKING_LEVEL

@@ -2,7 +2,7 @@
 # Gate: typecheck + unit tests, then the end-to-end checks through Caddy.
 #
 # Sandbox agents are not compose services: the manager creates them on demand
-# from pi-durable-agent:latest, so this script builds that image itself.
+# from affido-agent:latest, so this script builds that image itself.
 #
 # Usage: ./verify.sh
 set -euo pipefail
@@ -36,19 +36,19 @@ echo "== unit tests: agent runs on an injected HarnessLifecycle =="
 pass "ContainerAgent passes on a fake lifecycle (node --test)"
 
 echo "== build the sandbox agent image =="
-docker build -q -t pi-durable-agent:latest ./agent >/dev/null || fail "agent image build failed"
-pass "pi-durable-agent:latest built"
+docker build -q -t affido-agent:latest ./agent >/dev/null || fail "agent image build failed"
+pass "affido-agent:latest built"
 
 echo "== image gate: closed toolbox (RFC 0009 D3) =="
 # The installer must not exist in the runtime image: the command itself fails.
 for binary in npm npx corepack; do
-	if docker run --rm --network none pi-durable-agent:latest "${binary}" --version >/dev/null 2>&1; then
+	if docker run --rm --network none affido-agent:latest "${binary}" --version >/dev/null 2>&1; then
 		fail "${binary} must be absent from the runtime image"
 	fi
 done
 pass "npm, npx and corepack are absent (command not found)"
 # The one baked runtime library resolves through NODE_PATH, with no network.
-docker run --rm --network none pi-durable-agent:latest node -e "require('docx')" >/dev/null 2>&1 \
+docker run --rm --network none affido-agent:latest node -e "require('docx')" >/dev/null 2>&1 \
 	|| fail "require('docx') must resolve through NODE_PATH"
 pass "docx resolves in the image without network"
 
@@ -62,7 +62,7 @@ echo "== build and start the control plane =="
 # scripted citation dance of RFC 0006) are deterministic. A local
 # docker-compose.override.yml may point interactive stacks at a real provider;
 # these environment overrides hold only for this invocation.
-AGENT_IMAGE=pi-durable-agent:latest AGENT_SECRETS_DIR= "${COMPOSE[@]}" up -d --build >/dev/null
+AGENT_IMAGE=affido-agent:latest AGENT_SECRETS_DIR= "${COMPOSE[@]}" up -d --build >/dev/null
 pass "caddy, oltp and sandbox-manager are up"
 
 echo "== RFC 0003: happy path + parallel responses =="

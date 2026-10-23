@@ -3,9 +3,9 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Author | pi-durable containers maintainers |
+| Author | Affido maintainers |
 | Date | 2026-10-17 |
-| Target | `pi-durable-containers` (new `sandbox-manager/` service, `caddy/Caddyfile`, `web/` + `oltp/` from the `pitas.png` topology) |
+| Target | `affido` (new `sandbox-manager/` service, `caddy/Caddyfile`, `web/` + `oltp/` from the `pitas.png` topology) |
 | Related | RFC 0002 (`docs/rfc/0002-n-users-n-sandboxes.md`, superseded by §4 here); `pitas.png` |
 
 ## 1. Summary
@@ -117,7 +117,7 @@ and the `docker` CLI, and mounts `/var/run/docker.sock`.
 
 ```python
 #!/usr/bin/env python3
-"""Sandbox Manager: on-demand starter and lifecycle supervisor for pi-durable
+"""Sandbox Manager: on-demand starter and lifecycle supervisor for affido
 agent sandboxes.
 
 It answers three questions for every user:
@@ -160,7 +160,7 @@ logging.basicConfig(
 
 # ── settings ────────────────────────────────────────────────────────────────
 DSN             = os.environ["DATABASE_URL"]
-AGENT_IMAGE     = os.getenv("AGENT_IMAGE", "pi-durable-agent:latest")
+AGENT_IMAGE     = os.getenv("AGENT_IMAGE", "affido-agent:latest")
 AGENT_PORT      = int(os.getenv("AGENT_PORT", "8080"))
 AGENT_IDLE_MS   = int(os.getenv("AGENT_IDLE_MS", "5000"))
 AGENT_MEMORY    = os.getenv("AGENT_MEMORY", "512m")

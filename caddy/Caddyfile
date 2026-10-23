@@ -21,6 +21,6 @@
 	}
 
 	handle {
-		respond "pi-durable agents: per-user sandboxes at /u/<user_id>/..." 200
+		respond "affido agents: per-user sandboxes at /u/<user_id>/..." 200
 	}
 }

@@ -5,7 +5,7 @@
 # the setting survives `docker compose down` + `docker compose up --build`.
 #
 # `create_args()` in sandbox_manager.py has no lever for OPENROUTER_MODEL, so
-# the model id lives in a derived image (`pi-durable-agent:openrouter`, built
+# the model id lives in a derived image (`affido-agent:openrouter`, built
 # by ./openrouter-setup.sh) and AGENT_IMAGE points the manager at it.
 #
 # AGENT_SECRETS_DIR must be a HOST path: the manager passes the string verbatim
@@ -16,4 +16,4 @@ services:
   sandbox-manager:
     environment:
       AGENT_SECRETS_DIR: ${AGENT_SECRETS_DIR-}
-      AGENT_IMAGE: ${AGENT_IMAGE-pi-durable-agent:latest}
+      AGENT_IMAGE: ${AGENT_IMAGE-affido-agent:latest}

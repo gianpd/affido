@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Implemented |
-| Author | pi-durable containers maintainers |
+| Author | Affido maintainers |
 | Date | 2026-10-23 |
 | Target | `agent/` (image, tools, registry, model), `frontend/`, `marketplace/` (new), `e2e-test/` |
 | Related | PRD 0003 (directory uploads), RFC 0004 (key exfiltration threat), RFC 0005 (workspace/corpus separation), RFC 0006 (strict citations), RFC 0008 (conversations), `agent/uploads.ts`, `agent/model.ts` |

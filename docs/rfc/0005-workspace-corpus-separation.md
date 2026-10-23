@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Author | pi-durable containers maintainers |
+| Author | Affido maintainers |
 | Date | 2026-10-20 |
 | Target | `agent/`, `frontend/`, `sandbox-manager/`, object storage, Postgres catalog |
 | Related | PRD 0001 (`docs/prd/0001-evidence-flow-v1.md`), RFC 0003, `agent/corpus.ts`, `agent/agent.ts`, README |

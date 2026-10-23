@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sandbox Manager: on-demand starter and lifecycle supervisor for pi-durable
+"""Sandbox Manager: on-demand starter and lifecycle supervisor for affido
 agent sandboxes.
 
 It answers three questions for every user:
@@ -42,7 +42,7 @@ logging.basicConfig(
 
 # ── settings ────────────────────────────────────────────────────────────────
 DSN             = os.environ["DATABASE_URL"]
-AGENT_IMAGE     = os.getenv("AGENT_IMAGE", "pi-durable-agent:latest")
+AGENT_IMAGE     = os.getenv("AGENT_IMAGE", "affido-agent:latest")
 AGENT_PORT      = int(os.getenv("AGENT_PORT", "8080"))
 AGENT_IDLE_MS   = int(os.getenv("AGENT_IDLE_MS", "5000"))
 AGENT_CITATIONS_DEFAULT = os.getenv("AGENT_CITATIONS_DEFAULT", "")

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Author | pi-durable containers maintainers |
+| Author | Affido maintainers |
 | Date | 2026-10-23 |
 | Target | `agent/` (new `connectors/`, `tools.ts`, `server.ts`, `agent.ts`, `Dockerfile`), `frontend/`, `sandbox-manager/` (env forwarding), `e2e-test/` |
 | Related | RFC 0002 (per-user sandboxes), RFC 0003 (manager, `create_args`), RFC 0004 (key exfiltration, gateway pattern), RFC 0008 (conversations), RFC 0009 (skills pattern: static tools, dynamic section) |
@@ -336,7 +336,7 @@ A runaway loop burns the budget, not the inbox.
 ### D5 — WhatsApp bridge in-image
 
 The local `whatsapp-mcp` project's Go bridge (whatsmeow + SQLite) is compiled
-into `pi-durable-agent` as a static binary and runs as a **child process**
+into `affido-agent` as a static binary and runs as a **child process**
 spawned by `server.ts` when `CONNECTORS` contains `whatsapp`:
 
 - Multi-stage `Dockerfile`: pinned `golang` builder stage compiles the

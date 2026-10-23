@@ -1,6 +1,6 @@
 # Durable web client
 
-SvelteKit front end for the pi-durable control plane: better-auth accounts, a
+SvelteKit front end for the Affido control plane: better-auth accounts, a
 dashboard with documents and corpus collections, an AI SDK chat against the
 user's sandbox, and a trace page for the durable session.
 

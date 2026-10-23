@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Author | pi-durable containers maintainers |
+| Author | Affido maintainers |
 | Date | 2026-10-19 |
 | Target | `sandbox-manager/`, new `llm-gateway/`, `agent/model.ts`, `docker-compose.yml` |
 | Related | RFC 0003 (`docs/rfc/0003-python-sandbox-manager.md`), `agent/model.ts`, `sandbox-manager/sandbox_manager.py` |
@@ -78,7 +78,7 @@ docker create ... \
   -e AGENT_NAME=... -e WORKSPACE=/workspace -e SESSION_DB=/data/session.sqlite \
   -e IDLE_MS=... -e PORT=8080 \
   [-v $AGENT_SECRETS_DIR:/run/secrets:ro] \
-  pi-durable-agent:latest
+  affido-agent:latest
 ```
 
 - Compose does not set `AGENT_SECRETS_DIR`, so the default is the faux provider

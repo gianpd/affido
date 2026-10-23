@@ -140,7 +140,7 @@
 			class="mx-auto flex max-w-6xl flex-col gap-2 px-6 py-6 text-xs sm:flex-row sm:items-center sm:justify-between"
 		>
 			<span>Durable agent containers. Data stays in your control plane.</span>
-			<span>built on pi-durable · SvelteKit · AI SDK</span>
+			<span>built on @earendil-works/pi-durable · SvelteKit · AI SDK</span>
 		</div>
 	</footer>
 </div>

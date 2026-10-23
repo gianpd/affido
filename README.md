@@ -89,7 +89,7 @@ secrets mount, not with a compose service.
 ./dev.sh reload --provider openrouter    # rebuild agent code and recreate sandboxes, keep data
 ```
 
-`reload` is the edit-test loop: it rebuilds `pi-durable-agent:latest` and the
+`reload` is the edit-test loop: it rebuilds `affido-agent:latest` and the
 derived openrouter image, brings the control plane up, then removes the sandbox
 containers so the next request re-provisions them from the new image. The
 Postgres volume, `pi-ws-<user>` and `pi-data-<user>` are untouched, so documents,
@@ -183,7 +183,7 @@ network), `OLTP_PORT` (host port for Postgres, default 15432).
 Per-user agents follow the provider chosen at `./dev.sh up`: `--provider fake`
 mounts nothing (`AGENT_SECRETS_DIR` unset) and agents use the keyless faux
 provider; `--provider openrouter` mounts `secrets/` read-only at `/run/secrets`
-and creates agents from `pi-durable-agent:openrouter`, which carries
+and creates agents from `affido-agent:openrouter`, which carries
 `OPENROUTER_MODEL` as `ENV` (the manager forwards no `*_MODEL` to `docker
 create`). The manager starts containers with `--workdir /workspace`;
 the image CMD is absolute (`node /app/server.ts`) so it runs from any workdir.
@@ -413,7 +413,7 @@ A real model is one flag away:
 ./dev.sh up --provider openrouter
 ```
 
-`dev.sh` builds `pi-durable-agent:openrouter` (base image plus
+`dev.sh` builds `affido-agent:openrouter` (base image plus
 `ENV OPENROUTER_MODEL`, the only lever `create_args()` leaves) and passes
 `AGENT_SECRETS_DIR=<host path to secrets/>` to compose. The manager then mounts
 that host dir at `/run/secrets` on each new sandbox, and `model.ts` reads the key
@@ -427,7 +427,7 @@ the per-user volumes.
 ## Verify
 
 `./verify.sh` type-checks the agent (`npm run typecheck`, `tsc --noEmit` under
-`strict`), runs its unit tests, builds `pi-durable-agent:latest`, starts the
+`strict`), runs its unit tests, builds `affido-agent:latest`, starts the
 control plane, then runs the e2e suite and `./verify-sandbox.sh`. It exits
 non-zero on the first failure.
 

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Implemented |
-| Author | pi-durable containers maintainers |
+| Author | Affido maintainers |
 | Date | 2026-10-21 |
 | Target | `agent/`, `frontend/`, sandbox-manager |
 | Related | RFC 0005, PRD 0001, `agent/agent.ts`, `agent/corpus.ts`, `agent/tools.ts`, `frontend/src/routes/api/chat/+server.ts`, `frontend/src/routes/dashboard/chat/+page.svelte` |

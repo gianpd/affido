@@ -3,10 +3,10 @@
 | Field | Value |
 |---|---|
 | Status | Draft |
-| Author | pi-durable containers maintainers |
+| Author | Affido maintainers |
 | Date | 2026-10-16 |
-| Target | `pi-durable-containers` (stack compose, `agent/`, nuovo `sandbox-manager`) |
-| Related | RFC 0001; `RESEARCH/doma-bot/server/sandbox_manager/manager.py`; `RESEARCH/doma-bot/deploy/docker-compose.yml` |
+| Target | `affido` (stack compose, `agent/`, nuovo `sandbox-manager`) |
+| Related | RFC 0001 |
 
 ## 1. Summary
 
@@ -110,13 +110,13 @@ manager produttivo lo farebbe. Cosa è emerso (tutti dati verificati):
 | 1 sandbox runc, conversazione aperta | 115–116 MiB | dopo `/prompt` |
 | 1 sandbox **runsc (gVisor)** | 87–89 MiB | sentry ~54 MiB + gofer ~23 MiB (host) |
 | Fleet 50 sandbox runc idle (harness chiuso) | **62,8 MiB mediana** | reclaim delle pagine fredce |
-| Disco: immagine `pi-durable-agent` | 501 MB **condivisa** | una sola, per tutti gli N |
+| Disco: immagine `affido-agent` | 501 MB **condivisa** | una sola, per tutti gli N |
 | Disco: stato per utente (conv 1, 5 entries) | **< 1 MB** | `session.sqlite` 4 KB + WAL 750 KB |
 | Disco: checkpoint gVisor per sandbox (L2) | 12–14,4 MB | compressione `flate-best-speed` |
 
 ### 5.2 Throughput — 50 utenti in contemporanea
 
-50 container `pi-durable-agent` (runc, rete `bench-rfc`, faux provider), load da host
+50 container `affido-agent` (runc, rete `bench-rfc`, faux provider), load da host
 con 50 worker concorrenti:
 
 | Carico | Risultato |
@@ -235,7 +235,7 @@ generici) o come tecnologiaInsurance per agenti non-durable.
 ## 9. Appendice — riproduzione delle misure
 
 Macchina: WSL2, 20 vCPU, 15,47 GiB RAM, kernel 6.6.87.2, dockerd nativo con runsc.
-Agente: `pi-durable-agent:latest` (node:24-bookworm-slim, ~501 MB), faux provider.
+Agente: `affido-agent:latest` (node:24-bookworm-slim, ~501 MB), faux provider.
 Gli script del banco di prova sono nel repo in **`bench/`** (ordine d'uso e mapping
 alle tabelle in `bench/README.md`): container lanciati su rete bridge `bench-rfc`, load
 da host con 50 worker concorrenti; checkpoint via `runsc --root
