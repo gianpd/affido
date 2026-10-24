@@ -217,19 +217,23 @@ require_override() {
 }
 
 compose_up() {
-	local image dir
+	local image dir egress
 	image="$(agent_image)"
 	dir="$(secrets_dir)"
+	# The openrouter provider is reached over the internet, so its sandboxes
+	# need NAT egress; the keyless faux provider runs fully offline (default).
+	egress="off"
+	[[ "${PROVIDER}" == "openrouter" ]] && egress="open"
 
 	echo "== docker compose up =="
 	local compose_args=(up -d)
 	((BUILD)) && compose_args+=(--build)
 	# Explicit env defeats docker-compose.override.yml defaults.
 	if ((DRY_RUN)); then
-		printf '     + AGENT_IMAGE=%s AGENT_SECRETS_DIR=%s docker compose %s\n' \
-			"${image}" "${dir}" "${compose_args[*]}"
+		printf '     + AGENT_IMAGE=%s AGENT_SECRETS_DIR=%s AGENT_EGRESS=%s docker compose %s\n' \
+			"${image}" "${dir}" "${egress}" "${compose_args[*]}"
 	else
-		AGENT_IMAGE="${image}" AGENT_SECRETS_DIR="${dir}" \
+		AGENT_IMAGE="${image}" AGENT_SECRETS_DIR="${dir}" AGENT_EGRESS="${egress}" \
 			docker compose "${compose_args[@]}" >/dev/null
 	fi
 	if ((DRY_RUN)); then pass "dry run: nothing executed"

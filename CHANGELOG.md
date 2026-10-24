@@ -16,6 +16,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Security hardening of the sandbox boundary (RFC 0003 §11):
+  - Postgres publishes on `127.0.0.1` only. It was bound to `0.0.0.0` with the
+    static `pi/pi` credentials, so any peer that could reach the host could
+    authenticate (SCRAM), read the better-auth `session` table and impersonate
+    every tenant through Caddy with a forged cookie.
+  - Per-user sandbox networks are created without NAT egress (`AGENT_EGRESS=off`
+    by default). They were plain bridges, so agent code (bash tool) could
+    exfiltrate the workspace to the internet and reach host-LAN services,
+    including the published Postgres above — the same full tenant takeover
+    from inside a sandbox. `AGENT_EGRESS=open` restores egress for
+    internet-reached model providers; `./dev.sh up --provider openrouter`
+    sets it automatically.
+  - The manager API rejects any peer whose IP belongs to a per-user sandbox
+    network unless it is the manager, Caddy or the web container. The
+    `X-Manager-Token` wall stays, but agent containers now get 403 before any
+    endpoint logic runs, so a weak or leaked token alone can no longer pause
+    another tenant's sandbox or read `/metrics` from inside a sandbox.
 - The uploads tree moved inside the corpus bucket: `WORKSPACE/uploads/` is now
   `WORKSPACE/corpus/uploads/`, and the citation index sees it — text files
   directly, PDFs through text extracted at upload time into `corpus/text/`

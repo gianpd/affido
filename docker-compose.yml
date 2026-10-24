@@ -21,7 +21,7 @@
 				"POSTGRES_PASSWORD": "pi",
 				"POSTGRES_DB": "pi"
 			},
-			"ports": ["${OLTP_PORT:-15432}:5432"],
+			"ports": ["127.0.0.1:${OLTP_PORT:-15432}:5432"],
 			"volumes": ["oltp-data:/var/lib/postgresql/data"],
 			"healthcheck": {
 				"test": ["CMD-SHELL", "pg_isready -U pi -d pi"],
@@ -45,7 +45,8 @@
 				"STOP_AFTER_S": "${STOP_AFTER_S:-600}",
 				"EVICT_TICK_S": "${EVICT_TICK_S:-15}",
 				"AGENT_IDLE_MS": "${AGENT_IDLE_MS:-5000}",
-				"AGENT_CITATIONS_DEFAULT": "${AGENT_CITATIONS_DEFAULT:-}"
+				"AGENT_CITATIONS_DEFAULT": "${AGENT_CITATIONS_DEFAULT:-}",
+				"AGENT_EGRESS": "${AGENT_EGRESS:-off}"
 			},
 			"volumes": ["/var/run/docker.sock:/var/run/docker.sock"],
 			"depends_on": { "oltp": { "condition": "service_healthy" } },

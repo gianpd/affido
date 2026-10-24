@@ -166,6 +166,7 @@ AGENT_IDLE_MS   = int(os.getenv("AGENT_IDLE_MS", "5000"))
 AGENT_MEMORY    = os.getenv("AGENT_MEMORY", "512m")
 AGENT_CPUS      = os.getenv("AGENT_CPUS", "1.0")
 AGENT_SECRETS   = os.getenv("AGENT_SECRETS_DIR")  # host dir -> /run/secrets:ro
+AGENT_EGRESS    = os.getenv("AGENT_EGRESS", "off")  # off = sandbox networks get no NAT
 STOP_AFTER_S    = int(os.getenv("STOP_AFTER_S", "600"))
 LISTEN_ADDR     = os.getenv("LISTEN_ADDR", "0.0.0.0")
 LISTEN_PORT     = int(os.getenv("LISTEN_PORT", "8090"))
@@ -174,6 +175,7 @@ EVICT_TICK_S    = int(os.getenv("EVICT_TICK_S", "15"))
 RECONCILE_S     = int(os.getenv("RECONCILE_S", "60"))
 UNHEALTHY_LIMIT = int(os.getenv("UNHEALTHY_LIMIT", "3"))
 MANAGER_TOKEN     = os.getenv("MANAGER_TOKEN")  # shared secret; all endpoints but /healthz
+PEER_CACHE_S      = int(os.getenv("PEER_CACHE_S", "10"))  # sandbox-subnet snapshot refresh
 MANAGER_CONTAINER = os.getenv("MANAGER_CONTAINER", "sandbox-manager")  # for network connect
 CADDY_CONTAINER   = os.getenv("CADDY_CONTAINER")  # compose container_name of caddy
 AUTH_COOKIE_NAME  = os.getenv("AUTH_COOKIE_NAME", "better-auth.session_token")
@@ -431,7 +433,13 @@ def provision(user_id: str) -> None:
     container = container_name(user_id)
     if docker_running(container) is None:
         net = network_name(user_id)
-        docker("network", "create", "--label", "pi-sandbox-manager=1", net, check=False)
+        create = ["network", "create", "--label", "pi-sandbox-manager=1"]
+        if AGENT_EGRESS != "open":
+            # No NAT: the sandbox reaches its subnet guests only (caddy, manager,
+            # web), never the internet or the host LAN. AGENT_EGRESS=open is the
+            # escape hatch for real providers reached over the internet.
+            create += ["--opt", "com.docker.network.bridge.enable_ip_masquerade=false"]
+        docker(*create, net)
         # The manager and Caddy must reach the agent on its private network;
         # both need stable container names (compose `container_name:`).
         for guest in (MANAGER_CONTAINER, CADDY_CONTAINER):
@@ -740,8 +748,11 @@ Invariants:
 | Health | `GET /healthz` | liveness for the manager itself |
 
 ### 7.1 HTTP API (internal; every endpoint but `/healthz` requires the
-`X-Manager-Token` shared secret — the manager sits on networks agent
-containers can reach)
+`X-Manager-Token` shared secret — and no endpoint at all answers a peer whose
+IP sits on a per-user sandbox network unless it is the manager, Caddy or the
+web container: agent containers get 403 before token or session logic runs,
+so a leaked or weak token alone is not enough to drive the manager from a
+sandbox)
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -896,7 +907,9 @@ implementation:
 | Caddy `forward_auth` body replay / dynamic upstream | Resolved: the default GET subrequest never consumes the request body (Caddy docs); placeholder upstreams work scheme-less with a port — the manager returns `u<slug>:8080` |
 | Unauthenticated `/u/*` would be cross-user access (IDOR) | `GET /resolve` derives `user_id` from the validated better-auth session cookie and 403s path-id mismatches (§8); M3 has a negative test |
 | GHSA-7r4p-vjf4-gxv4: `copy_headers` passes a client-supplied header through when the auth response omits it (Caddy 2.10.0–2.11.1) | Pin `caddy:>=2.11.2`; strip `X-Sandbox-Endpoint` at route entry (§8) — an injected value would be an SSRF dial into the Docker network |
-| The manager sits on networks agent containers (which run user code) can reach | `X-Manager-Token` on every endpoint but `/healthz`; one bridge network per sandbox so agents cannot dial each other (§5 `network_name`); default Docker address pools allow only a few dozen bridges — size `default-address-pools` for the bench scale of 40 |
+| The manager sits on networks agent containers (which run user code) can reach | Two independent walls: `X-Manager-Token` on every endpoint but `/healthz`, plus a peer-IP guard that 403s any address on a `pi-net-*` subnet that is not the manager/Caddy/web container (agent code cannot call the API even with a valid token); one bridge network per sandbox so agents cannot dial each other (§5 `network_name`) |
+| Sandbox NAT egress → exfiltration of workspace/corpus to the internet, or attacks on host-LAN services (incl. the published Postgres) from a prompt-injected agent | Per-user networks are created with `enable_ip_masquerade=false` (`AGENT_EGRESS=off`, the default): the sandbox talks to its subnet guests and nothing else; `AGENT_EGRESS=open` is the explicit opt-in for internet-reached model providers |
+| Host-published Postgres with static `pi/pi` credentials = full tenant takeover (the `session` table holds every better-auth token) | Compose binds the host port to loopback only (`127.0.0.1:${OLTP_PORT:-15432}:5432`): the database is reachable from the host and the compose network, never from another machine |
 | Registry row whose container vanished → permanent 503 | `resolve()` reprovisions when `docker_running()` is `None` instead of raising; failed resolves mark the row `error` |
 | `docker` CLI version skew | Pin the CLI version in the image; the script only uses create/start/stop/restart/inspect/volume |
 
@@ -927,7 +940,10 @@ suffices, as in `verify.sh`).
    `/u/<B>/…` → 403; no session → 401; a request with a spoofed
    `X-Sandbox-Endpoint` never dials it (strip + Caddy ≥ 2.11.2); agent A cannot
    reach agent B's `:8080` (per-user network); any manager call without
-   `X-Manager-Token` → 401.
+   `X-Manager-Token` → 401; any manager call *from a sandbox container* → 403
+   even with the right token; a sandbox cannot TCP-connect past its subnet
+   (gateway or internet) with `AGENT_EGRESS=off`; Postgres answers on
+   `127.0.0.1` only.
 4. **M4 (optional) — L2 gVisor.** Reuse RFC 0002's `runsc` checkpoint/restore and
    its network-endpoint caveat verbatim; feature-flagged off by default.
 5. **Regression gate.** `verify.sh` extended, not rewritten: the static `/a1`

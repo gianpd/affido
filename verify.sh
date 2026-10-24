@@ -72,5 +72,8 @@ echo "== RFC 0003: happy path + parallel responses =="
 echo "== RFC 0003: sandbox lifecycle =="
 ./verify-sandbox.sh
 
+echo "== RFC 0003: security containment negatives =="
+./e2e-test/security.sh
+
 echo
 echo "ALL CHECKS PASSED"

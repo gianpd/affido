@@ -12,8 +12,9 @@ That is the whole product in one root: an agent you can hold to account.
 Each user gets one sandboxed agent:
 
 - **Bounded.** The agent lives in a container the control plane created on
-  demand: no host ports, its own network, its workspace confined to a
-  per-user volume.
+  demand: no host ports, its own network — with no NAT egress by default, so
+  the sandbox talks to its proxy and nothing else — and its workspace confined
+  to a per-user volume.
 - **Granted.** The agent starts powerless. Capabilities arrive as skills the
   deployer installs, one manifest-verified file at a time — and the runtime
   image ships no installer, so new powers cannot appear from inside.
@@ -177,9 +178,13 @@ curl -H 'Cookie: better-auth.session_token=dev-token' localhost:18080/u/dev-user
 ```
 
 Settings (`.env`): `MANAGER_TOKEN` (required by every manager endpoint except
-`/healthz`), `STOP_AFTER_S` (default 600), `EVICT_TICK_S`, `AGENT_IDLE_MS`,
-`WEB_CONTAINER` (optional: connect the web app container to each per-user
-network), `OLTP_PORT` (host port for Postgres, default 15432).
+`/healthz` — and manager endpoints answer only to the manager/Caddy/web
+containers, never to a sandbox, token or not), `STOP_AFTER_S` (default 600),
+`EVICT_TICK_S`, `AGENT_IDLE_MS`, `WEB_CONTAINER` (optional: connect the web app
+container to each per-user network), `AGENT_EGRESS` (`off` by default: sandbox
+networks get no NAT and cannot reach the internet or the host LAN; `open` is
+the opt-in for internet-reached providers), `OLTP_PORT` (host port for
+Postgres, default 15432, bound to loopback only).
 Per-user agents follow the provider chosen at `./dev.sh up`: `--provider fake`
 mounts nothing (`AGENT_SECRETS_DIR` unset) and agents use the keyless faux
 provider; `--provider openrouter` mounts `secrets/` read-only at `/run/secrets`

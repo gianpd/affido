@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import http.cookies
+import ipaddress
 import json
 import logging
 import os
@@ -46,6 +47,11 @@ AGENT_IMAGE     = os.getenv("AGENT_IMAGE", "affido-agent:latest")
 AGENT_PORT      = int(os.getenv("AGENT_PORT", "8080"))
 AGENT_IDLE_MS   = int(os.getenv("AGENT_IDLE_MS", "5000"))
 AGENT_CITATIONS_DEFAULT = os.getenv("AGENT_CITATIONS_DEFAULT", "")
+# `off` (default): per-user networks are created without NAT egress, so a
+# sandbox can talk to its guests (caddy, manager, web) on its own subnet and
+# nothing else. `open` keeps the plain-bridge behaviour (internet egress) for
+# deployments whose model provider is reached over the internet (openrouter).
+AGENT_EGRESS    = os.getenv("AGENT_EGRESS", "off")
 AGENT_MEMORY    = os.getenv("AGENT_MEMORY", "512m")
 AGENT_CPUS      = os.getenv("AGENT_CPUS", "1.0")
 AGENT_SECRETS   = os.getenv("AGENT_SECRETS_DIR")  # host dir -> /run/secrets:ro
@@ -93,6 +99,20 @@ def container_name(user_id: str) -> str:
 def network_name(user_id: str) -> str:
     """One bridge network per user: agents cannot reach each other's :8080."""
     return "pi-net-" + slug(user_id)
+
+
+def network_create_args() -> list[str]:
+    """Docker create args for a per-user network.
+
+    With AGENT_EGRESS != "open" the bridge gets no address masquerade: the
+    sandbox cannot NAT out to the internet or the host LAN. Same-subnet guests
+    (caddy, manager, web) stay reachable, which is all the data plane needs;
+    the keyless faux provider needs no egress at all.
+    """
+    args = ["network", "create", "--label", "pi-sandbox-manager=1"]
+    if AGENT_EGRESS != "open":
+        args += ["--opt", "com.docker.network.bridge.enable_ip_masquerade=false"]
+    return args
 
 
 def workspace_vol(user_id: str) -> str:
@@ -332,6 +352,109 @@ def agent_alive(container: str) -> bool:
         return False
 
 
+# ── peer guard: the API never answers sandbox containers ───────────────────
+# The manager is attached to every per-user network to health-check agents, so
+# its HTTP API is L3-reachable from containers that run user code. The token is
+# one wall; this is the second: any peer whose IP sits on a per-user network and
+# is not one of the control-plane guests on it (manager, caddy, web) is an agent
+# container and gets 403 before any endpoint logic runs.
+PEER_CACHE_S = int(os.getenv("PEER_CACHE_S", "10"))
+_peer_cache: dict[str, Any] = {
+    "at": 0.0,
+    "sandbox_subnets": frozenset(),  # networks labelled pi-sandbox-manager=1
+    "known_subnets": frozenset(),    # every other docker network
+    "guests": frozenset(),           # manager/caddy/web IPs, any network
+}
+_last_forced: list[float] = [0.0]
+
+
+def refresh_peer_cache() -> None:
+    """Snapshot every docker network in two CLI calls: which subnets belong to
+    per-user sandboxes, and which IPs the control-plane guests hold. Two calls
+    (not one per network) so a forced refresh stays cheap enough to run on the
+    request path."""
+    ids = docker("network", "ls", "-q").split()
+    sandbox: set[ipaddress.IPv4Network] = set()
+    known: set[ipaddress.IPv4Network] = set()
+    guests: set[str] = set()
+    guest_names = {MANAGER_CONTAINER, CADDY_CONTAINER, WEB_CONTAINER} - {None, ""}
+    for start in range(0, len(ids), 50):  # stay far below ARG_MAX
+        chunk = ids[start : start + 50]
+        doc = json.loads(docker("network", "inspect", *chunk))
+        for net in doc:
+            subnets = []
+            for cfg in (net.get("IPAM") or {}).get("Config") or []:
+                raw = cfg.get("Subnet")
+                if raw:
+                    try:
+                        subnets.append(ipaddress.ip_network(raw))
+                    except ValueError:
+                        continue
+            if not subnets:
+                continue
+            is_sandbox = (net.get("Labels") or {}).get("pi-sandbox-manager") == "1"
+            for subnet in subnets:
+                (sandbox if is_sandbox else known).add(subnet)
+            for container in (net.get("Containers") or {}).values():
+                if container.get("Name") in guest_names:
+                    address = (container.get("IPv4Address") or "").split("/")[0]
+                    if address:
+                        guests.add(address)
+    _peer_cache["at"] = time.time()
+    _peer_cache["sandbox_subnets"] = frozenset(sandbox)
+    _peer_cache["known_subnets"] = frozenset(known)
+    _peer_cache["guests"] = frozenset(guests)
+
+
+def invalidate_peer_cache() -> None:
+    """A network was just created: the next guarded request must re-snapshot
+    before deciding, or a brand-new sandbox stays invisible to the guard for up
+    to PEER_CACHE_S (exactly the provision-then-probe race an attacker rides)."""
+    _peer_cache["at"] = 0.0
+
+
+def _peer_class(peer: str) -> str | None:
+    """"sandbox" when the peer is an agent container, "guest" for the
+    control-plane containers, None when the peer sits on no known subnet."""
+    try:
+        address = ipaddress.ip_address(peer)
+    except ValueError:
+        return None
+    if str(address) in _peer_cache["guests"]:
+        return "guest"
+    for subnet in _peer_cache["sandbox_subnets"]:
+        if address in subnet:
+            return "sandbox"
+    for subnet in _peer_cache["known_subnets"]:
+        if address in subnet:
+            return "guest"  # non-sandbox docker network: not an agent
+    return None
+
+
+def is_sandbox_peer(peer: str) -> bool:
+    """True when the peer address belongs to a per-user sandbox network and is
+    not one of the guests (manager, caddy, web) — i.e. an agent container."""
+    now = time.time()
+    if now - _peer_cache["at"] > PEER_CACHE_S:
+        try:
+            refresh_peer_cache()
+        except Exception:
+            log.exception("peer cache refresh failed; keeping the last snapshot")
+    if _peer_class(peer) == "sandbox":
+        return True
+    # A peer on NO known subnet may sit on a network created after the last
+    # snapshot (every docker source is on some subnet). One forced refresh,
+    # capped at one per second, closes that window even for networks this
+    # manager did not create itself.
+    if _peer_class(peer) is None and now - _last_forced[0] >= 1.0:
+        _last_forced[0] = now
+        try:
+            refresh_peer_cache()
+        except Exception:
+            log.exception("forced peer cache refresh failed")
+    return _peer_class(peer) == "sandbox"
+
+
 def wait_healthy(container: str) -> dict[str, Any]:
     deadline = time.time() + READY_TIMEOUT_S
     while time.time() < deadline:
@@ -357,7 +480,8 @@ def provision(user_id: str) -> None:
         if not network_exists(net):
             # check=True: a failed create must not leave a container pointing at
             # a network that does not exist (e.g. exhausted address pools).
-            docker("network", "create", "--label", "pi-sandbox-manager=1", net)
+            docker(*network_create_args(), net)
+            invalidate_peer_cache()
         # The manager and Caddy must reach the agent on its private network;
         # both need stable container names (compose `container_name:`).
         for guest in (MANAGER_CONTAINER, CADDY_CONTAINER, WEB_CONTAINER):
@@ -515,6 +639,12 @@ class Handler(BaseHTTPRequestHandler):
             self.headers.get("X-Manager-Token") or "", MANAGER_TOKEN
         )
 
+    def rejected_sandbox_peer(self) -> bool:
+        """Second wall: per-user networks host untrusted agent containers, so a
+        peer from those subnets that is not a control-plane guest never gets an
+        answer — token or not."""
+        return is_sandbox_peer(self.client_address[0])
+
     def send(self, code: int, payload: Any, headers: dict[str, str] | None = None):
         body = json.dumps(payload, default=str).encode()
         self.send_response(code)
@@ -544,6 +674,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path.startswith("/healthz"):
             return self.send(200, {"status": "ok"})
+        if self.rejected_sandbox_peer():
+            return self.send(403, {"error": "sandbox peers cannot call the manager"})
         if not self.authorized():
             return self.send(401, {"error": "bad or missing X-Manager-Token"})
         if self.path.startswith("/resolve"):
@@ -570,6 +702,8 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(404, {"error": "not found"})
 
     def do_POST(self) -> None:
+        if self.rejected_sandbox_peer():
+            return self.send(403, {"error": "sandbox peers cannot call the manager"})
         if not self.authorized():
             return self.send(401, {"error": "bad or missing X-Manager-Token"})
         length = int(self.headers.get("Content-Length") or 0)
@@ -602,8 +736,8 @@ def main() -> None:
     start_loops()
     server = ThreadingHTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)
     log.info(
-        "sandbox-manager on %s:%s (image=%s stop_after=%ss token=%s)",
-        LISTEN_ADDR, LISTEN_PORT, AGENT_IMAGE, STOP_AFTER_S,
+        "sandbox-manager on %s:%s (image=%s stop_after=%ss egress=%s token=%s)",
+        LISTEN_ADDR, LISTEN_PORT, AGENT_IMAGE, STOP_AFTER_S, AGENT_EGRESS,
         "on" if MANAGER_TOKEN else "OFF",
     )
     server.serve_forever()
