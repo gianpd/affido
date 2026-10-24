@@ -8,6 +8,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `CADDY_BIND` setting (default `127.0.0.1`): where the published `:18080`
+  entry point binds. The previous `0.0.0.0` bind exposed the whole tenant
+  surface to the LAN; deployments that need it set `CADDY_BIND=0.0.0.0`
+  explicitly.
 - `pdf-text-extraction` marketplace skill: the preinstalled `unpdf` explained
   to the agent — runtime paths (`NODE_PATH=/app/node_modules`, CJS `require`
   only, never override it), a bounded ready-to-run extractor
@@ -21,13 +25,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     static `pi/pi` credentials, so any peer that could reach the host could
     authenticate (SCRAM), read the better-auth `session` table and impersonate
     every tenant through Caddy with a forged cookie.
-  - Per-user sandbox networks are created without NAT egress (`AGENT_EGRESS=off`
-    by default). They were plain bridges, so agent code (bash tool) could
-    exfiltrate the workspace to the internet and reach host-LAN services,
-    including the published Postgres above — the same full tenant takeover
-    from inside a sandbox. `AGENT_EGRESS=open` restores egress for
-    internet-reached model providers; `./dev.sh up --provider openrouter`
-    sets it automatically.
+  - Per-user sandbox networks are created `--internal` without NAT egress,
+    and the manager installs one `iptables INPUT DROP` rule per sandbox
+    bridge (fail-closed, re-asserted on the reconcile tick). They were plain
+    bridges, so agent code (bash tool) could exfiltrate the workspace to the
+    internet and reach host services, including the published Postgres above
+    — the same full tenant takeover from inside a sandbox. Neither `--internal`
+    nor disabling masquerading alone closes the bridge-to-host INPUT path: the
+    bridge gateway is a host interface, so a `0.0.0.0`-bound host service
+    still answered on the gateway IP (found by a controlled self-pentest;
+    `e2e-test/security.sh` now asserts host-listener unreachability from a
+    sandbox). `AGENT_EGRESS=open` restores routed egress for internet-reached
+    model providers (the INPUT wall stays on); `./dev.sh up --provider
+    openrouter` sets it automatically. `./dev.sh reload` also removes the
+    per-user networks (recreated on demand) so existing tenants pick up the
+    new topology after a reload.
   - The manager API rejects any peer whose IP belongs to a per-user sandbox
     network unless it is the manager, Caddy or the web container. The
     `X-Manager-Token` wall stays, but agent containers now get 403 before any

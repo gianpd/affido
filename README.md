@@ -12,7 +12,8 @@ That is the whole product in one root: an agent you can hold to account.
 Each user gets one sandboxed agent:
 
 - **Bounded.** The agent lives in a container the control plane created on
-  demand: no host ports, its own network — with no NAT egress by default, so
+  demand: no host ports, its own `--internal` network with an iptables host
+  wall — no route off its subnet and no path to host services by default, so
   the sandbox talks to its proxy and nothing else — and its workspace confined
   to a per-user volume.
 - **Granted.** The agent starts powerless. Capabilities arrive as skills the
@@ -182,9 +183,13 @@ Settings (`.env`): `MANAGER_TOKEN` (required by every manager endpoint except
 containers, never to a sandbox, token or not), `STOP_AFTER_S` (default 600),
 `EVICT_TICK_S`, `AGENT_IDLE_MS`, `WEB_CONTAINER` (optional: connect the web app
 container to each per-user network), `AGENT_EGRESS` (`off` by default: sandbox
-networks get no NAT and cannot reach the internet or the host LAN; `open` is
-the opt-in for internet-reached providers), `OLTP_PORT` (host port for
-Postgres, default 15432, bound to loopback only).
+networks are created `--internal` with no NAT — no route to the internet or
+other subnets — plus a per-bridge `iptables INPUT DROP` host wall installed by
+the manager (fail-closed); `open` is the opt-in for internet-reached providers
+— routed egress comes back but the host wall stays), `OLTP_PORT` (host port for
+Postgres, default 15432, bound to loopback only), `CADDY_BIND` (the published
+bind address of the `:18080` entry point, `127.0.0.1` by default; set
+`0.0.0.0` to expose the stack on the LAN).
 Per-user agents follow the provider chosen at `./dev.sh up`: `--provider fake`
 mounts nothing (`AGENT_SECRETS_DIR` unset) and agents use the keyless faux
 provider; `--provider openrouter` mounts `secrets/` read-only at `/run/secrets`

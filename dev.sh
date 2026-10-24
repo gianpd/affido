@@ -259,15 +259,31 @@ cmd_up() {
 # manager creates the named volumes idempotently, so the next request mounts the
 # same pi-ws-<user> (workspace, corpus) and pi-data-<user> (session.sqlite).
 recreate_sandboxes() {
-	local ids
+	local ids nets
 	ids="$(docker ps -aq --filter label=pi-sandbox-manager=1 || true)"
 	if [[ -z "${ids}" ]]; then
 		pass "no sandbox containers to recreate"
-		return 0
+	else
+		# shellcheck disable=SC2086
+		run docker rm -f ${ids}
+		((DRY_RUN)) || pass "sandboxes removed: next request re-provisions from $(agent_image)"
 	fi
-	# shellcheck disable=SC2086
-	run docker rm -f ${ids}
-	((DRY_RUN)) || pass "sandboxes removed: next request re-provisions from $(agent_image)"
+	# Networks are part of the sandbox envelope, not user state: remove them too
+	# so re-provisioning picks up current network_create_args() (e.g. --internal).
+	# Per-user volumes (pi-ws-*, pi-data-*) are never touched here.
+	nets="$(docker network ls -q --filter label=pi-sandbox-manager=1 || true)"
+	if [[ -n "${nets}" ]]; then
+		# Guests (caddy/manager/web) stay attached after the sandboxes are gone;
+		# disconnect them or the network remove is refused.
+		for net in ${nets}; do
+			for guest in $(docker network inspect -f \
+				'{{range .Containers}}{{.Name}} {{end}}' "${net}" 2>/dev/null); do
+				run docker network disconnect -f "${net}" "${guest}"
+			done
+			run docker network rm "${net}"
+		done
+		((DRY_RUN)) || pass "sandbox networks removed: recreated on next resolve"
+	fi
 }
 
 cmd_reload() {

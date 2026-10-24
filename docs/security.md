@@ -38,13 +38,22 @@ Caddy's `forward_auth` is the only unattended caller.
 
 - `resolve` takes a `user_id` string; the sandbox name is derived through a
   deterministic slug, so a crafted id cannot name an arbitrary container.
+- The manager also owns the sandbox **host wall**: for every network it
+  creates it installs one `iptables INPUT DROP` rule on the host (via a
+  short-lived host-network `NET_ADMIN` helper spawned through the same
+  docker socket, running a script this module wrote — no user input reaches
+  it). The rule closes the bridge-to-host INPUT path, which no docker
+  network option covers; provisioning fails closed if the rule cannot be
+  proven, and the reconcile tick re-asserts rules after daemon restarts.
 - Registry writes and provisioning are serialized on the Postgres registry.
 - **Open item:** an explicit audit of `create_args` inputs (network/volume
   names, image id) for injection through Docker CLI argument parsing.
 
 ### 2. Routing and identity (`caddy/Caddyfile`)
 
-- Caddy is the only published port (`:18080`). Per-user routes
+- Caddy is the only published port (`:18080`), bound to `127.0.0.1` by
+  default (`CADDY_BIND` in `.env` is the documented opt-in for a LAN
+  deployment). Per-user routes
   `/u/<user_id>/*` go through `forward_auth` to the manager's `/resolve`,
   which validates the better-auth session cookie and returns the upstream in
   `X-Sandbox-Endpoint`.
@@ -120,11 +129,21 @@ no-network `require('docx')`) on every run.
 
 ## Open items (pre-launch review)
 
+- [x] Sandbox network egress verified closed: with `AGENT_EGRESS=off` the
+      per-user network is created `--internal` with masquerading disabled, and
+      the manager installs an `iptables INPUT DROP` rule per sandbox bridge
+      (fail-closed: provisioning aborts if the rule cannot be proven, and the
+      reconcile tick re-asserts rules after daemon restarts). Neither docker
+      knob alone covers the host: `--internal` stops forwarding but the
+      bridge gateway is a host interface, so a `0.0.0.0`-bound host service
+      used to answer on the gateway IP (caught by a controlled pentest,
+      closed in the same change). `e2e-test/security.sh` asserts the
+      containment on every run. Residual window: a docker daemon restart
+      flushes iptables; the wall is back within one reconcile tick (60 s),
+      and a stopped daemon cannot route sandbox traffic anyway unless
+      live-restore is enabled.
 - [ ] `create_args` input audit (manager → Docker CLI argument injection).
 - [ ] Frontend auth surface review: better-auth flows, password reset,
       upload limits, artifact proxy.
-- [ ] Verify sandbox networks block egress to the compose network unless
-      explicitly granted (per-user networks are isolated by construction;
-      confirm no default bridge fallback).
 - [ ] Rate limiting posture on Caddy for `/u/*` (currently none: acceptable
       for a trusted-operator deployment, must be stated in deployment docs).

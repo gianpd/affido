@@ -9,6 +9,13 @@ COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 
 RUN pip install --no-cache-dir "psycopg[binary]==3.2.10"
 
+# iptables is the host wall: the manager installs one INPUT DROP rule per
+# sandbox bridge through a short-lived host-network NET_ADMIN helper (docker
+# has no knob for the bridge-to-host path; see sandbox_manager.py).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iptables \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY sandbox_manager.py ./
 

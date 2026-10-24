@@ -46,16 +46,37 @@ if timeout 3 bash -c "</dev/tcp/${LAN_IP}/15432" 2>/dev/null; then
 fi
 pass "oltp binds 127.0.0.1 only; ${LAN_IP}:15432 refuses connections"
 
+echo "== the published entry point binds the configured address =="
+# Default CADDY_BIND=127.0.0.1: the tenant surface must not answer on the LAN
+# unless the operator opted in explicitly (.env mirrors compose interpolation).
+CADDY_BIND="$(grep -E '^CADDY_BIND=' "${ROOT}/.env" 2>/dev/null | cut -d= -f2 || true)"
+CADDY_BIND="${CADDY_BIND:-127.0.0.1}"
+published="$(docker port caddy)"
+[[ "$(printf '%s' "${published}" | grep -cv "${CADDY_BIND}:18080")" -eq 0 ]] \
+	|| fail "caddy publishes on ${published}, expected ${CADDY_BIND}:18080 only"
+pass "caddy publishes on ${CADDY_BIND}:18080 only"
+
 echo "== the sandbox cannot reach past its subnet =="
+# Bounded 0.0.0.0-bound host service: the sandbox must not even route to it
+# (the gateway IP is the host). Killed right after the probe.
+HOST_SVC_PORT=18081
+timeout 30 python3 -m http.server --bind 0.0.0.0 "${HOST_SVC_PORT}" >/dev/null 2>&1 &
+HOST_SVC_PID=$!
+sleep 0.5
+curl -fsS --max-time 2 "http://127.0.0.1:${HOST_SVC_PORT}/" >/dev/null \
+	|| fail "host probe listener did not start on ${HOST_SVC_PORT} (port busy?)"
 docker cp -q "${E2E_DIR}/security-probe.mjs" "${ATK_C}:/tmp/security-probe.mjs" >/dev/null
-probe="$(docker exec "${ATK_C}" node /tmp/security-probe.mjs "${VIC_C}" "${MANAGER_TOKEN}")"
+probe="$(docker exec "${ATK_C}" node /tmp/security-probe.mjs "${VIC_C}" "${MANAGER_TOKEN}" "${HOST_SVC_PORT}")"
+kill "${HOST_SVC_PID}" 2>/dev/null || true
 breach="$(printf '%s' "${probe}" | field "d['breach'].strip()")"
 [[ -z "${breach}" ]] || fail "containment breach: ${breach} (${probe})"
 gateway="$(printf '%s' "${probe}" | field "d['gateway']")"
 [[ "${gateway}" != "None" && -n "${gateway}" ]] || fail "probe could not find its gateway: ${probe}"
+[[ "$(printf '%s' "${probe}" | field "d['hostService']")" != "connect:ok" ]] \
+	|| fail "sandbox reached a 0.0.0.0-bound host service on the gateway: ${probe}"
 [[ "$(printf '%s' "${probe}" | field "d['managerMetrics']['status']")" == "403" ]] \
 	|| fail "manager did not reject the sandbox peer: ${probe}"
-pass "no egress (gateway ${gateway}, internet), manager 403, tenant ${VIC_C} unreachable"
+pass "no egress (gateway ${gateway}, internet, host services), manager 403, tenant ${VIC_C} unreachable"
 
 echo "== a refused pause left the victim running =="
 [[ "$(docker inspect -f '{{.State.Running}}' "${VIC_C}")" == "true" ]] \

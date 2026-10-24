@@ -104,14 +104,19 @@ def network_name(user_id: str) -> str:
 def network_create_args() -> list[str]:
     """Docker create args for a per-user network.
 
-    With AGENT_EGRESS != "open" the bridge gets no address masquerade: the
-    sandbox cannot NAT out to the internet or the host LAN. Same-subnet guests
-    (caddy, manager, web) stay reachable, which is all the data plane needs;
-    the keyless faux provider needs no egress at all.
+    With AGENT_EGRESS != "open" the network is created --internal and without
+    address masquerade. --internal is the load-bearing wall: the bridge gets
+    no route off its own subnet, so the sandbox cannot NAT out to the
+    internet, other subnets, or the host itself (without it, a 0.0.0.0-bound
+    host service still answers on the gateway IP, because disabling
+    masquerade only removes the FORWARD-path SNAT, not the bridge-to-host
+    INPUT path). enable_ip_masquerade=false stays on as the second, redundant
+    layer. Same-subnet guests (caddy, manager, web) remain reachable, which is
+    all the data plane needs; the keyless faux provider needs no egress.
     """
     args = ["network", "create", "--label", "pi-sandbox-manager=1"]
     if AGENT_EGRESS != "open":
-        args += ["--opt", "com.docker.network.bridge.enable_ip_masquerade=false"]
+        args += ["--internal", "--opt", "com.docker.network.bridge.enable_ip_masquerade=false"]
     return args
 
 
@@ -264,6 +269,75 @@ def network_exists(name: str) -> bool:
         ["docker", "network", "inspect", name], capture_output=True, text=True
     )
     return cp.returncode == 0
+
+
+# ── host wall: docker has no knob for the bridge-to-host INPUT path ────────
+# `--internal` stops forwarding off the bridge, but the bridge gateway is a
+# host interface: packets addressed to it reach the host INPUT chain, where
+# any 0.0.0.0-bound host service answers (proven by e2e-test/security.sh).
+# The manager owns sandbox network creation, so it owns this wall too: one
+# iptables DROP rule per sandbox bridge, installed through a short-lived
+# host-network NET_ADMIN helper created via the docker socket it already
+# drives. Nothing legitimate dials host services from a sandbox (guests are
+# on-bridge, health checks are container-to-container, published ports are
+# loopback-bound), so the rule is unconditional and fail-closed: a network
+# whose wall cannot be installed is removed, and a resolve that cannot prove
+# the wall answers 503 instead of routing users to an open sandbox.
+HOSTWALL_COMMENT = "pi-sandbox-hostwall"
+
+
+def bridge_iface(net_id: str) -> str:
+    """Host bridge interface name of a docker network id (br-<first 12>)."""
+    return "br-" + net_id[:12]
+
+
+def hostwall(script: str) -> None:
+    """Run an iptables script in the host network namespace.
+
+    The helper is this manager's own image (id via MANAGER_CONTAINER),
+    short-lived, and only ever runs scripts this module wrote: no user input
+    reaches it (bridge names derive from docker network ids).
+    """
+    if not MANAGER_CONTAINER:
+        raise RuntimeError("HOSTWALL needs MANAGER_CONTAINER (compose container name)")
+    image = docker("inspect", "-f", "{{.Image}}", MANAGER_CONTAINER).strip()
+    docker(
+        "run", "--rm", "--network", "host", "--cap-add", "NET_ADMIN",
+        "--entrypoint", "sh", image, "-c", script,
+    )
+
+
+def hostwall_ensure(net_id: str) -> None:
+    """Idempotently install the INPUT DROP rule for one sandbox bridge."""
+    iface = bridge_iface(net_id)
+    hostwall(
+        f"iptables -C INPUT -i {iface} -m comment --comment {HOSTWALL_COMMENT} -j DROP "
+        f"2>/dev/null || "
+        f"iptables -I INPUT 1 -i {iface} -m comment --comment {HOSTWALL_COMMENT} -j DROP "
+        f"|| exit 1"
+    )
+
+
+def hostwall_reconcile() -> None:
+    """Re-assert walls for every labelled network and drop stale rules.
+
+    Daemon restarts flush iptables while network objects survive, so this
+    runs on the reconcile tick: cheap in-kernel checks in one helper run.
+    """
+    net_ids = docker(
+        "network", "ls", "-q", "--filter", "label=pi-sandbox-manager=1"
+    ).split()
+    wanted = " ".join(bridge_iface(n) for n in net_ids)
+    hostwall(
+        "for i in " + wanted + " ; do "
+        f"iptables -C INPUT -i $i -m comment --comment {HOSTWALL_COMMENT} -j DROP 2>/dev/null || "
+        f"iptables -I INPUT 1 -i $i -m comment --comment {HOSTWALL_COMMENT} -j DROP || exit 1; "
+        "done; "
+        f"for r in $(iptables -S INPUT | sed -n \"s/^-A INPUT -i \\([^ ]*\\).*{HOSTWALL_COMMENT}.*/\\1/p\"); do "
+        f"case \" {wanted} \" in *\" $r \"*) ;; *) "
+        f"iptables -D INPUT -i $r -m comment --comment {HOSTWALL_COMMENT} -j DROP || true;; esac; "
+        "done"
+    )
 
 
 def docker_running(container: str) -> bool | None:
@@ -477,11 +551,21 @@ def provision(user_id: str) -> None:
     container = container_name(user_id)
     if docker_running(container) is None:
         net = network_name(user_id)
+        created_net = False
         if not network_exists(net):
             # check=True: a failed create must not leave a container pointing at
             # a network that does not exist (e.g. exhausted address pools).
             docker(*network_create_args(), net)
             invalidate_peer_cache()
+            created_net = True
+        try:
+            hostwall_ensure(docker("network", "inspect", "-f", "{{.Id}}", net).strip())
+        except Exception:
+            # fail closed: never leave a reachable sandbox behind a wall that
+            # could not be proven (a network we just made is rolled back).
+            if created_net:
+                docker("network", "rm", net, check=False)
+            raise
         # The manager and Caddy must reach the agent on its private network;
         # both need stable container names (compose `container_name:`).
         for guest in (MANAGER_CONTAINER, CADDY_CONTAINER, WEB_CONTAINER):
@@ -575,7 +659,13 @@ def reconcile_tick() -> None:
 
     A stop recorded in the registry is never resurrected; only a container the
     registry believes is running and that fails /health N times is restarted.
+    Also re-asserts the host wall: iptables rules vanish on daemon restart
+    while network objects survive.
     """
+    try:
+        hostwall_reconcile()
+    except Exception:
+        log.exception("hostwall reconcile failed (rules may be missing)")
     for row in rows():
         user_id, container, status = (
             row["user_id"], row["container_name"], row["status"]

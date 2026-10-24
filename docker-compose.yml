@@ -4,7 +4,7 @@
 		"caddy": {
 			"image": "caddy:2.11.4-alpine",
 			"container_name": "caddy",
-			"ports": ["18080:80"],
+			"ports": ["${CADDY_BIND:-127.0.0.1}:18080:80"],
 			"environment": {
 				"MANAGER_TOKEN": "${MANAGER_TOKEN:-dev-manager-token}"
 			},
