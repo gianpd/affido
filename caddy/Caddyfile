@@ -3,6 +3,27 @@
 # upstream in X-Sandbox-Endpoint, so Caddy has no static agent routes.
 
 :80 {
+	# RFC 0012 §5.3: the browser path of the BYOK endpoints. forward_auth runs
+	# /whoami (session-only, never provisions) BEFORE the proxy hop, so a
+	# cookieless browser request can never reach the manager's write handlers.
+	@providers path /providers/*
+	handle @providers {
+		# Only Caddy may stamp the gateway-route pin; a client-supplied copy never
+		# survives to the manager. The stripped X-Forwarded-* headers are re-set by
+		# Caddy itself (authoritative, not client-forgeable through this route).
+		header -X-Gateway-Route
+		header -X-Forwarded-Host
+		header -X-Forwarded-Proto
+		forward_auth sandbox-manager:8090 {
+			uri /whoami
+			header_up X-Manager-Token {env.MANAGER_TOKEN}
+			header_up X-Gateway-Route 1
+		}
+		reverse_proxy sandbox-manager:8090 {
+			header_up X-Gateway-Route 1
+		}
+	}
+
 	# RFC 0003: per-user sandboxes. The manager resolves user -> sandbox (starting
 	# it if needed) and returns the upstream in X-Sandbox-Endpoint; Caddy then
 	# dials that endpoint. forward_auth's default GET subrequest never consumes

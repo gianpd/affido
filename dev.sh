@@ -3,16 +3,18 @@
 #
 # Sandbox agents are NOT compose services: the manager creates them on demand
 # from AGENT_IMAGE (see create_args() in sandbox-manager/sandbox_manager.py).
-# That is why provider selection is expressed as an image + an optional
-# secrets mount, never as a compose service.
+# The manager stack runs one image, affido-agent:latest: the keyless faux
+# provider is the default, and users who want a real model bring their own key
+# through the manager's /providers API (RFC 0012 BYOK). Real providers need
+# AGENT_EGRESS=open in .env (stack-level, fail-closed at setup otherwise).
 #
 # Usage:
-#   ./dev.sh up [--provider fake|openrouter] [--no-build] [--dry-run]
-#   ./dev.sh reload [--provider fake|openrouter] [--no-build] [--dry-run]
-#   ./dev.sh build [--provider fake|openrouter] [--dry-run]
+#   ./dev.sh up [--no-build] [--dry-run]
+#   ./dev.sh reload [--no-build] [--dry-run]
+#   ./dev.sh build [--dry-run]
 #   ./dev.sh down
 #   ./dev.sh reset [--yes]
-#   ./dev.sh secrets [--provider fake|openrouter]
+#   ./dev.sh secrets
 #   ./dev.sh status
 #
 # `reload` is the edit-test loop for agent code: rebuild the images, refresh the
@@ -22,22 +24,18 @@
 # durable. `reset` remains the only command that deletes data. With `--no-build`
 # reload keeps the current images and only recreates the containers.
 #
-# Provider:
-#   fake        affido-agent:latest, no secrets mounted. model.ts falls
-#               through to the keyless faux provider. Default.
-#   openrouter  affido-agent:openrouter (ENV OPENROUTER_MODEL and
-#               THINKING_LEVEL baked in) plus secrets/ mounted read-only at
-#               /run/secrets. One key for every sandbox: single-tenant, see
-#               docs/rfc/0004.
-#
 # Secrets are never passed as compose environment for the agents:
 #   .env                        -> compose interpolation, control plane only
-#   secrets/                    -> host dir the manager mounts into sandboxes
-#   ENV OPENROUTER_MODEL        -> the only non-secret input, baked into the
-#                                  openrouter image because the manager cannot
-#                                  forward env vars to `docker create`
-#   ENV THINKING_LEVEL          -> same path: reasoning effort requested from
-#                                  the provider, empty keeps the runtime off
+#   secrets/llm_key_kek         -> 32-byte KEK (base64 ok), mounted read-only
+#                                  into the manager only; encrypts the users'
+#                                  BYOK provider keys at rest
+#   ENV THINKING_LEVEL          -> reasoning effort requested from the provider,
+#                                  empty keeps the runtime off
+#
+# The operator openrouter flow (--provider openrouter: one shared plaintext
+# key mounted into every sandbox) was removed by RFC 0012 §4: the manager no
+# longer mounts host secrets into sandboxes. Running the agent image standalone
+# still reads /run/secrets (agent/model.ts); see README "Use a real model".
 #
 # Gate for the whole stack remains ./verify.sh (typecheck, unit tests, e2e).
 set -euo pipefail
@@ -46,8 +44,6 @@ cd "$(dirname "$0")"
 ROOT="$(pwd)"
 PROJECT="affido"
 BASE_IMAGE="affido-agent:latest"
-OPENROUTER_IMAGE="affido-agent:openrouter"
-PROVIDER="fake"
 BUILD=1
 DRY_RUN=0
 ASSUME_YES=0
@@ -66,8 +62,8 @@ run() {
 }
 
 load_env() {
-	# Compose reads .env itself; we also need OPENROUTER_MODEL and THINKING_LEVEL
-	# here to bake them into the derived image.
+	# Compose reads .env itself; THINKING_LEVEL and AGENT_EGRESS are read here
+	# too (summary, compose_up).
 	if [[ -f .env ]]; then
 		set -a
 		# shellcheck disable=SC1091
@@ -83,21 +79,19 @@ need_docker() {
 image_exists() { docker image inspect "$1" >/dev/null 2>&1; }
 
 agent_image() {
-	case "${PROVIDER}" in
-		fake) printf '%s' "${BASE_IMAGE}" ;;
-		openrouter) printf '%s' "${OPENROUTER_IMAGE}" ;;
-		*) fail "unknown provider '${PROVIDER}' (use fake or openrouter)" ;;
-	esac
+	printf '%s' "${BASE_IMAGE}"
 }
 
-secrets_dir() {
-	# Empty string disables the mount (compose override uses ${VAR-default},
-	# so a set-but-empty value wins over the default). create_args() then
-	# skips -v /run/secrets and model.ts stays on faux.
-	case "${PROVIDER}" in
-		fake) printf '' ;;
-		openrouter) printf '%s' "${ROOT}/secrets" ;;
-	esac
+ensure_kek() {
+	# RFC 0012 §5.2: compose mounts this file read-only into the manager only.
+	# Docker would turn a missing file into a directory at that path, so it must
+	# exist before any `up`; without it every BYOK key write fails closed with
+	# kek_unavailable (the keyless faux default is unaffected).
+	if [ ! -f "${ROOT}/secrets/llm_key_kek" ]; then
+		umask 077
+		openssl rand -base64 32 > "${ROOT}/secrets/llm_key_kek"
+		pass "created secrets/llm_key_kek (BYOK KEK; back it up: keys are unrecoverable without it)"
+	fi
 }
 
 build_base() {
@@ -106,63 +100,6 @@ build_base() {
 		run docker build -q -t "${BASE_IMAGE}" ./agent
 		((DRY_RUN)) || pass "${BASE_IMAGE} built"
 	fi
-}
-
-build_openrouter() {
-	[[ -n "${OPENROUTER_MODEL:-}" ]] || fail "OPENROUTER_MODEL is not set (put it in .env)"
-	[[ -s "${ROOT}/secrets/openrouter_api_key" ]] || fail "missing or empty secrets/openrouter_api_key"
-
-	# The model id alone does not make the image current: the derived image bakes
-	# the base layer, so a rebuilt base with the same model id would be skipped
-	# and every sandbox would keep running the old code. The build records the
-	# base image id as a label and the check compares it.
-	local base_id current current_level current_base
-	base_id="$(docker image inspect -f '{{.Id}}' "${BASE_IMAGE}" 2>/dev/null || true)"
-	[[ -n "${base_id}" ]] || fail "${BASE_IMAGE} is missing; run ./dev.sh build first"
-	current="$(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${OPENROUTER_IMAGE}" 2>/dev/null \
-		| sed -n 's/^OPENROUTER_MODEL=//p' || true)"
-	current_level="$(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${OPENROUTER_IMAGE}" 2>/dev/null \
-		| sed -n 's/^THINKING_LEVEL=//p' || true)"
-	current_base="$(docker image inspect \
-		-f '{{with .Config.Labels}}{{index . "pi.base-image-id"}}{{end}}' "${OPENROUTER_IMAGE}" 2>/dev/null || true)"
-	if [[ "${current}" == "${OPENROUTER_MODEL}" && "${current_level}" == "${THINKING_LEVEL:-}" && "${current_base}" == "${base_id}" ]]; then
-		pass "${OPENROUTER_IMAGE} is current (OPENROUTER_MODEL=${OPENROUTER_MODEL}, THINKING_LEVEL=${THINKING_LEVEL:-off})"
-		return 0
-	fi
-
-	echo "== build ${OPENROUTER_IMAGE} =="
-	if ((DRY_RUN)); then
-		printf '     + docker build --build-arg BASE_IMAGE_ID=%s --build-arg OPENROUTER_MODEL=%s --build-arg THINKING_LEVEL=%s -t %s <tmp>\n' \
-			"${base_id}" "${OPENROUTER_MODEL}" "${THINKING_LEVEL:-}" "${OPENROUTER_IMAGE}"
-		return 0
-	fi
-	# The image ENV is the only lever: the manager forwards no *_MODEL to
-	# `docker create`, and an empty value would be falsy for model.ts.
-	local ctx
-	ctx="$(mktemp -d)"
-	TMPDIRS+=("${ctx}")
-	cat >"${ctx}/Dockerfile" <<'EOF'
-# Derived from the agent image; only adds the model id and reasoning effort the
-# manager cannot pass.
-ARG BASE_IMAGE=affido-agent:latest
-FROM ${BASE_IMAGE}
-ARG OPENROUTER_MODEL
-ARG THINKING_LEVEL
-ARG BASE_IMAGE_ID
-ENV OPENROUTER_MODEL=${OPENROUTER_MODEL}
-# Empty is what agent/server.ts reads as "unset": the runtime then keeps `off`.
-ENV THINKING_LEVEL=${THINKING_LEVEL}
-# Ties this image to the exact base layer it was built from, so dev.sh can tell
-# whether a rebuilt base image has been picked up.
-LABEL pi.base-image-id=${BASE_IMAGE_ID}
-EOF
-	docker build -q \
-		--build-arg "BASE_IMAGE=${BASE_IMAGE}" \
-		--build-arg "BASE_IMAGE_ID=${base_id}" \
-		--build-arg "OPENROUTER_MODEL=${OPENROUTER_MODEL}" \
-		--build-arg "THINKING_LEVEL=${THINKING_LEVEL:-}" \
-		-t "${OPENROUTER_IMAGE}" "${ctx}" >/dev/null || fail "cannot build ${OPENROUTER_IMAGE}"
-	pass "${OPENROUTER_IMAGE} built (OPENROUTER_MODEL=${OPENROUTER_MODEL}, THINKING_LEVEL=${THINKING_LEVEL:-off})"
 }
 
 warn_stale_sandboxes() {
@@ -177,21 +114,17 @@ warn_stale_sandboxes() {
 			stale=1
 		fi
 	done < <(docker ps -aq --filter label=pi-sandbox-manager=1)
-	((stale)) && warn "run ./dev.sh reload --provider ${PROVIDER} to reprovision from ${want} (volumes kept)"
+	((stale)) && warn "run ./dev.sh reload to reprovision from ${want} (volumes kept)"
 	return 0
 }
 
 summary() {
 	echo
-	printf 'provider     %s\n' "${PROVIDER}"
 	printf 'agent image  %s\n' "$(agent_image)"
-	if [[ "${PROVIDER}" == openrouter ]]; then
-		printf 'agent secrets %s -> /run/secrets (ro, one dir per sandbox)\n' "${ROOT}/secrets"
-		printf 'model id     %s (baked as ENV in %s)\n' "${OPENROUTER_MODEL}" "${OPENROUTER_IMAGE}"
-		printf 'thinking     %s (baked as ENV; empty means off)\n' "${THINKING_LEVEL:-off}"
-	else
-		printf 'agent secrets none mounted -> keyless faux provider in agent/model.ts\n'
-	fi
+	printf 'default      keyless faux provider; real models via BYOK (Settings -> AI provider)\n'
+	printf 'byok kek     %s\n' "$([ -f "${ROOT}/secrets/llm_key_kek" ] && echo "${ROOT}/secrets/llm_key_kek (mounted into the manager only)" || echo "MISSING: BYOK key writes fail closed")"
+	printf 'egress       %s (BYOK with a real provider needs open)\n' "${AGENT_EGRESS:-off}"
+	printf 'thinking     %s (empty means off)\n' "${THINKING_LEVEL:-off}"
 	printf 'control plane caddy :18080, oltp :%s, sandbox-manager (no host port)\n' "${OLTP_PORT:-15432}"
 	printf 'secrets map  see ./dev.sh secrets\n'
 }
@@ -210,30 +143,28 @@ wait_oltp() {
 }
 
 require_override() {
-	# Base compose hardcodes AGENT_IMAGE; the override is where the provider
-	# levers (AGENT_IMAGE, AGENT_SECRETS_DIR) are forwarded to the manager.
+	# Base compose hardcodes AGENT_IMAGE; the override is where AGENT_IMAGE is
+	# forwarded to the manager.
 	[[ -f docker-compose.override.yml ]] \
-		|| fail "docker-compose.override.yml is missing: it forwards AGENT_IMAGE/AGENT_SECRETS_DIR"
+		|| fail "docker-compose.override.yml is missing: it forwards AGENT_IMAGE"
 }
 
 compose_up() {
-	local image dir egress
+	local image
 	image="$(agent_image)"
-	dir="$(secrets_dir)"
-	# The openrouter provider is reached over the internet, so its sandboxes
-	# need NAT egress; the keyless faux provider runs fully offline (default).
-	egress="off"
-	[[ "${PROVIDER}" == "openrouter" ]] && egress="open"
+	ensure_kek
 
 	echo "== docker compose up =="
 	local compose_args=(up -d)
 	((BUILD)) && compose_args+=(--build)
-	# Explicit env defeats docker-compose.override.yml defaults.
+	# Explicit env defeats docker-compose.override.yml defaults. AGENT_EGRESS
+	# comes from the environment (default off): only a stack whose users bring
+	# real-provider keys needs open (RFC 0012 §5.5).
 	if ((DRY_RUN)); then
-		printf '     + AGENT_IMAGE=%s AGENT_SECRETS_DIR=%s AGENT_EGRESS=%s docker compose %s\n' \
-			"${image}" "${dir}" "${egress}" "${compose_args[*]}"
+		printf '     + AGENT_IMAGE=%s AGENT_EGRESS=%s docker compose %s\n' \
+			"${image}" "${AGENT_EGRESS:-off}" "${compose_args[*]}"
 	else
-		AGENT_IMAGE="${image}" AGENT_SECRETS_DIR="${dir}" AGENT_EGRESS="${egress}" \
+		AGENT_IMAGE="${image}" AGENT_EGRESS="${AGENT_EGRESS:-off}" \
 			docker compose "${compose_args[@]}" >/dev/null
 	fi
 	if ((DRY_RUN)); then pass "dry run: nothing executed"
@@ -249,7 +180,6 @@ cmd_up() {
 	load_env
 	require_override
 	build_base
-	[[ "${PROVIDER}" == openrouter ]] && build_openrouter
 	warn_stale_sandboxes "$(agent_image)"
 	compose_up
 	summary
@@ -291,7 +221,6 @@ cmd_reload() {
 	load_env
 	require_override
 	build_base
-	[[ "${PROVIDER}" == openrouter ]] && build_openrouter
 	compose_up
 	recreate_sandboxes
 	summary
@@ -303,8 +232,7 @@ cmd_build() {
 	load_env
 	agent_image >/dev/null # validates the provider
 	build_base
-	[[ "${PROVIDER}" == openrouter ]] && build_openrouter
-	pass "images ready for --provider ${PROVIDER}"
+	pass "${BASE_IMAGE} ready (faux default; real models via BYOK)"
 }
 
 cmd_down() {
@@ -343,7 +271,7 @@ cmd_reset() {
 	[[ -n "${vols}" ]] && run docker volume rm -f ${vols} >/dev/null
 
 	echo "== images =="
-	run docker image rm -f "${BASE_IMAGE}" "${OPENROUTER_IMAGE}" >/dev/null 2>&1 || true
+	run docker image rm -f "${BASE_IMAGE}" >/dev/null 2>&1 || true
 	pass "reset done: next ./dev.sh up rebuilds from zero"
 }
 
@@ -359,37 +287,37 @@ Where each value comes from, and where it lands.
   AGENT_IDLE_MS      in-process idle pause threshold inside the agent
   OLTP_PORT          host port for the control-plane Postgres
   WEB_CONTAINER      optional compose container joined to every sandbox network
-  OPENROUTER_MODEL   model id; NOT a secret; baked as ENV into the derived image
+  AGENT_EGRESS       off (default) or open; BYOK with a real provider needs open
+  THINKING_LEVEL     reasoning effort forwarded to the agent at create time
 
-secrets/ (gitignored host dir; never mounted into the control plane)
-  openrouter_api_key   -> /run/secrets/openrouter_api_key in each sandbox
-  openai_api_key       -> /run/secrets/openai_api_key in each sandbox
+secrets/ (gitignored host dir; only llm_key_kek is mounted, into the manager)
+  llm_key_kek        32-byte KEK (raw or base64) -> /run/secrets/llm_key_kek in
+                     the sandbox-manager only. Encrypts the users' BYOK provider
+                     keys (AES-256-GCM, RFC 0012 §5.2). Keys are unrecoverable
+                     without it; rotate by re-encrypting, never by deleting rows.
 
-The mount is created by the manager (`docker create -v <host dir>:/run/secrets:ro`),
-not by compose: sandboxes are not compose services. AGENT_SECRETS_DIR is the
-host path; when empty the mount is skipped and agent/model.ts uses faux.
-agent/model.ts reads the files (never process.env) via readSecret().
+BYOK user keys never touch this host: a user's API key is POSTed through Caddy
+to the manager (/providers/config), stored encrypted in Postgres, and delivered
+to the running agent's memory at resolve time (POST /config). It is never in a
+URL, a log, docker inspect, /proc/1/environ, the agent filesystem, or any GET.
+
+Standalone agent runs (no manager) keep the secret-file branch of
+agent/model.ts: `docker run -e OPENROUTER_MODEL=<id> -v $PWD/secrets:/run/secrets
+affido-agent:latest` reads openrouter_api_key/openai_api_key at boot.
 TXT
 	echo
-	echo "== provider readiness =="
-	local ok=1
-	for f in openrouter_api_key openai_api_key; do
-		if [[ -s "${ROOT}/secrets/${f}" ]]; then printf 'present  secrets/%s\n' "${f}"
-		else printf 'empty    secrets/%s\n' "${f}"; fi
-	done
-	if [[ -n "${OPENROUTER_MODEL:-}" ]]; then printf 'present  OPENROUTER_MODEL=%s\n' "${OPENROUTER_MODEL}"
-	else printf 'missing  OPENROUTER_MODEL\n'; fi
-	case "${PROVIDER}" in
-		fake) printf 'active   fake: no secret needed\n' ;;
-		openrouter)
-			if [[ -z "${OPENROUTER_MODEL:-}" || ! -s "${ROOT}/secrets/openrouter_api_key" ]]; then
-				printf 'active   openrouter: NOT ready (see missing/empty rows above)\n'
-				ok=0
-			else printf 'active   openrouter: ready\n'; fi
-			;;
-		*) fail "unknown provider '${PROVIDER}' (use fake or openrouter)" ;;
-	esac
-	((ok)) || exit 1
+	echo "== BYOK readiness =="
+	if [ -f "${ROOT}/secrets/llm_key_kek" ]; then
+		printf 'present  secrets/llm_key_kek
+'
+	else
+		printf 'missing  secrets/llm_key_kek (./dev.sh up creates one; BYOK key writes fail closed without it)\n'
+	fi
+	if [[ "${AGENT_EGRESS:-off}" == "open" ]]; then
+		printf 'present  AGENT_EGRESS=open (real providers can reach the internet)\n'
+	else
+		printf 'off      AGENT_EGRESS (custom endpoints and catalog providers are refused at setup)\n'
+	fi
 }
 
 cmd_status() {
@@ -413,8 +341,11 @@ case "${CMD}" in
 	up|reload|build|reset|secrets)
 		while (($#)); do
 			case "$1" in
-				--provider) PROVIDER="${2:-}"; shift 2 ;;
-				--provider=*) PROVIDER="${1#*=}"; shift ;;
+				--provider*)
+					# Explicit error, not a silent faux degradation: the manager no
+					# longer mounts host secrets (RFC 0012 §4).
+					fail "--provider was removed by RFC 0012: use BYOK (Settings -> AI provider or PUT /providers/config), or run the agent image standalone with /run/secrets"
+					;;
 				--no-build) BUILD=0; shift ;;
 				--dry-run) DRY_RUN=1; shift ;;
 				--yes|-y) ASSUME_YES=1; shift ;;
@@ -433,7 +364,14 @@ case "${CMD}" in
 		done
 		;;
 	""|-h|--help|help) usage; exit 0 ;;
-	*) fail "unknown command '${CMD}' (try --help)" ;;
+	*)
+		# Kept as an explicit error instead of silently degrading to faux:
+		# the manager no longer mounts host secrets (RFC 0012 §4).
+		if [[ "${1:-}" == --provider* ]]; then
+			fail "--provider was removed by RFC 0012: use BYOK (Settings -> AI provider or PUT /providers/config), or run the agent image standalone with /run/secrets"
+		fi
+		fail "unknown command '${CMD}' (try --help)"
+		;;
 esac
 
 case "${CMD}" in

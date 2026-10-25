@@ -7,7 +7,7 @@ FROM python:3.13-slim
 # distribution (pinned to the 29.x CLI the stack is tested with).
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
 
-RUN pip install --no-cache-dir "psycopg[binary]==3.2.10"
+RUN pip install --no-cache-dir "psycopg[binary]==3.2.10" "cryptography==46.0.1"
 
 # iptables is the host wall: the manager installs one INPUT DROP rule per
 # sandbox bridge through a short-lived host-network NET_ADMIN helper (docker
@@ -17,7 +17,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY sandbox_manager.py ./
+COPY sandbox_manager.py test_sandbox_manager.py ./
 
 ENV PYTHONUNBUFFERED=1 \
     LISTEN_ADDR=0.0.0.0 \

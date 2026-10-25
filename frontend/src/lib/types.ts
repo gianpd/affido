@@ -145,6 +145,9 @@ export type SandboxStatus = {
 	agent: string;
 	paused: boolean;
 	model?: unknown;
+	/** sha256(key)[:12] of the delivered BYOK key, or null; the only key-derived
+	 * value the sandbox reports (RFC 0012 §5.4). */
+	keyFingerprint?: string | null;
 	workspace?: string;
 	conversationId: number | null;
 	entries: number;

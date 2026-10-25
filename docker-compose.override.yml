@@ -1,19 +1,14 @@
-# Local override: point manager-created sandboxes at a real OpenRouter provider.
+# Local override: which agent image manager-created sandboxes run.
 #
 # Compose merges this file automatically for every command run in this
 # directory (`docker compose up --build`, `./verify.sh`, e2e-test/run.sh), so
 # the setting survives `docker compose down` + `docker compose up --build`.
 #
-# `create_args()` in sandbox_manager.py has no lever for OPENROUTER_MODEL, so
-# the model id lives in a derived image (`affido-agent:openrouter`, built
-# by ./openrouter-setup.sh) and AGENT_IMAGE points the manager at it.
-#
-# AGENT_SECRETS_DIR must be a HOST path: the manager passes the string verbatim
-# to `docker create` through /var/run/docker.sock. Set it in your .env to the
-# absolute path of your secrets directory (see `.env.example`), or leave it
-# empty to run the keyless faux provider.
+# RFC 0012 removed the AGENT_SECRETS_DIR lever: the manager no longer mounts
+# host secrets into sandboxes. Users bring their own keys (BYOK) through the
+# manager's /providers API; running the agent image standalone keeps the
+# secret-file branch of agent/model.ts (see README).
 services:
   sandbox-manager:
     environment:
-      AGENT_SECRETS_DIR: ${AGENT_SECRETS_DIR-}
       AGENT_IMAGE: ${AGENT_IMAGE-affido-agent:latest}

@@ -3,7 +3,7 @@
 import type { IncomingMessage } from "node:http";
 import type { Context } from "@earendil-works/chord";
 import type { AgentChange, EntryId, HarnessOptions, ModelRef } from "@earendil-works/pi-durable";
-import type { ModelThinkingLevel, MutableModels } from "@earendil-works/pi-ai";
+import type { CredentialStore, ModelThinkingLevel, MutableModels } from "@earendil-works/pi-ai";
 import type { HarnessLifecycle } from "./harness.ts";
 import type { CitationRunReport, CitationsTraceReport } from "./citation-report.ts";
 import type { ArtifactView } from "./artifacts.ts";
@@ -11,10 +11,22 @@ import type { TraceEntryDetail, TraceQuery, TraceReport } from "./trace.ts";
 
 export type Log = (...args: unknown[]) => void;
 
-/** One provider choice: the shared model collection plus the model the agent runs on. */
+/** One provider choice: the shared model collection plus the model the agent runs on.
+ * The credential store rides along so POST /config can rotate the key at
+ * runtime (RFC 0012 §5.4); it is in-memory only (R3). */
 export type ModelBundle = {
 	readonly models: MutableModels;
+	readonly credentials: CredentialStore;
 	readonly model: ModelRef;
+};
+
+/** The POST /config payload (RFC 0012 §5.4): the desired runtime state the
+ * manager reconciles. `apiKey` and `baseUrl` are absent for faux. */
+export type ProviderConfig = {
+	readonly provider: string;
+	readonly modelId: string;
+	readonly apiKey?: string;
+	readonly baseUrl?: string;
 };
 
 export type AgentOptions = {
@@ -23,6 +35,9 @@ export type AgentOptions = {
 	readonly sessionDb: string;
 	readonly idleMs: number;
 	readonly models: MutableModels;
+	/** The in-memory credential store the models collection resolves through;
+	 * POST /config rotates it (RFC 0012 §5.4). */
+	readonly credentials: CredentialStore;
 	readonly model: ModelRef;
 	/**
 	 * Reasoning effort requested from the provider. Absent means `off`, which sends
@@ -118,6 +133,9 @@ export interface AgentApi {
 	newSession(): Promise<unknown>;
 	/** Make an existing conversation the active one (RFC 0008); unknown ids are rejected. */
 	switchSession(conversationId: number): Promise<unknown>;
+	/** Apply a delivered provider config (RFC 0012 §5.4): credential upsert,
+	 * provider upsert, conversation reconfigure — serialized with prompts. */
+	configureModel(config: ProviderConfig): Promise<unknown>;
 	reset(): Promise<unknown>;
 	pause(): Promise<unknown>;
 }

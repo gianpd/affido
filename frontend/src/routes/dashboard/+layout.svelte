@@ -13,6 +13,7 @@
 	import FolderUp from '@lucide/svelte/icons/folder-up';
 	import Store from '@lucide/svelte/icons/store';
 	import History from '@lucide/svelte/icons/history';
+	import Settings from '@lucide/svelte/icons/settings';
 	import LogOut from '@lucide/svelte/icons/log-out';
 	import ChevronsUpDown from '@lucide/svelte/icons/chevrons-up-down';
 	import Plus from '@lucide/svelte/icons/plus';
@@ -35,7 +36,8 @@
 		{ title: 'Corpus', href: '/dashboard/corpus', icon: LibraryBig, badge: data.counts.corpora },
 		{ title: 'Uploads', href: '/dashboard/uploads', icon: FolderUp, badge: undefined },
 		{ title: 'Skills', href: '/dashboard/skills', icon: Store, badge: undefined },
-		{ title: 'Traces', href: '/dashboard/traces', icon: History, badge: data.counts.traces }
+		{ title: 'Traces', href: '/dashboard/traces', icon: History, badge: data.counts.traces },
+		{ title: 'AI provider', href: '/dashboard/settings', icon: Settings, badge: undefined }
 	]);
 
 	const isActive = (href: string) =>

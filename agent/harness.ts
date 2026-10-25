@@ -35,6 +35,13 @@ export interface HarnessLifecycle {
 	newSession(): Promise<{ conversationId: ConversationId; entries: number }>;
 	/** Make an existing conversation the active one durably (RFC 0008): the resume path of `newSession`. */
 	switchSession(conversationId: ConversationId): Promise<{ conversationId: ConversationId; entries: number }>;
+	/** Apply a BYOK provider switch (RFC 0012 §5.4): rewrites the deployment
+	 * model and reconfigures the active conversation, serialized with prompts
+	 * on the same chain so an in-flight generation finishes on the old provider
+	 * (§7.1). The provider upsert and credential write happen just before this
+	 * runs; together the next model call dispatches to the new provider with no
+	 * restart and no recreation (R5). */
+	configureModel(model: ModelRef): Promise<void>;
 	/** Run `handler` against a read-only trace source, activating first. Never writes. */
 	trace<T>(handler: (source: TraceSource) => Promise<T>): Promise<T>;
 	/** Close the active conversation now. */
@@ -182,6 +189,26 @@ export class DurableHarness implements HarnessLifecycle {
 			};
 			return handler(source);
 		});
+	}
+
+	/** RFC 0012 §5.4: `configure()` in its own commit, and the deployment agent
+	 * follows so every later `#open` -> `#syncAgent` aligns conversations to
+	 * the delivered model instead of the boot-time one. Thinking level and cwd
+	 * stay as they were. */
+	async configureModel(model: ModelRef): Promise<void> {
+		this.#inFlight++;
+		try {
+			await this.#serialize(() => this.#open());
+			const conversation = this.#conversation;
+			if (conversation === undefined) throw new Error("conversation did not open");
+			const agent = this.#rootOptions.agent;
+			this.#rootOptions = { agent: agent === undefined ? { model } : { ...agent, model } };
+			await conversation.configure({ model }, this.#context);
+			this.#log("model configured:", model);
+		} finally {
+			this.#inFlight--;
+			this.#resetIdle();
+		}
 	}
 
 	async refreshStats(): Promise<void> {

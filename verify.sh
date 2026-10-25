@@ -19,6 +19,17 @@ COMPOSE=(docker compose)
 pass() { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1"; exit 1; }
 
+# RFC 0012: the KEK of the BYOK provider keys. Compose mounts it read-only into
+# the manager only; docker would turn a missing file into a directory, so it
+# must exist before any `up`. Random once, 0600, gitignored with all of secrets/.
+ensure_kek() {
+	if [ ! -f secrets/llm_key_kek ]; then
+		umask 077
+		openssl rand -base64 32 > secrets/llm_key_kek
+		pass "created secrets/llm_key_kek (BYOK KEK, base64 of 32 bytes)"
+	fi
+}
+
 echo "== typecheck: server.ts must pass tsc --noEmit =="
 (
 	cd agent
@@ -58,22 +69,53 @@ node marketplace/manifest.mjs --check >/dev/null || fail "marketplace manifest i
 pass "catalog manifest matches the bundle"
 
 echo "== build and start the control plane =="
-# Pin the image this script just built and disable any local secrets mount: the
-# gate runs the keyless faux provider, so the e2e answers (including the
-# scripted citation dance of RFC 0006) are deterministic. A local
-# docker-compose.override.yml may point interactive stacks at a real provider;
-# these environment overrides hold only for this invocation.
-AGENT_IMAGE=affido-agent:latest AGENT_SECRETS_DIR= "${COMPOSE[@]}" up -d --build >/dev/null
+ensure_kek
+# Start from a clean control plane: the BYOK phase below recreates the manager
+# twice more per run, and back-to-back runs on containerd-store daemons can
+# otherwise leave a manager container on a garbage-collected image digest.
+"${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
+# Pin the image this script just built: the gate runs the keyless faux
+# provider, so the e2e answers (including the scripted citation dance of RFC
+# 0006) are deterministic. A local docker-compose.override.yml may point
+# interactive stacks elsewhere; this override holds only for this invocation.
+AGENT_IMAGE=affido-agent:latest "${COMPOSE[@]}" up -d --build >/dev/null
 pass "caddy, oltp and sandbox-manager are up"
+
+echo "== manager unit tests: BYOK crypto and baseUrl rules (RFC 0012 M1) =="
+"${COMPOSE[@]}" exec -T sandbox-manager python3 -m unittest test_sandbox_manager >/dev/null \
+	|| fail "manager unit tests failed"
+pass "KEK round-trip, AAD swap, baseUrl rules (python3 -m unittest)"
 
 echo "== RFC 0003: happy path + parallel responses =="
 ./e2e-test/run.sh
+
+echo "== RFC 0012 M1/M4: /providers API in the default (egress-off) stack =="
+./e2e-test/providers.sh
 
 echo "== RFC 0003: sandbox lifecycle =="
 ./verify-sandbox.sh
 
 echo "== RFC 0003: security containment negatives =="
 ./e2e-test/security.sh
+
+echo "== RFC 0012 M2/M3/M5: BYOK chain against the fake upstream =="
+# The BYOK chain runs exactly as production BYOK would (egress open), with the
+# provider pointed at a same-network fake upstream instead of the internet.
+# Ran last so the default keyless suites above keep their egress-off stack.
+docker build -q -t affido-e2e-fake-upstream ./e2e-test/fake-upstream >/dev/null || fail "fake upstream build failed"
+AGENTS_NET="$(docker network ls --filter label=com.docker.compose.network=agents --format '{{.Name}}' | head -1)"
+[ -n "${AGENTS_NET}" ] || fail "cannot find the compose agents network"
+docker rm -f e2e-fake-upstream >/dev/null 2>&1 || true
+docker run -d --name e2e-fake-upstream --network "${AGENTS_NET}" --restart unless-stopped \
+	affido-e2e-fake-upstream >/dev/null || fail "fake upstream did not start"
+AGENT_IMAGE=affido-agent:latest AGENT_EGRESS=open PROVIDER_DEV_HTTP=1 FAKE_UPSTREAM_CONTAINER=e2e-fake-upstream \
+	"${COMPOSE[@]}" up -d >/dev/null || fail "BYOK stack did not start"
+./e2e-test/byok.sh
+
+echo "== restore the default (keyless, egress-off) stack =="
+docker rm -f e2e-fake-upstream >/dev/null
+AGENT_IMAGE=affido-agent:latest "${COMPOSE[@]}" up -d >/dev/null
+pass "stack restored: faux default, no fake upstream"
 
 echo
 echo "ALL CHECKS PASSED"

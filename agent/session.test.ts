@@ -26,7 +26,7 @@ const buildAgent = async (
 	sessionDb: string,
 	bundle?: ModelBundle
 ) => {
-	const { models, model } = bundle ?? (await createModel());
+	const { models, credentials, model } = bundle ?? (await createModel());
 	const context = BACKGROUND_CONTEXT;
 	const store = new WorkspaceCitationStore(new NodeExecutionEnv({ cwd: workspace }), context);
 	const harness = new DurableHarness({
@@ -47,6 +47,7 @@ const buildAgent = async (
 		sessionDb,
 		idleMs: 60_000,
 		models,
+		credentials,
 		model,
 		context,
 		log: () => {},
@@ -60,13 +61,15 @@ test("a provider failure settles unanswered and reports the stored detail", asyn
 	const sessionDb = join(workspace, "session.sqlite");
 	// A faux provider with no queued responses: every model call fails, the
 	// error is non-retryable, and the run settles `model_error` with a detail.
-	const models = createModels({ credentials: new InMemoryCredentialStore() });
+	const credentials = new InMemoryCredentialStore();
+	const models = createModels({ credentials });
 	const faux = fauxProvider();
 	models.setProvider(faux.provider);
 	faux.setResponses([]);
 
 	const agent = await buildAgent(workspace, sessionDb, {
 		models,
+		credentials,
 		model: { provider: "faux", modelId: "faux-1" }
 	});
 	await agent.seedWorkspace();

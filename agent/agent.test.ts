@@ -23,6 +23,7 @@ import type {
 } from "@earendil-works/pi-durable";
 import { ContainerAgent, containerSection } from "./agent.ts";
 import { MAX_ARTIFACT_BYTES } from "./artifacts.ts";
+import { createModel } from "./model.ts";
 import type { ConversationHandler, HarnessLifecycle } from "./harness.ts";
 import {
 	DEFAULT_TRACE_LIMIT,
@@ -43,11 +44,14 @@ class FakeLifecycle implements HarnessLifecycle {
 	resets = 0;
 	newSessions = 0;
 	switchSessions = 0;
+	configures = 0;
 	traces = 0;
 	paused = true;
 	conversationId: ConversationId | null = null;
 	entries = 0;
 	inFlight = 0;
+	/** The models the harness pinned, in order; configureModel assertions read this. */
+	configuredModels: { provider: string; modelId: string }[] = [];
 
 	readonly traceSource: TraceSource;
 	/** The conversation `activate` hands to handlers; default carries only the `id`. */
@@ -79,6 +83,11 @@ class FakeLifecycle implements HarnessLifecycle {
 
 	async close(): Promise<void> {
 		this.closes++;
+	}
+
+	async configureModel(model: { provider: string; modelId: string }): Promise<void> {
+		this.configures++;
+		this.configuredModels.push(model);
 	}
 
 	async newSession(): Promise<{ conversationId: ConversationId; entries: number }> {
@@ -219,13 +228,15 @@ function fakeTraceSource(items = [entry(2, "pi.user", "hi"), entry(3, "pi.assist
 // a harness injected they never leave this call.
 const makeAgent = async (harness: HarnessLifecycle) => {
 	const workspace = await mkdtemp(join(tmpdir(), "agent-test-"));
+	const { models, credentials, model } = await createModel();
 	const agent = new ContainerAgent({
 		name: "test",
 		workspace,
 		sessionDb: ":memory:",
 		idleMs: 60_000,
-		models: {} as MutableModels,
-		model: { provider: "faux", modelId: "faux-1" },
+		models,
+		credentials,
+		model,
 		context: BACKGROUND_CONTEXT,
 		log: () => {},
 		harness,

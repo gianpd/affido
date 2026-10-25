@@ -29,7 +29,8 @@ const CONTRACT = [
 
 type Fixture = { agent: ContainerAgent; workspace: string; sessionDb: string };
 
-const buildAgent = async (workspace: string, sessionDb: string, models: Awaited<ReturnType<typeof createModel>>["models"], model: Awaited<ReturnType<typeof createModel>>["model"]): Promise<Fixture> => {
+const buildAgent = async (workspace: string, sessionDb: string, bundle: Awaited<ReturnType<typeof createModel>>): Promise<Fixture> => {
+	const { models, credentials, model } = bundle;
 	const context = BACKGROUND_CONTEXT;
 	const apiEnv = new NodeExecutionEnv({ cwd: workspace });
 	const store = new WorkspaceCitationStore(apiEnv, context);
@@ -51,6 +52,7 @@ const buildAgent = async (workspace: string, sessionDb: string, models: Awaited<
 		sessionDb,
 		idleMs: 60_000,
 		models,
+		credentials,
 		model,
 		context,
 		log: () => {},
@@ -62,13 +64,13 @@ const buildAgent = async (workspace: string, sessionDb: string, models: Awaited<
 test("a strict run publishes through the gate and reports its citations", async () => {
 	const workspace = await mkdtemp(join(tmpdir(), "citation-agent-"));
 	const sessionDb = join(workspace, "session.sqlite");
-	const { models, model } = await createModel();
+	const bundle = await createModel();
 	await mkdir(join(workspace, "corpus/raw"), { recursive: true });
 	await mkdir(join(workspace, "corpus/meta"), { recursive: true });
 	await writeFile(join(workspace, "corpus/raw/doc_42.md"), CONTRACT);
 	await writeMeta({ workspace, docId: "doc_42", meta: { title: "Contratto di manutenzione", filename: "contratto.md" } });
 
-	const { agent } = await buildAgent(workspace, sessionDb, models, model);
+	const { agent } = await buildAgent(workspace, sessionDb, bundle);
 	await agent.seedWorkspace();
 
 	const result = (await agent.prompt("When does the maintenance contract renew?", "req-strict-1", "required")) as PromptResult;
@@ -129,7 +131,7 @@ test("a strict run publishes through the gate and reports its citations", async 
 
 	// R11: after close and reopen on the same storage, citations re-verify.
 	await agent.close();
-	const reopened = await buildAgent(workspace, sessionDb, models, model);
+	const reopened = await buildAgent(workspace, sessionDb, bundle);
 	const verified = (await reopened.agent.citations("req-strict-1")) as RunCitations;
 	assert.equal(verified.published, true);
 	assert.equal(verified.citations[0]?.status, "attribution_verified");

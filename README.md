@@ -60,9 +60,9 @@ curl -H 'Cookie: better-auth.session_token=dev-token' \
 ```
 
 The first request cold-provisions that user's sandbox through Caddy. To use a
-real model: `./dev.sh up --provider openrouter` (see
-[Use a real model](#use-a-real-model)). To check everything, including the
-idle pause and a hard-stop resume: `./verify.sh`.
+real model, each user brings their own key: [BYOK](#byok-bring-your-own-key).
+To check everything, including the idle pause and a hard-stop resume:
+`./verify.sh`.
 
 ## Layout
 
@@ -80,40 +80,37 @@ docs/rfc/          design records (read before changing what they describe)
 ## Run
 
 `dev.sh` wraps compose and builds the agent image. Sandbox agents are created on
-demand by the manager, so the provider is chosen with an image plus an optional
-secrets mount, not with a compose service.
+demand by the manager from `affido-agent:latest`; the keyless faux provider is
+the default, and real models are a per-user choice (BYOK), not a stack flag.
 
 ```bash
-./dev.sh up                              # fake provider, no secrets
-./dev.sh up --provider openrouter        # real model, secrets/ mounted at /run/secrets
-./dev.sh up --provider openrouter --dry-run
-./dev.sh build --provider openrouter     # images only, no compose up
-./dev.sh reload --provider openrouter    # rebuild agent code and recreate sandboxes, keep data
+./dev.sh up                              # faux default, no secrets
+./dev.sh up --no-build                   # reuse the built images
+./dev.sh reload                          # rebuild agent code, recreate sandboxes, keep data
+./dev.sh build                           # image only, no compose up
 ```
 
-`reload` is the edit-test loop: it rebuilds `affido-agent:latest` and the
-derived openrouter image, brings the control plane up, then removes the sandbox
-containers so the next request re-provisions them from the new image. The
-Postgres volume, `pi-ws-<user>` and `pi-data-<user>` are untouched, so documents,
-workspaces and sessions survive. `reset` is the only command that deletes data.
+`reload` is the edit-test loop: it rebuilds `affido-agent:latest`, brings the
+control plane up, then removes the sandbox containers so the next request
+re-provisions them from the new image. The Postgres volume, `pi-ws-<user>` and
+`pi-data-<user>` are untouched, so documents, workspaces and sessions survive.
+`reset` is the only command that deletes data.
 
-`./dev.sh secrets` prints which value lives where: `.env` (compose, control
-plane), `secrets/` (host dir the manager mounts into each sandbox), and
-`OPENROUTER_MODEL` (not a secret; baked as an image `ENV` because the manager
-forwards no model variables to `docker create`).
+`./dev.sh secrets` prints where each value lives: `.env` (compose, control
+plane), `secrets/llm_key_kek` (the BYOK KEK, mounted into the manager only),
+and what never touches the host at all (the users' provider keys).
 
 ```bash
 ./dev.sh status                          # control plane, sandboxes, volumes
 ./dev.sh down                            # stop the control plane, keep sandbox state
-./dev.sh reset                          # remove containers, volumes, images; start from zero
+./dev.sh reset                           # remove containers, volumes, images; start from zero
 ```
 
-`reload` also handles a provider or `OPENROUTER_MODEL` switch: a sandbox's env
-is fixed at `docker create`, so it recreates the containers instead of editing
-them. Because a rebuilt base image changes no env value, the derived openrouter
-image records the base image id in a label (`pi.base-image-id`) and `dev.sh`
-rebuilds it when that id moves; otherwise `up` and `build` would keep a derived
-image built on old agent code.
+The old `--provider openrouter` flow (one shared plaintext key mounted into
+every sandbox) was removed by RFC 0012: the manager no longer mounts host
+secrets into sandboxes. Users who want a real model use BYOK; running the
+agent image standalone keeps the secret-file branch of `agent/model.ts`
+(see [Use a real model](#use-a-real-model)).
 
 The e2e suite still runs against the running stack:
 
@@ -143,8 +140,10 @@ pnpm dev                  # http://localhost:5173
 ```
 
 Routes: `/dashboard` (overview), `/dashboard/documents`, `/dashboard/corpus`,
-`/dashboard/chat`, `/dashboard/traces` (every captured snapshot) and
-`/dashboard/traces/[id]` (decision graph, entries, tasks, submissions). The chat
+`/dashboard/chat`, `/dashboard/traces` (every captured snapshot),
+`/dashboard/traces/[id]` (decision graph, entries, tasks, submissions) and
+`/dashboard/settings` (AI provider: BYOK catalog, key entry, verification,
+fingerprints — RFC 0012). The chat
 bridge at `/api/chat` forwards the prompt to the user's sandbox and streams the
 answer as an AI SDK UI message stream; each prompt also captures a trace
 snapshot. See `frontend/README.md` for the two sandbox access modes (Caddy
@@ -186,16 +185,15 @@ container to each per-user network), `AGENT_EGRESS` (`off` by default: sandbox
 networks are created `--internal` with no NAT — no route to the internet or
 other subnets — plus a per-bridge `iptables INPUT DROP` host wall installed by
 the manager (fail-closed); `open` is the opt-in for internet-reached providers
-— routed egress comes back but the host wall stays), `OLTP_PORT` (host port for
+and a prerequisite for BYOK with one (RFC 0012 §5.5) — routed egress comes
+back but the host wall stays), `OLTP_PORT` (host port for
 Postgres, default 15432, bound to loopback only), `CADDY_BIND` (the published
 bind address of the `:18080` entry point, `127.0.0.1` by default; set
 `0.0.0.0` to expose the stack on the LAN).
-Per-user agents follow the provider chosen at `./dev.sh up`: `--provider fake`
-mounts nothing (`AGENT_SECRETS_DIR` unset) and agents use the keyless faux
-provider; `--provider openrouter` mounts `secrets/` read-only at `/run/secrets`
-and creates agents from `affido-agent:openrouter`, which carries
-`OPENROUTER_MODEL` as `ENV` (the manager forwards no `*_MODEL` to `docker
-create`). The manager starts containers with `--workdir /workspace`;
+Per-user agents all run `affido-agent:latest` (the manager forwards no `*_MODEL`
+to `docker create`): the faux provider is the boot default, and the manager
+delivers the user's BYOK choice at runtime through `POST /config` (RFC 0012
+§5.4). The manager starts containers with `--workdir /workspace`;
 the image CMD is absolute (`node /app/server.ts`) so it runs from any workdir.
 
 ## How each operation is implemented
@@ -244,10 +242,11 @@ conversation.
 The agent config is stored with the session: `root()` applies its `agent`
 options only when it creates the conversation, so on reopen the stored
 `pi.agent` is used. `DurableHarness.#syncAgent` rewrites that stored model when
-the configured provider/model changes, and the stored thinking level when
-`THINKING_LEVEL` changes, so a new secret, `*_MODEL` or reasoning effort takes
-effect without wiping the session. Without it, a provider switch would keep
-resolving the old, now-unregistered model and answer `no_model`.
+the deployment model changes, and the stored thinking level when
+`THINKING_LEVEL` changes, so a BYOK delivery (`POST /config`, which rewrites
+the deployment model) or a reasoning-effort change takes effect without wiping
+the session. Without it, a provider switch would keep resolving the old,
+now-unregistered model and answer `no_model`.
 
 **Read its trace.** `GET /inspect` wraps `harness.inspect(context)` plus
 `conversation.entries()`, `harness.usage()`, and filters both by conversation.
@@ -425,30 +424,72 @@ Sandbox agents are created by the manager, which forwards no `*_MODEL` variable;
 the faux provider is the default and is scripted by transcript state (tool call
 `ls -la`, then an answer built from the listing), so the demo needs no API key.
 
-A real model is one flag away:
+### BYOK (bring your own key, RFC 0012)
+
+An authenticated user picks a provider from a curated catalog (or registers a
+custom OpenAI-compatible endpoint) and submits their own API key. The key is
+stored AES-256-GCM-encrypted in Postgres (the KEK is
+[secrets/llm_key_kek](secrets/llm_key_kek), mounted into the manager only),
+delivered to the running agent's memory at resolve time, and re-delivered after
+any restart — never written to the container environment, image, filesystem,
+URLs, or logs. Switching provider or rotating a key never recreates the
+container and never wipes a session.
+
+```bash
+# once, in .env: the stack-level prerequisites
+#   AGENT_EGRESS=open          (real providers are reached over the internet)
+# then bring the stack up; dev.sh creates secrets/llm_key_kek when missing
+./dev.sh up
+```
+
+From the web app: Settings -> AI provider (catalog, key entry, verification,
+fingerprints). From scripts, through Caddy only:
+
+```bash
+curl -X PUT -H 'Cookie: better-auth.session_token=<token>' \
+     -H 'Origin: http://localhost:18080' -H 'content-type: application/json' \
+     -d '{"provider":"deepseek","modelId":"deepseek-flash","apiKey":"sk-..."}' \
+     localhost:18080/providers/config
+```
+
+The manager answers with the masked view (selection plus key fingerprints, and
+never the key). The next request to `/u/<user_id>/...` resolves, delivers
+`POST /config` to the agent (`credentials.modify` -> `setProvider` ->
+`conversation.configure`, serialized with prompts), and the prompt is answered
+by the provider. A user's own sandbox can read only their own key from its own
+process memory; an idle-stopped sandbox holds no key material at all.
+
+Production prerequisite (RFC 0012 §8.3): terminate TLS at Caddy (automatic
+HTTPS on a public site address, or `tls internal` for private deployments)
+before opening the BYOK endpoints to users — the shipped Caddyfile serves
+plain HTTP on loopback, which is a dev-stack exception.
+
+### Standalone (no manager)
+
+Running the agent image directly keeps the secret-file branch of
+`agent/model.ts`: mount `secrets/` at `/run/secrets` and set the model id.
 
 ```bash
 # .env: OPENROUTER_MODEL=<model id>; secrets/openrouter_api_key: the key
-./dev.sh up --provider openrouter
+docker run -e OPENROUTER_MODEL=<model id> \
+     -v "$PWD/secrets:/run/secrets:ro" affido-agent:latest
 ```
 
-`dev.sh` builds `affido-agent:openrouter` (base image plus
-`ENV OPENROUTER_MODEL`, the only lever `create_args()` leaves) and passes
-`AGENT_SECRETS_DIR=<host path to secrets/>` to compose. The manager then mounts
-that host dir at `/run/secrets` on each new sandbox, and `model.ts` reads the key
-with `readSecret()` and hands it to pi-ai through a `CredentialStore`
-(`createModels({ credentials })`). Selection follows `openrouter_api_key` ->
-`openai_api_key` -> faux. Changing provider or model id needs
-`./dev.sh reload`, because a container's env is fixed at `docker create`;
-reload recreates the containers and keeps the registry, the Postgres volume and
-the per-user volumes.
+Selection follows `openrouter_api_key` -> `openai_api_key` -> faux. This path
+has no per-user isolation: one key, one container, no manager. The manager
+stack never uses it.
 
 ## Verify
 
 `./verify.sh` type-checks the agent (`npm run typecheck`, `tsc --noEmit` under
-`strict`), runs its unit tests, builds `affido-agent:latest`, starts the
-control plane, then runs the e2e suite and `./verify-sandbox.sh`. It exits
-non-zero on the first failure.
+`strict`), runs its unit tests and the manager's BYOK unit tests, builds
+`affido-agent:latest`, starts the control plane, then runs the e2e suite,
+`./verify-sandbox.sh`, the security containment negatives, and finally the
+BYOK chain against a fake OpenAI-compatible upstream (RFC 0012 §10: the
+default gate stays keyless; the BYOK phase re-creates the stack with egress
+open and a same-network fake provider, proves delivery, rotation,
+validation and the L0/L1/recreation durability, then restores the keyless
+default). It exits non-zero on the first failure.
 
 `./e2e-test/run.sh` asserts that compose declares only the control plane, then
 runs two checks through Caddy only:
@@ -465,6 +506,13 @@ runs two checks through Caddy only:
 - `uploads.sh`: creates a directory, uploads a two-level tree with full paths
   (PRD 0003), reads a file back through the agent's own file API, asserts the
   tree listing, refuses `../` escapes, and deletes the subtree.
+- `skills.sh` and `artifacts.sh`: the marketplace loop (install, verify,
+  corruption, uninstall) and the documents dance with its downloads.
+- `providers.sh`: the manager's BYOK API in the default stack — catalog served
+  from the agent image, cookieless 401 before the write handlers, the
+  `egress_blocked` fail-closed, custom-baseUrl rules, the no-Origin 403,
+  `no-store`, session binding, the trusted-caller token wall, and the peer
+  guard on `/providers/*`.
 
 `./verify-sandbox.sh` (part of the gate) then proves the L0 idle pause, the
 manager's L1 stop and restart with the same conversation and entries, and that a

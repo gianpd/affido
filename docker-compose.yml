@@ -46,9 +46,14 @@
 				"EVICT_TICK_S": "${EVICT_TICK_S:-15}",
 				"AGENT_IDLE_MS": "${AGENT_IDLE_MS:-5000}",
 				"AGENT_CITATIONS_DEFAULT": "${AGENT_CITATIONS_DEFAULT:-}",
-				"AGENT_EGRESS": "${AGENT_EGRESS:-off}"
+				"AGENT_EGRESS": "${AGENT_EGRESS:-off}",
+				"PROVIDER_DEV_HTTP": "${PROVIDER_DEV_HTTP:-}",
+				"FAKE_UPSTREAM_CONTAINER": "${FAKE_UPSTREAM_CONTAINER:-}"
 			},
-			"volumes": ["/var/run/docker.sock:/var/run/docker.sock"],
+			"volumes": [
+				"/var/run/docker.sock:/var/run/docker.sock",
+				"./secrets/llm_key_kek:/run/secrets/llm_key_kek:ro"
+			],
 			"depends_on": { "oltp": { "condition": "service_healthy" } },
 			"restart": "unless-stopped",
 			"networks": ["agents"]

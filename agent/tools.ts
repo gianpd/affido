@@ -427,6 +427,53 @@ export class SwitchSessionTool extends HttpTool {
 	}
 }
 
+/** Apply a delivered provider config (RFC 0012 §5.4). The manager is the
+ * only writer of desired state and calls this at resolve time; a user driving
+ * their own sandbox's /config directly through /u/<id>/config (same
+ * forward_auth wall) can only desync their own runtime until the next resolve
+ * overwrites it. Activates the agent: the conversation reconfigure joins the
+ * DurableHarness serialization chain, so an in-flight prompt finishes on the
+ * old provider (§7.1) and a queued one runs on the new one. The key exists in
+ * process memory only (R3). */
+export class ConfigTool extends HttpTool {
+	constructor() {
+		super("config", "POST", "/config");
+	}
+
+	async handle({ req, agent }: ToolRequest): Promise<unknown> {
+		const body = await readBody(req);
+		const provider = body.provider;
+		const modelId = body.modelId;
+		if (typeof provider !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(provider))
+			throw new HttpError(400, { error: "invalid_provider", message: "provider must be 1-64 chars of [a-z0-9-]" });
+		if (typeof modelId !== "string" || !(1 <= modelId.length && modelId.length <= 200))
+			throw new HttpError(400, { error: "invalid_model", message: "modelId must be 1-200 characters" });
+		if (provider === "faux" && modelId !== "faux-1")
+			throw new HttpError(400, { error: "invalid_model", message: "the faux provider has exactly one model: faux-1" });
+		let apiKey: string | undefined;
+		if (body.apiKey !== undefined) {
+			if (typeof body.apiKey !== "string" || !(1 <= body.apiKey.length && body.apiKey.length <= 4096))
+				throw new HttpError(400, { error: "invalid_api_key", message: "apiKey must be 1-4096 characters" });
+			apiKey = body.apiKey;
+		}
+		let baseUrl: string | undefined;
+		if (body.baseUrl !== undefined) {
+			if (typeof body.baseUrl !== "string" || !(1 <= body.baseUrl.length && body.baseUrl.length <= 2048))
+				throw new HttpError(400, { error: "invalid_base_url", message: "baseUrl must be 1-2048 characters" });
+			baseUrl = body.baseUrl;
+		}
+		try {
+			return await agent.configureModel({ provider, modelId, apiKey, baseUrl });
+		} catch (error) {
+			// buildProvider throws plain Errors (unknown built-in, missing baseUrl);
+			// map them to 400 so delivery failures stay actionable.
+			if (error instanceof Error && !(error instanceof HttpError))
+				throw new HttpError(400, { error: "invalid_provider", message: error.message });
+			throw error;
+		}
+	}
+}
+
 /** Start a new context in the same conversation (a `pi.reset` entry). */
 export class ResetTool extends HttpTool {
 	constructor() {

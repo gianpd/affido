@@ -25,6 +25,7 @@ pass "sandbox manager image affido-agent:latest is available"
 ./uploads.sh
 ./skills.sh
 ./artifacts.sh
+./providers.sh
 
 echo
 echo "E2E CHECKS PASSED"

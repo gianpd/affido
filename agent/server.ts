@@ -29,6 +29,7 @@ import { createModel } from "./model.ts";
 import {
 	ArtifactTool,
 	CitationsTool,
+	ConfigTool,
 	CreateUploadDirTool,
 	DeleteArtifactsTool,
 	DeleteRawTool,
@@ -84,13 +85,14 @@ const parseCitationsDefault = (raw: string | undefined): CitationMode => {
 
 const log: Log = (...args) => console.log(`[${AGENT}]`, ...args);
 
-const { models, model } = await createModel();
+const { models, credentials, model } = await createModel();
 const agent = new ContainerAgent({
 	name: AGENT,
 	workspace: WORKSPACE,
 	sessionDb: SESSION_DB,
 	idleMs: IDLE_MS,
 	models,
+	credentials,
 	model,
 	thinkingLevel: parseThinkingLevel(process.env.THINKING_LEVEL),
 	citationsDefault: parseCitationsDefault(process.env.CITATIONS_DEFAULT),
@@ -122,6 +124,7 @@ const tools: HttpTool[] = [
 	new ArtifactTool(WORKSPACE),
 	new DeleteArtifactsTool(WORKSPACE),
 	new PromptTool(),
+	new ConfigTool(),
 	new NewSessionTool(),
 	new SwitchSessionTool(),
 	new ResetTool(),

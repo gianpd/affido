@@ -5,6 +5,7 @@
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
+import type { CredentialStore, MutableModels } from "@earendil-works/pi-ai";
 import { AssistantEntry, createRegistry, defineExtension, section } from "@earendil-works/pi-durable";
 import type { ConversationId, EntryId, SubmissionDraft } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
@@ -18,8 +19,8 @@ import { buildSkillHint, renderSkillsSection } from "./skills.ts";
 import { describeArtifacts, snapshotArtifacts } from "./artifacts.ts";
 import { TraceReader, type TraceEntryDetail, type TraceQuery, type TraceReport, type TraceSource } from "./trace.ts";
 import type { CitationsTraceReport } from "./citation-report.ts";
-import type { AgentOptions, CitationMode, CitationView, Log, PromptResult, RunCitations } from "./types.ts";
-import type { AgentApi } from "./types.ts";
+import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, PromptResult, ProviderConfig, RunCitations } from "./types.ts";
+import { configureProvider } from "./model.ts";
 
 /** The registry every `ContainerAgent` runs on: the coding tools, the citation
  * tools, and the container prompt section. Exported so an injected, real
@@ -70,8 +71,13 @@ export class ContainerAgent implements AgentApi {
 	#harness: HarnessLifecycle;
 	#citationsDefault: CitationMode;
 	#store: WorkspaceCitationStore;
+	#models: MutableModels;
+	#credentials: CredentialStore;
+	/** sha256(key)[:12] of the delivered key, or null; the only key-derived
+	 * value /status reports (RFC 0012 §5.4 step 3). Never the key itself. */
+	#keyFingerprint: string | null = null;
 
-	constructor({ name, workspace, sessionDb, idleMs, models, model, thinkingLevel, citationsDefault, context, log, harness }: AgentOptions) {
+	constructor({ name, workspace, sessionDb, idleMs, models, credentials, model, thinkingLevel, citationsDefault, context, log, harness }: AgentOptions) {
 		this.#name = name;
 		this.#workspace = workspace;
 		this.#sessionDb = sessionDb;
@@ -79,6 +85,8 @@ export class ContainerAgent implements AgentApi {
 		this.#context = context;
 		this.#log = log;
 		this.#citationsDefault = citationsDefault ?? "off";
+		this.#models = models;
+		this.#credentials = credentials;
 		// A separate environment for the file API; same local file system id as the tools.
 		this.#apiEnv = new NodeExecutionEnv({ cwd: workspace });
 		// One citation store per agent: the corpus index is lazy and shared (RFC 0006 §5.2).
@@ -120,6 +128,7 @@ export class ContainerAgent implements AgentApi {
 			agent: this.#name,
 			paused: this.#harness.paused,
 			model: this.#model,
+			keyFingerprint: this.#keyFingerprint,
 			workspace: this.#workspace,
 			sessionDb: this.#sessionDb,
 			conversationId: this.#harness.conversationId,
@@ -343,6 +352,18 @@ export class ContainerAgent implements AgentApi {
 	async switchSession(conversationId: number) {
 		const { conversationId: activeId, entries } = await this.#harness.switchSession(conversationId as ConversationId);
 		return { agent: this.#name, conversationId: activeId, entries };
+	}
+
+	/** RFC 0012 §5.4: apply a delivered provider config. The credential and
+	 * provider upserts land on the shared collection first; the harness then
+	 * pins the active conversation to the new ModelRef on its serialization
+	 * chain (§7.1). The key itself never leaves process memory. */
+	async configureModel({ provider, modelId, apiKey, baseUrl }: ProviderConfig) {
+		const applied = await configureProvider(this.#models, this.#credentials, { id: provider, modelId, baseUrl, apiKey });
+		this.#model = applied.model;
+		this.#keyFingerprint = applied.fingerprint;
+		await this.#harness.configureModel(applied.model);
+		return { agent: this.#name, model: this.#model, keyFingerprint: this.#keyFingerprint };
 	}
 
 	/** Start a new context: older entries stay in storage, the model stops seeing them. */

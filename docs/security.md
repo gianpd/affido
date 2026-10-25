@@ -21,8 +21,11 @@ not a replacement for it.
    `pi-ws-<user>` volume.
 2. **Session state** — SQLite at `SESSION_DB` on the per-user `pi-data-<user>`
    volume (full conversation history, traces, annotations).
-3. **Model credentials** — files under the host `secrets/` dir, mounted
-   read-only at `/run/secrets` when a real provider is configured.
+3. **Model credentials** — per-user API keys (BYOK, RFC 0012): AES-256-GCM
+   ciphertext in Postgres, encrypted with the KEK at
+   `secrets/llm_key_kek` (mounted into the manager only); plaintext exists
+   only in the browser's TLS-wrapped POST, the manager's memory during
+   setup/delivery/validation, and the user's own sandbox process memory.
 4. **Control-plane credentials** — `MANAGER_TOKEN` (manager HTTP API),
    `BETTER_AUTH_SECRET` (web sessions), the Postgres registry.
 5. **Host integrity** — the Docker socket and the images the manager creates.

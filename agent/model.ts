@@ -1,11 +1,20 @@
-// Model selection: API keys come from secret files, not environment variables.
-// Default: the bundled faux provider, scripted by transcript state, so the demo
-// runs without a key. Set OPENROUTER_MODEL or OPENAI_MODEL to use a real provider.
+// Model selection: the BYOK runtime (RFC 0012) plus the legacy standalone path.
+// The manager delivers {provider, modelId, apiKey, baseUrl?} to POST /config at
+// resolve time; the key lives in the InMemoryCredentialStore only (R3) and
+// re-delivery after any restart is the manager's job (§5.4). Standalone image
+// runs (no manager) keep the secret-file branch below: API keys come from
+// secret files, not environment variables. Default: the bundled faux provider,
+// scripted by transcript state, so the demo runs without a key.
 
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { InMemoryCredentialStore, type Message } from "@earendil-works/pi-ai";
-import { createModels } from "@earendil-works/pi-ai/models";
+import { envApiKeyAuth } from "@earendil-works/pi-ai";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { createModels, createProvider } from "@earendil-works/pi-ai/models";
+import type { CredentialStore, Model, MutableModels, Provider } from "@earendil-works/pi-ai";
+import type { ModelRef } from "@earendil-works/pi-durable";
 import {
 	fauxAssistantMessage,
 	fauxProvider,
@@ -15,6 +24,13 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
+import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
+import { groqProvider } from "@earendil-works/pi-ai/providers/groq";
+import { togetherProvider } from "@earendil-works/pi-ai/providers/together";
+import { fireworksProvider } from "@earendil-works/pi-ai/providers/fireworks";
+import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
+import { cerebrasProvider } from "@earendil-works/pi-ai/providers/cerebras";
+import { mistralProvider } from "@earendil-works/pi-ai/providers/mistral";
 import type { ModelBundle } from "./types.ts";
 
 // Docker Compose mounts each secret as a file here; the API key never enters the process environment.
@@ -28,6 +44,90 @@ export const readSecret = async (name: string): Promise<string | undefined> => {
 		if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
 	}
+};
+
+/** sha256(key) as 12 hex chars — the only key-derived value any API returns (RFC 0012 §8.3). */
+export const keyFingerprint = (apiKey: string): string => createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
+
+/** The catalog built-ins (RFC 0012 §5.1): curated pi-ai factories, keyed by catalog id. */
+const BUILTIN_PROVIDERS: Readonly<Record<string, () => Provider>> = {
+	openrouter: openrouterProvider,
+	openai: openaiProvider,
+	deepseek: deepseekProvider,
+	groq: groqProvider,
+	together: togetherProvider,
+	fireworks: fireworksProvider,
+	xai: xaiProvider,
+	cerebras: cerebrasProvider,
+	mistral: mistralProvider,
+};
+
+export type ProviderBuild = {
+	readonly id: string;
+	readonly modelId: string;
+	/** Required for non-built-in, non-faux providers (custom endpoints, the e2e fake upstream). */
+	readonly baseUrl?: string;
+};
+
+/** One model entry of a custom OpenAI-compatible endpoint: conservative
+ * defaults, no reasoning, text-only. `compat` stays unset so pi-ai
+ * auto-detects quirks from the baseUrl (§3.2). */
+const openAICompatModel = (provider: string, id: string, baseUrl: string): Model<"openai-completions"> => ({
+	id,
+	name: id,
+	provider,
+	api: "openai-completions",
+	baseUrl,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	reasoning: false,
+	contextWindow: 128_000,
+	maxTokens: 8_192,
+});
+
+/** RFC 0012 §3.2: catalog built-ins resolve to their pi-ai factory (the stored
+ * credential supplies the key, §3.3); everything else is an OpenAI-compatible
+ * endpoint built with `createProvider` + `openAICompletionsApi()`, registering
+ * the delivered modelId as its single model (custom endpoints carry one
+ * selection at a time, §5.2). */
+export const buildProvider = ({ id, modelId, baseUrl }: ProviderBuild): Provider => {
+	const builtin = BUILTIN_PROVIDERS[id];
+	if (builtin !== undefined) return builtin();
+	if (id === "faux") return fauxProviderScripted();
+	if (baseUrl === undefined) throw new Error(`provider "${id}" is neither a catalog built-in nor faux; baseUrl is required`);
+	return createProvider({
+		id,
+		name: id,
+		baseUrl,
+		auth: { apiKey: envApiKeyAuth(`${id} API key`, []) },
+		models: [openAICompatModel(id, modelId, baseUrl)],
+		api: openAICompletionsApi(),
+	});
+};
+
+export type DeliveredConfig = ProviderBuild & {
+	/** Absent for faux and for keyless selections; the manager always re-delivers it for real providers (§5.4). */
+	readonly apiKey?: string;
+};
+
+export type AppliedConfig = {
+	readonly model: ModelRef;
+	/** Null when no key was delivered; never the key itself. */
+	readonly fingerprint: string | null;
+};
+
+/** The §5.4 sketch, verbatim order: credentials.modify -> models.setProvider
+ * (upsert) -> the caller then pins the conversation with configure(). Mutations
+ * apply to subsequent model calls; an in-flight prompt finishes on the old
+ * provider (§7.1). */
+export const configureProvider = async (
+	models: MutableModels,
+	credentials: CredentialStore,
+	{ id, modelId, baseUrl, apiKey }: DeliveredConfig,
+): Promise<AppliedConfig> => {
+	if (apiKey !== undefined) await credentials.modify(id, async () => ({ type: "api_key", key: apiKey }));
+	models.setProvider(buildProvider({ id, modelId, baseUrl }));
+	return { model: { provider: id, modelId }, fingerprint: apiKey === undefined ? null : keyFingerprint(apiKey) };
 };
 
 const lastToolResult = (messages: readonly Message[]): { name: string; text: string; isError: boolean } | undefined => {
@@ -155,6 +255,16 @@ const scripted: FauxResponseFactory = (transcript) => {
 	});
 };
 
+/** The faux provider with the shared state-driven scripted factory: one
+ * factory per slot, so the one-shot queue is effectively inexhaustible
+ * (see the comment in createModel). Shared by the boot default and the
+ * /config faux fallback (§5.4 step 5). */
+const fauxProviderScripted = (): Provider => {
+	const faux = fauxProvider();
+	faux.setResponses(Array.from({ length: 1_000_000 }, () => scripted));
+	return faux.provider;
+};
+
 export const createModel = async (): Promise<ModelBundle> => {
 	const credentials = new InMemoryCredentialStore();
 	const models = createModels({ credentials });
@@ -164,7 +274,7 @@ export const createModel = async (): Promise<ModelBundle> => {
 		if (modelId === undefined) throw new Error("OPENROUTER_MODEL is required when the openrouter_api_key secret is set");
 		await credentials.modify("openrouter", async () => ({ type: "api_key", key: openrouterKey }));
 		models.setProvider(openrouterProvider());
-		return { models, model: { provider: "openrouter", modelId } };
+		return { models, credentials, model: { provider: "openrouter", modelId } };
 	}
 	const openaiKey = await readSecret("openai_api_key");
 	if (openaiKey !== undefined) {
@@ -172,15 +282,13 @@ export const createModel = async (): Promise<ModelBundle> => {
 		if (modelId === undefined) throw new Error("OPENAI_MODEL is required when the openai_api_key secret is set");
 		await credentials.modify("openai", async () => ({ type: "api_key", key: openaiKey }));
 		models.setProvider(openaiProvider());
-		return { models, model: { provider: "openai", modelId } };
+		return { models, credentials, model: { provider: "openai", modelId } };
 	}
-	const faux = fauxProvider();
-	models.setProvider(faux.provider);
 	// The faux queue is one-shot (one entry per model call, never refilled). A
 	// durable sandbox outlives any small queue: once empty, every prompt settles
 	// `model_error: No more faux responses queued` until the process restarts.
 	// One shared, state-driven factory per slot, so the queue is ~8MB of pointers
 	// and effectively inexhaustible (a prompt spends two or more calls).
-	faux.setResponses(Array.from({ length: 1_000_000 }, () => scripted));
-	return { models, model: { provider: "faux", modelId: "faux-1" } };
+	models.setProvider(fauxProviderScripted());
+	return { models, credentials, model: { provider: "faux", modelId: "faux-1" } };
 };

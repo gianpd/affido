@@ -1,16 +1,28 @@
 #!/usr/bin/env bash
-# Thin wrapper kept for muscle memory: the provider setup lives in ./dev.sh.
+# Removed by RFC 0012: the operator openrouter flow (one shared plaintext key
+# mounted into every sandbox). The manager no longer mounts host secrets;
+# users bring their own keys through the control plane instead:
 #
-# The manager forwards no *_MODEL to `docker create`, so the openrouter provider
-# needs a derived image with `ENV OPENROUTER_MODEL` plus secrets/ mounted at
-# /run/secrets. `./dev.sh up --provider openrouter` does exactly that.
+#   BYOK:    Settings -> AI provider in the web app, or PUT /providers/config
+#            through Caddy (needs AGENT_EGRESS=open and secrets/llm_key_kek).
+#   Standalone: docker run -e OPENROUTER_MODEL=<id> \
+#                 -v "$PWD/secrets:/run/secrets:ro" affido-agent:latest
 #
-# Usage: ./openrouter-setup.sh [--no-up]
+# See README "Use a real model" and docs/rfc/0012-byok-user-selected-providers.md.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-case "${1:-}" in
-	"") exec ./dev.sh up --provider openrouter ;;
-	--no-up) exec ./dev.sh build --provider openrouter ;;
-	*) echo "usage: $0 [--no-up]" >&2; exit 1 ;;
-esac
+cat >&2 <<'TXT'
+openrouter-setup.sh was removed by RFC 0012: the manager no longer mounts
+secrets/ into sandboxes.
+
+  With the stack:   users bring their own key (Settings -> AI provider, or
+                    PUT /providers/config through Caddy). Needs
+                    AGENT_EGRESS=open and secrets/llm_key_kek (./dev.sh up
+                    creates one).
+  Without a manager: docker run -e OPENROUTER_MODEL=<id> \
+                      -v "$PWD/secrets:/run/secrets:ro" affido-agent:latest
+
+See README "Use a real model" and docs/rfc/0012-byok-user-selected-providers.md.
+TXT
+exit 1
