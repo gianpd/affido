@@ -1,16 +1,7 @@
 // CitationStore: the port of RFC 0006 plus the pure pieces every backend shares.
-//
 // One property, mechanical, not judged: an answer reports exactly the citations
 // it used, and every citation is a text span the server located and verified in
-// a real document. Three rules produce it:
-//   1. offsets are the server's — the model never computes one;
-//   2. an annotation is a declaration of reliance — `annotate` locates the
-//      quote, verifies the slice, mints the id; a rejected quote writes nothing;
-//   3. publication is behind a deterministic gate — `evaluatePublish`.
-//
-// This module knows nothing about pi-durable, HTTP, or files: `workspace-store.ts`
-// implements the port over `corpus/raw/`, and `citation-tools.ts` exposes it to
-// the model. All offsets are code points, never UTF-16 units.
+// a real document.
 
 import { createHash } from "node:crypto";
 

@@ -1,12 +1,3 @@
-// Run state of RFC 0006: one run per `/prompt` submission, kept in
-// conversation-scoped documents so it survives pause and restart.
-//
-// `CitationRunDocs` is a family keyed by `runId` (the submission's requestId):
-// annotations, rejection counts, and the published/plain exit. `CurrentRunDoc`
-// is the pointer the tools and hooks read — set by `prompt()` at admission, so
-// a run id never comes from the model (§5.2). Submissions serialize inside one
-// conversation, so the newest pointer is the running run.
-
 import type { Context } from "@earendil-works/chord";
 import type {
 	Conversation,

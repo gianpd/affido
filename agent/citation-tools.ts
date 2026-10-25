@@ -2,16 +2,6 @@
 // Five `defineTool()` registrations installed beside CodingTools, one strict
 // prompt section that renders only inside a strict run, and one generation hook
 // that bounces plain-text answers back to the gate.
-//
-// Everything here runs in the agent container's Node process — "server-side"
-// means exactly that: the model's only outputs are tool calls, and every tool
-// body is ours. Rejections write nothing except their reason counter; the model
-// reads again and retries.
-//
-// The turn budget (§5.5) counts corpus tool calls in the run doc, not assistant
-// rounds: hook handlers cannot write durable state, and call counting is exact,
-// durable, and visible in the report (R12). The cap is 48 — the free-hall value
-// of 24 rounds leaves room for roughly two calls per round.
 
 import type { Context } from "@earendil-works/chord";
 import { defineExtension, defineTool, hook, section } from "@earendil-works/pi-durable";
