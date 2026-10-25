@@ -106,9 +106,7 @@ and what never touches the host at all (the users' provider keys).
 ./dev.sh reset                           # remove containers, volumes, images; start from zero
 ```
 
-The old `--provider openrouter` flow (one shared plaintext key mounted into
-every sandbox) was removed by RFC 0012: the manager no longer mounts host
-secrets into sandboxes. Users who want a real model use BYOK; running the
+Users who want a real model use BYOK; running the
 agent image standalone keeps the secret-file branch of `agent/model.ts`
 (see [Use a real model](#use-a-real-model)).
 
@@ -127,7 +125,7 @@ volumes survive, and `./dev.sh down` is the same thing.
 
 ## Web client
 
-`frontend/` is a SvelteKit 3 app with better-auth accounts, shadcn-svelte
+`frontend/` is a SvelteKit 5 app with better-auth accounts, shadcn-svelte
 components and the AI SDK chat. It shares the `pi` database with the manager.
 Postgres is published on `localhost:15432` (`OLTP_PORT` overrides).
 

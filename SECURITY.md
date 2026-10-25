@@ -7,7 +7,7 @@ backport branches yet.
 
 ## Reporting a vulnerability
 
-Email **security@getaffido.com** (or use GitHub's private vulnerability
+Email **security@affido.eu** (or use GitHub's private vulnerability
 reporting once it is enabled on the repo). Include reproduction steps and the
 affected component (`agent`, `sandbox-manager`, `frontend`, `caddy`). You will
 get an acknowledgement within 7 days. Please do not open public issues for

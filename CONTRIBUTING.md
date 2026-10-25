@@ -63,9 +63,7 @@ CI runs the same gate on every push and pull request.
 
 ## Pull requests
 
-Small, single-purpose, with the relevant RFC or issue linked. If you change
-behavior the README claims (idle pause, resume, idempotent `/prompt`,
-citations), update the README in the same change.
+Small, single-purpose, with the relevant RFC or issue linked. 
 
 ## Reporting vulnerabilities
 
