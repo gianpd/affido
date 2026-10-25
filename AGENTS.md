@@ -29,6 +29,7 @@ These are the product. Do not break them casually.
 - `GET /health` and `GET /status` must never open storage. A probe that activates the agent defeats idle pause, so the sandbox never idles out.
 - `POST /prompt` is idempotent by `requestId`: the same id returns the admitted submission instead of running again. Do not add a code path that runs a second submission for the same id.
 - `#syncAgent` rewrites the stored `pi.agent` when the provider/model changes, and the stored thinking level when `THINKING_LEVEL` changes. Changing a model must not require wiping a session.
+- Provider and key changes are runtime state (RFC 0012 BYOK), never `docker create` inputs: the manager stores them (AES-256-GCM ciphertext in Postgres) and delivers `POST /config` to the running agent on every resolve, serialized with prompts on the same chain. The agent holds keys in memory only — never in `SESSION_DB`, `WORKSPACE`, container env, or the image.
 - Workspace paths are confined to `WORKSPACE` through `NodeExecutionEnv` / `workspacePath`. New file endpoints must use the same environment, not raw `fs`.
 - New HTTP routes are `HttpTool` subclasses in `tools.ts` registered in the server; do not add ad-hoc routing branches in `server.ts`. Declare explicitly whether a route activates the agent.
 - Sandboxes are created by `sandbox_manager.py` (`create_args`), not by compose. Compose declares only `caddy`, `oltp`, `sandbox-manager`, and `e2e-test/run.sh` fails if an `agent*` service appears. Changing sandbox topology (networks, mounts, model secrets, workdir) is a manager change.
@@ -49,10 +50,10 @@ These are the product. Do not break them casually.
 
 ## Commands
 
-- Agent gate: `cd agent && npm run typecheck && npm test`. `npm test` runs `agent.test.ts` and `corpus.test.ts` under `node --test`. If you add a test file, add it to the `test` script.
+- Agent gate: `cd agent && npm run typecheck && npm test`. `npm test` runs the test files listed in the `test` script under `node --test`. If you add a test file, add it to the `test` script.
 - Frontend gate: `cd frontend && pnpm check` (svelte-check), plus `pnpm lint` (prettier + eslint). Unit tests: `pnpm test:unit -- --run`. Do not run the Playwright suite unless the change touches the UI and the user asked for it; it downloads browsers.
-- Stack gate: `./verify.sh` — typecheck, unit tests, builds `affido-agent:latest`, starts the control plane, runs `e2e-test/run.sh` and `verify-sandbox.sh`. Use it when a change crosses the agent/manager/Caddy boundary.
-- Local stack: `./dev.sh up [--provider fake|openrouter]`, `./dev.sh reload [--provider fake|openrouter]` (rebuild agent code, recreate sandboxes, keep Postgres and per-user volumes), `./dev.sh down`, `./dev.sh reset` (removes every container, volume and agent image of this project), `./dev.sh secrets` (which value lands where). `dev.sh` passes `AGENT_IMAGE` / `AGENT_SECRETS_DIR` to compose, so a provider switch also needs `reload` (sandbox env is fixed at `docker create`).
+- Stack gate: `./verify.sh` — typecheck, unit tests, manager unit tests, builds `affido-agent:latest`, starts the control plane, runs `e2e-test/run.sh` (includes `providers.sh`) and `verify-sandbox.sh`, then a BYOK phase (`e2e-test/byok.sh` against the e2e fake upstream, egress temporarily open) before restoring the keyless default. Use it when a change crosses the agent/manager/Caddy boundary.
+- Local stack: `./dev.sh up`, `./dev.sh reload` (rebuild agent code, recreate sandboxes, keep Postgres and per-user volumes), `./dev.sh down`, `./dev.sh reset` (removes every container, volume and agent image of this project), `./dev.sh secrets` (which value lands where). `dev.sh` passes `AGENT_IMAGE` / `AGENT_EGRESS` to compose and creates `secrets/llm_key_kek` when missing; there is no `--provider` flag anymore (RFC 0012 removed the operator openrouter flow). Provider and key changes are BYOK at runtime (`PUT /providers/config` or Settings -> AI provider) and need no `reload`; real providers require `AGENT_EGRESS=open`.
 - Do not run the full `./verify.sh` for docs-only or single-file refactors; run the narrow gate.
 - E2E traffic must go through Caddy at `localhost:18080` under `/u/<user_id>/...`. Do not dial an agent container by IP or `:8080` in tests: that bypasses `forward_auth`, session checks, and the `X-Sandbox-Endpoint` stripping assertion.
 - For ad-hoc scripts, `write` them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
@@ -72,7 +73,7 @@ These are the product. Do not break them casually.
 
 - Never commit `secrets/`, `.env`, or any API key. `.env.example` is the template; document new variables there in the same comment style.
 - `MANAGER_TOKEN` is the only credential for the manager's HTTP API (it binds no host port). The `dev-manager-token` default exists for local compose only; do not use it in a deployment path.
-- Sandbox agents run the keyless faux provider by default: no `*_MODEL`, no mounted secret. Wiring a real model into manager-created sandboxes is a `create_args` change, not a compose change.
+- Sandbox agents run the keyless faux provider by default: no `*_MODEL`, no mounted secret. Real models are user-supplied keys (RFC 0012 BYOK): the manager encrypts them under `secrets/llm_key_kek` (mounted into the manager only) and delivers them at resolve time — never through `create_args`, container env, or a mount. Faux-to-real wiring is a manager `/providers` change, not a compose change.
 - Postgres is published on `localhost:${OLTP_PORT:-15432}`. Do not hardcode 5432 anywhere except inside the compose service.
 - Runtime artifacts (`bench/ips.txt`, `bench/spec-real.json`, `__pycache__/`) stay untracked.
 
