@@ -24,7 +24,7 @@ import {
 	uploadsDocIdOf,
 } from "./corpus.ts";
 import { HttpError } from "./http.ts";
-import { IngestRawTool } from "./tools.ts";
+import { DerivedTextTool, IngestRawTool } from "./tools.ts";
 import type { AgentApi } from "./types.ts";
 
 const workspace = (): Promise<string> => mkdtemp(join(tmpdir(), "corpus-"));
@@ -152,4 +152,29 @@ test("IngestRawTool answers with the staged hash and byte count", async () => {
 	assert.equal(out.sourceSha256, sha256(bytes));
 	assert.equal(out.searchable, true);
 	assert.equal(noted, 1);
+});
+
+// The preview of a PDF reads its derived text: the tool must resolve the
+// corpus path itself (the web app never builds one) and reject path-shaped ids
+// before they reach the agent.
+test("DerivedTextTool serves the derived text of one docId", async () => {
+	const tool = new DerivedTextTool();
+	const reads: string[] = [];
+	const agent = {
+		readFile: async (path: string) => {
+			reads.push(path);
+			return { agent: "a", path, content: "cauzione provvisoria" };
+		},
+	} as unknown as AgentApi;
+	const req = Readable.from([]) as unknown as IncomingMessage;
+
+	const out = (await tool.handle({ req, url: new URL("http://sandbox/text?docId=doc7"), agent })) as Record<string, unknown>;
+
+	assert.deepEqual(reads, ["corpus/text/doc7.txt"]);
+	assert.equal(out.content, "cauzione provvisoria");
+	assert.equal(out.path, "corpus/text/doc7.txt");
+	await assert.rejects(
+		tool.handle({ req, url: new URL("http://sandbox/text?docId=../raw/doc1"), agent }),
+		HttpError,
+	);
 });

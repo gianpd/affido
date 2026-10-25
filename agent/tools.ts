@@ -3,6 +3,7 @@
 import type { EntryId } from "@earendil-works/pi-durable";
 import { HttpError, RawResponse, readBody, readRawBody } from "./http.ts";
 import {
+	derivedTextRelativePath,
 	indexedAsText,
 	MAX_UPLOAD_BYTES,
 	rawRelativePath,
@@ -537,6 +538,21 @@ export class RawFileTool extends HttpTool {
 		const docId = safeDocId(url.searchParams.get("docId") ?? "");
 		const filename = url.searchParams.get("filename") ?? "";
 		return agent.readFile(rawRelativePath(docId, filename));
+	}
+}
+
+/** Read the text derived from one staged PDF (`corpus/text/<docId>.txt`), for
+ * the dashboard preview. Activates the agent, like `/raw`: it reads through
+ * the same env. No derived text (not a PDF, or extraction produced none) is a
+ * 404 the caller maps to its own message. */
+export class DerivedTextTool extends HttpTool {
+	constructor() {
+		super("derived_text", "GET", "/text");
+	}
+
+	async handle({ agent, url }: ToolRequest): Promise<unknown> {
+		const docId = safeDocId(url.searchParams.get("docId") ?? "");
+		return agent.readFile(derivedTextRelativePath(docId));
 	}
 }
 

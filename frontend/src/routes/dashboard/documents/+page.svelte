@@ -76,8 +76,8 @@
 			<p class="text-sm text-muted-foreground">Library</p>
 			<h1 class="mt-1 font-display text-4xl tracking-tight">Documents</h1>
 			<p class="mt-2 max-w-xl text-sm text-muted-foreground">
-				Text documents the agent can reference. Upload a file or paste text, then group documents
-				into corpus collections.
+				Documents the agent can cite — text formats and PDF. Upload a file or paste text, then group
+				documents into corpus collections.
 			</p>
 		</div>
 		<Button href="/dashboard/documents?new=1">
@@ -114,7 +114,7 @@
 				</Empty.Media>
 				<Empty.Title>No documents yet</Empty.Title>
 				<Empty.Description>
-					Add a contract, notes or a data file. Text only, up to {data.maxUploadLabel}.
+					Add a contract, notes or a data file. Text or PDF, up to {data.maxUploadLabel}.
 				</Empty.Description>
 			</Empty.Header>
 			<Empty.Content>
@@ -271,12 +271,13 @@
 							id="doc-file"
 							name="file"
 							type="file"
-							accept=".txt,.md,.markdown,.csv,.json,.yaml,.yml,.log,.xml,.html,.htm,text/*"
+							accept=".txt,.md,.markdown,.csv,.json,.yaml,.yml,.log,.xml,.html,.htm,.pdf,text/*,application/pdf"
 							class="border-0 bg-transparent shadow-none"
 						/>
 					</div>
 					<Field.Description
-						>Text, Markdown, CSV, JSON, YAML, XML. Max {data.maxUploadLabel}.</Field.Description
+						>Text, Markdown, CSV, JSON, YAML, XML or PDF — a PDF is searchable through its extracted
+						text. Max {data.maxUploadLabel}.</Field.Description
 					>
 				</Field.Field>
 			</Field.Group>
@@ -327,6 +328,9 @@
 					{#if data.selected.preview?.unavailable === 'binary'}
 						This file is not text, so there is no preview. The agent reads the stored bytes from its
 						workspace.
+					{:else if data.selected.preview?.unavailable === 'notext'}
+						This PDF has no extracted text (it may be scanned or image-only), so there is no
+						preview. The agent still reads the stored bytes from its workspace.
 					{:else if data.selected.preview?.unavailable === 'reingest'}
 						This document was created before the sandbox stored uploads. It has no bytes on record
 						and must be re-uploaded.

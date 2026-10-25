@@ -305,6 +305,7 @@ workspace filesystem, like `/ingest`, and never activate the agent.
 | GET | `/file?path=...` | yes | read a workspace text file |
 | POST | `/ingest?docId=...&filename=...` | no | raw body -> `{ docId, path, bytes, sourceSha256, searchable }`; stages the bytes at `corpus/raw/<docId><ext>`, derives PDF text into `corpus/text/` |
 | GET | `/raw?docId=...&filename=...` | yes | read the staged bytes of a document back |
+| GET | `/text?docId=...` | yes | read the text derived from a staged PDF (`corpus/text/<docId>.txt`); 404 when none was extracted |
 | DELETE | `/ingest?docId=...&filename=...` | no | remove the staged bytes of a document |
 | POST | `/uploads/dir` | no | `{ path }` -> create/confirm a directory under `corpus/uploads/` (PRD 0003) |
 | POST | `/uploads/file?path=md-to-docx/SKILL.md` | no | raw body -> `{ path, bytes, sha256, searchable }`; writes the file at `corpus/uploads/<path>`; a PDF also gets its text derived into `corpus/text/` |

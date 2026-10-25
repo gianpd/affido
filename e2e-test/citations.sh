@@ -130,6 +130,28 @@ staged_pdf="$(curl -fsS --max-time 120 -X POST -H "Cookie: better-auth.session_t
 	|| fail "the PDF upload must report searchable=True (derived text): ${staged_pdf}"
 pass "PDF staged under corpus/uploads with extracted text"
 
+echo "== the dashboard preview reads a PDF's derived text (GET /text) =="
+# A third user, so the duplicate ingest cannot pollute USER2's corpus and its
+# uploads-tree citation assertions below.
+USER3="citetxt-${RUN_ID}"
+TOKEN3="tok-${USER3}"
+seed_session "${USER3}" "${TOKEN3}"
+curl -fsS --max-time 120 -X POST -H "Cookie: better-auth.session_token=${TOKEN3}" \
+	-H 'content-type: application/pdf' \
+	--data-binary @"${PDF_FIXTURE}" \
+	"${BASE}/u/${USER3}/ingest?docId=doc_pdf1&filename=contratto.pdf" >/dev/null \
+	|| fail "PDF ingest through caddy failed"
+derived="$(curl -fsS --max-time 120 -H "Cookie: better-auth.session_token=${TOKEN3}" \
+	"${BASE}/u/${USER3}/text?docId=doc_pdf1")" || fail "GET /text failed"
+[[ "$(printf '%s' "${derived}" | field "d['path']")" == "corpus/text/doc_pdf1.txt" ]] \
+	|| fail "derived text path mismatch: ${derived}"
+printf '%s' "${derived}" | field "d['content']" | grep -q "rinnova" \
+	|| fail "derived text must carry the PDF sentence: ${derived}"
+missing="$(curl -sS --max-time 120 -o /dev/null -w '%{http_code}' -H "Cookie: better-auth.session_token=${TOKEN3}" \
+	"${BASE}/u/${USER3}/text?docId=doc_nosuch")"
+[[ "${missing}" == "404" ]] || fail "a docId without derived text must 404, got ${missing}"
+pass "GET /text serves extracted PDF text and 404s without one"
+
 pdf_reply="$(curl -fsS --max-time 120 -X POST -H "Cookie: better-auth.session_token=${TOKEN2}" \
 	-H 'content-type: application/json' \
 	-d "{\"prompt\":\"When does the uploaded contract renew?\",\"requestId\":\"pdf-${RUN_ID}\",\"citations\":\"required\"}" \

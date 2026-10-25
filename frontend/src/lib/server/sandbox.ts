@@ -413,6 +413,15 @@ export const readSandboxDocument = (
 	return sandboxFetch<{ path: string; content: string }>(event, `/raw?${params}`);
 };
 
+/** Read the text the sandbox extracted from a staged PDF (`corpus/text/`), for
+ * the preview. A 404 means no text was ever derived (not a PDF, or a scanned
+ * one); the sandbox owns the path, the caller only passes the docId. */
+export const readSandboxDerivedText = (
+	event: RequestEvent,
+	docId: string
+): Promise<{ path: string; content: string }> =>
+	sandboxFetch<{ path: string; content: string }>(event, `/text?${new URLSearchParams({ docId })}`);
+
 /** Delete a document's staged bytes. A sandbox that is already gone is not an error. */
 export const deleteSandboxDocument = (
 	event: RequestEvent,

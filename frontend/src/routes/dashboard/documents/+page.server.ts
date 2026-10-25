@@ -11,17 +11,23 @@ import {
 import {
 	deleteSandboxDocument,
 	ingestSandbox,
+	readSandboxDerivedText,
 	readSandboxDocument,
-	sandboxErrorMessage
+	sandboxErrorMessage,
+	SandboxError
 } from '#lib/server/sandbox';
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL, UPLOAD_TOO_LARGE } from '#lib/server/upload-limit';
 import type { Actions, PageServerLoad } from './$types';
 
-type DocumentPreview = { text: string } | { unavailable: 'sandbox' | 'binary' | 'reingest' };
+type DocumentPreview =
+	{ text: string } | { unavailable: 'sandbox' | 'binary' | 'reingest' | 'notext' };
 
-/** Text documents render in the dialog; anything else says so instead of guessing. */
+/** Text documents render in the dialog; a PDF renders its extracted text;
+ * anything else says so instead of guessing. */
 const isTextLike = (mimeType: string): boolean =>
 	mimeType.startsWith('text/') || /(json|xml|yaml|csv|javascript|x-sh)/.test(mimeType);
+const isPdf = (mimeType: string, filename: string): boolean =>
+	mimeType === 'application/pdf' || filename.toLowerCase().endsWith('.pdf');
 
 export const load: PageServerLoad = async (event) => {
 	const { locals, url } = event;
@@ -34,9 +40,7 @@ export const load: PageServerLoad = async (event) => {
 	if (selected) {
 		if (!selected.filename) {
 			preview = { unavailable: 'reingest' };
-		} else if (!isTextLike(selected.mimeType)) {
-			preview = { unavailable: 'binary' };
-		} else {
+		} else if (isTextLike(selected.mimeType)) {
 			try {
 				const file = await readSandboxDocument(event, {
 					docId: selected.id,
@@ -46,6 +50,20 @@ export const load: PageServerLoad = async (event) => {
 			} catch {
 				preview = { unavailable: 'sandbox' };
 			}
+		} else if (isPdf(selected.mimeType, selected.filename)) {
+			// The sandbox derives the indexable text of a PDF at upload time; the
+			// preview shows that, never the binary bytes.
+			try {
+				const file = await readSandboxDerivedText(event, selected.id);
+				preview = { text: file.content };
+			} catch (error) {
+				preview =
+					error instanceof SandboxError && error.status !== 404
+						? { unavailable: 'sandbox' }
+						: { unavailable: 'notext' };
+			}
+		} else {
+			preview = { unavailable: 'binary' };
 		}
 	}
 
