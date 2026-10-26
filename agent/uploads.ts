@@ -1,16 +1,3 @@
-// User-driven uploads: a directory tree under WORKSPACE/corpus/uploads that
-// the web app controls directly (PRD 0003). The tree is part of the corpus
-// namespace — the bucket of everything the user handed the agent — so its
-// text files and PDF-derived text are indexed by the citation store like any
-// corpus/raw document. Unlike corpus/raw, the paths here are dictated by the
-// client — one file arrives with its complete destination path and is written
-// exactly there — so this module owns the one validation rule that keeps
-// client-chosen paths inside the uploads root.
-//
-// Nothing here touches the conversation: the tools that call these functions
-// write through `fs` and never activate the agent, so an upload cannot defeat
-// the idle pause.
-
 import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Dirent } from "node:fs";

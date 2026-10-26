@@ -9,6 +9,12 @@ one skill at a time, every act traced and on the record.**
 *affidare* (to entrust) and *affidamento* (the bounded legal delegation).
 That is the whole product in one root: an agent you can hold to account.
 
+It exists because pi's own docs are explicit: *"Pi does not include a built-in
+permission system… If you need stronger boundaries, containerize or sandbox
+Pi"* — and its containerization doc lists four do-it-yourself patterns: plain
+Docker, Docker Sandboxes, OpenShell, Gondolin. Affido is that boundary
+productized and per-user, built on [`@earendil-works/pi-durable`](https://github.com/earendil-works/pi).
+
 Each user gets one sandboxed agent:
 
 - **Bounded.** The agent lives in a container the control plane created on
@@ -30,10 +36,23 @@ Each user gets one sandboxed agent:
 > **Honesty box.** The gate guarantees *attribution, not truth*: every cited
 > span provably exists in your documents and was located by the agent
 > container. Whether the conclusion drawn from it is right stays a human
-> judgment — the model proposes, the code verifies, you decide. Also note:
-> Affido builds on `@earendil-works/pi-durable` 1.3.0, an experimental
-> library; this stack pins it exactly and proves restart-survival in its e2e
-> gate on every run.
+> judgment — the model proposes, the code verifies, you decide. And when the
+> check fails, the quote never becomes a citation: the reply is shown as prose
+> with an explicit *no document evidence* label, and the trace keeps the
+> refusal. Also note: Affido builds on `@earendil-works/pi-durable` 1.3.0, an
+> experimental library; this stack pins it exactly and proves restart-survival
+> in its e2e gate on every run.
+
+![The citation gate refusing a tampered quote, then publishing the reply whose
+quote verifies](docs/assets/gate-rejection.gif)
+
+*30 s, recorded on the deterministic faux provider the quickstart runs (no API
+key): the model claims fees are payable **annually**; `corpus_annotate` refuses
+the span (`quote_mismatch`), the publish is refused (`unknown_citation`), and
+the reply is labelled *no document evidence* — then the same model quotes the
+stored line exactly and publishes with its citation, `line 8 ·
+attribution_verified`. Higher quality: [MP4, 30 s](docs/assets/gate-rejection.mp4);
+provenance in [`docs/assets/README.md`](docs/assets/README.md).*
 
 ## Quickstart (5 minutes)
 
@@ -380,9 +399,13 @@ bundle end to end, including the faux documents dance that builds a real
 
 A `/prompt` request with `citations: "required"` turns that one submission into
 a strict run. The model gets `corpus_grep`, `corpus_read`, `corpus_annotate`,
-`answer_publish` and `answer_plain`; the reply exists only through the gate:
-every non-heading line must carry a `[cit_...]` token, the declared ids must be
-exactly the tokens used, and every id must be a verified annotation of this run.
+`answer_publish` and `answer_plain`; an answer that carries document evidence
+exists only through the gate: every non-heading line must carry a `[cit_...]`
+token, the declared ids must be exactly the tokens used, and every id must be a
+verified annotation of this run. A quote that is not an exact span of the
+stored document produces no `citationId` at all, so it cannot be cited: further
+`answer_publish` attempts are refused, and the model's remaining exit is
+`answer_plain`, whose reply carries the explicit *no document evidence* label.
 The envelope reports `evidence: "cited" | "plain" | "none"` plus the `citations`
 array; the fields are server-built, never typed by the model. Requests without
 the field keep today's free-form answer; `AGENT_CITATIONS_DEFAULT=required`
@@ -420,8 +443,13 @@ services, so `docker compose ps` lists only caddy, oltp and sandbox-manager.
 ## Use a real model
 
 Sandbox agents are created by the manager, which forwards no `*_MODEL` variable;
-the faux provider is the default and is scripted by transcript state (tool call
-`ls -la`, then an answer built from the listing), so the demo needs no API key.
+the faux provider is the default and is scripted by transcript state: a tool
+call (`ls -la`) then an answer built from the listing, and a citation dance
+(`corpus_grep` → `corpus_read` → `corpus_annotate` → `answer_publish`) when the
+question mentions renewal — so the strict path can be exercised with no API key.
+The recording at the top of this file is one more transcript
+(`agent/citation-gate-demo.ts`): two questions, a tampered quote and an exact
+one.
 
 ### BYOK (bring your own key, RFC 0012)
 
@@ -491,7 +519,7 @@ validation and the L0/L1/recreation durability, then restores the keyless
 default). It exits non-zero on the first failure.
 
 `./e2e-test/run.sh` asserts that compose declares only the control plane, then
-runs two checks through Caddy only:
+runs these checks through Caddy only:
 
 - `happy-path.sh`: caddy -> sandbox-manager (cold provision) -> caddy -> sandbox
   agent -> reply, plus the 401/403 identity checks.

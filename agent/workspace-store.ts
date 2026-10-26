@@ -1,19 +1,3 @@
-// WorkspaceCitationStore: the v1 `CitationStore` over the staged corpus
-// (RFC 0006 §5.2). Documents are the files in `corpus/raw/<docId><ext>` plus
-// the uploads tree under `corpus/uploads/` — one bucket, two ingestion modes.
-// Titles and original filenames of raw documents come from the sidecar
-// `corpus/meta/<docId>.json` the ingest endpoint writes (the control plane
-// owns the metadata; the bytes never leave the volume); uploads-tree files
-// carry their tree path as the title. PDFs of either root are indexed through
-// the derived text of `corpus/text/<docId>.txt`. When RFC 0005 lands, a
-// CatalogStore implements the same port against Postgres + object storage;
-// nothing here or in the tools changes.
-//
-// Reads go through the injected execution env, read-only; no write ever touches
-// `corpus/raw/`. Text is decoded server-side; `version` is always 1 here.
-// All offsets are code points; the walkers below never allocate a copy of the
-// document just to count them.
-
 import { createHash } from "node:crypto";
 import type { Context } from "@earendil-works/chord";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";

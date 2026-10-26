@@ -32,6 +32,7 @@ import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
 import { cerebrasProvider } from "@earendil-works/pi-ai/providers/cerebras";
 import { mistralProvider } from "@earendil-works/pi-ai/providers/mistral";
 import type { ModelBundle } from "./types.ts";
+import { citationGateDemoScript } from "./citation-gate-demo.ts";
 
 // Docker Compose mounts each secret as a file here; the API key never enters the process environment.
 const SECRET_DIR = process.env.SECRET_DIR ?? "/run/secrets";
@@ -188,6 +189,8 @@ const DOCX_DANCE =
 // the staged corpus, so the gate is exercised without a real model. Anything
 // else keeps the two-step workspace listing.
 const scripted: FauxResponseFactory = (transcript) => {
+	const demo = citationGateDemoScript(transcript);
+	if (demo !== undefined) return demo;
 	const tool = lastToolResult(transcript.messages);
 	const userText = lastUserText(transcript.messages);
 	// The skill hint is server-built, so these branches key on its exact shape.
