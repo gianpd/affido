@@ -54,6 +54,8 @@ stored line exactly and publishes with its citation, `line 8 ·
 attribution_verified`. Higher quality: [MP4, 30 s](docs/assets/gate-rejection.mp4);
 provenance in [`docs/assets/README.md`](docs/assets/README.md).*
 
+*The market sells grounding and judgment; affido sells the deterministic gate between them — the quote either is a byte span of a stored document version or it never becomes a citation, and the audit is a hash recompute, not another model.*
+
 ## Quickstart (5 minutes)
 
 ```bash
