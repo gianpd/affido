@@ -30,6 +30,23 @@ ensure_kek() {
 	fi
 }
 
+ensure_manager_token() {
+	# Pentest W1 (2026-10): never run the stack on the well-known compose
+	# default dev-manager-token — the manager's bridge IP answers any local
+	# process, and the manager refuses that default at startup
+	# (sandbox_manager.py enforce_token_default). Same pattern as ensure_kek.
+	if ! grep -q '^MANAGER_TOKEN=' .env 2>/dev/null; then
+		# The operator's .env may lack a trailing newline: prepend one or the
+		# token glues onto the last line and both settings break.
+		if [ -f .env ] && [ -n "$(tail -c 1 .env 2>/dev/null)" ]; then
+			printf '\n' >> .env
+		fi
+		printf 'MANAGER_TOKEN=%s\n' "$(openssl rand -hex 24)" >> .env
+		chmod 600 .env
+		pass "created MANAGER_TOKEN in .env (random per stack)"
+	fi
+}
+
 echo "== typecheck: server.ts must pass tsc --noEmit =="
 (
 	cd agent
@@ -70,15 +87,20 @@ pass "catalog manifest matches the bundle"
 
 echo "== build and start the control plane =="
 ensure_kek
+ensure_manager_token
 # Start from a clean control plane: the BYOK phase below recreates the manager
 # twice more per run, and back-to-back runs on containerd-store daemons can
 # otherwise leave a manager container on a garbage-collected image digest.
 "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
 # Pin the image this script just built: the gate runs the keyless faux
 # provider, so the e2e answers (including the scripted citation dance of RFC
-# 0006) are deterministic. A local docker-compose.override.yml may point
-# interactive stacks elsewhere; this override holds only for this invocation.
-AGENT_IMAGE=affido-agent:latest "${COMPOSE[@]}" up -d --build >/dev/null
+# 0006) are deterministic. AGENT_EGRESS is pinned off for the keyless phases
+# too: an operator .env with AGENT_EGRESS=open (BYOK in use) would otherwise
+# leak through compose interpolation and the egress gate below would see
+# egress=open instead of the keyless default it asserts. A local
+# docker-compose.override.yml may point interactive stacks elsewhere; this
+# override holds only for this invocation.
+AGENT_IMAGE=affido-agent:latest AGENT_EGRESS=off "${COMPOSE[@]}" up -d --build >/dev/null
 pass "caddy, oltp and sandbox-manager are up"
 
 echo "== manager unit tests: BYOK crypto and baseUrl rules (RFC 0012 M1) =="

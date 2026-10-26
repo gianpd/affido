@@ -198,7 +198,11 @@ curl -H 'Cookie: better-auth.session_token=dev-token' localhost:18080/u/dev-user
 
 Settings (`.env`): `MANAGER_TOKEN` (required by every manager endpoint except
 `/healthz` — and manager endpoints answer only to the manager/Caddy/web
-containers, never to a sandbox, token or not), `STOP_AFTER_S` (default 600),
+containers, never to a sandbox, token or not; `./dev.sh up` and `verify.sh`
+generate a random value into `.env` when missing, and the manager refuses to
+start on the well-known compose default or an empty token —
+`MANAGER_ALLOW_DEFAULT_TOKEN=1` is the explicit throwaway opt-in),
+`STOP_AFTER_S` (default 600),
 `EVICT_TICK_S`, `AGENT_IDLE_MS`, `WEB_CONTAINER` (optional: connect the web app
 container to each per-user network), `AGENT_EGRESS` (`off` by default: sandbox
 networks are created `--internal` with no NAT — no route to the internet or

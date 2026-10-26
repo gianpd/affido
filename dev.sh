@@ -94,6 +94,30 @@ ensure_kek() {
 	fi
 }
 
+ensure_manager_token() {
+	# Pentest W1 (2026-10): the compose fallback `dev-manager-token` is a
+	# well-known constant, and the manager's bridge IP answers any host process
+	# without root — with the default, a local process can pause, resolve as, or
+	# read any tenant. Generate a random per-stack token into .env (compose
+	# interpolation feeds the same value to caddy and the manager); the manager
+	# also refuses the known default at startup (sandbox_manager.py,
+	# enforce_token_default) as the second, independent layer.
+	if ! grep -q '^MANAGER_TOKEN=' "${ROOT}/.env" 2>/dev/null; then
+		if ((DRY_RUN)); then
+			printf '     + generate MANAGER_TOKEN into .env\n'
+			return 0
+		fi
+		# The operator's .env may lack a trailing newline: prepend one or the
+		# token glues onto the last line and both settings break.
+		if [ -f "${ROOT}/.env" ] && [ -n "$(tail -c 1 "${ROOT}/.env" 2>/dev/null)" ]; then
+			printf '\n' >> "${ROOT}/.env"
+		fi
+		printf 'MANAGER_TOKEN=%s\n' "$(openssl rand -hex 24)" >> "${ROOT}/.env"
+		chmod 600 "${ROOT}/.env"
+		pass "created MANAGER_TOKEN in .env (random per stack; rotate by editing .env + ./dev.sh up)"
+	fi
+}
+
 build_base() {
 	if ((BUILD)) || ! image_exists "${BASE_IMAGE}"; then
 		echo "== build ${BASE_IMAGE} =="
@@ -123,6 +147,7 @@ summary() {
 	printf 'agent image  %s\n' "$(agent_image)"
 	printf 'default      keyless faux provider; real models via BYOK (Settings -> AI provider)\n'
 	printf 'byok kek     %s\n' "$([ -f "${ROOT}/secrets/llm_key_kek" ] && echo "${ROOT}/secrets/llm_key_kek (mounted into the manager only)" || echo "MISSING: BYOK key writes fail closed")"
+printf 'manager key  %s\n' "$(grep -q '^MANAGER_TOKEN=' "${ROOT}/.env" 2>/dev/null && echo 'MANAGER_TOKEN in .env (random per stack)' || echo 'MISSING: manager refuses the dev-manager-token default')"
 	printf 'egress       %s (BYOK with a real provider needs open)\n' "${AGENT_EGRESS:-off}"
 	printf 'thinking     %s (empty means off)\n' "${THINKING_LEVEL:-off}"
 	printf 'control plane caddy :18080, oltp :%s, sandbox-manager (no host port)\n' "${OLTP_PORT:-15432}"
@@ -153,6 +178,7 @@ compose_up() {
 	local image
 	image="$(agent_image)"
 	ensure_kek
+	ensure_manager_token
 
 	echo "== docker compose up =="
 	local compose_args=(up -d)
@@ -281,7 +307,11 @@ cmd_secrets() {
 Where each value comes from, and where it lands.
 
 .env (gitignored; docker compose interpolates it into the control plane)
-  MANAGER_TOKEN      shared secret for Caddy forward_auth <-> manager HTTP API
+  MANAGER_TOKEN      shared secret for Caddy forward_auth <-> manager HTTP API;
+                     generated randomly by ./dev.sh up|reload and verify.sh when
+                     missing. The manager refuses the well-known compose default
+                     (dev-manager-token) at startup; MANAGER_ALLOW_DEFAULT_TOKEN=1
+                     is the explicit opt-in for throwaway stacks
   STOP_AFTER_S       L1 stop threshold for a paused sandbox
   EVICT_TICK_S       manager eviction/reconcile tick
   AGENT_IDLE_MS      in-process idle pause threshold inside the agent

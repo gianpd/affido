@@ -124,14 +124,14 @@ echo "== trusted-caller path: token wall, write with explicit user_id =="
 # of RFC 0003); e2e drives it from the manager's own network namespace.
 EXEC=(docker compose -f "${ROOT}/docker-compose.yml" exec -T sandbox-manager)
 no_token="$(docker compose -f "${ROOT}/docker-compose.yml" exec -T -e MANAGER_TOKEN= sandbox-manager \
-	python3 - GET "/providers/config?user_id=${USER_A}" < "${E2E_DIR}/manager-call.py" | head -1 | tr -d '\r')"
+	python3 - GET "/providers/config?user_id=${USER_A}" < "${E2E_DIR}/manager-call.py" | head -1 | tr -d '\r' || true)"
 [[ "${no_token}" == "401" ]] || fail "trusted path without token returned ${no_token}, expected 401"
 trusted_put="$("${EXEC[@]}" python3 - PUT /providers/config \
 	"{\"user_id\": \"${USER_A}\", \"provider\": \"faux\", \"modelId\": \"faux-1\"}" \
-	< "${E2E_DIR}/manager-call.py" | tail -1 | field "d['selection']['provider']")"
+	< "${E2E_DIR}/manager-call.py" | tail -1 | field "d['selection']['provider']" || true)"
 [[ "${trusted_put}" == "faux" ]] || fail "trusted PUT did not store the selection: ${trusted_put}"
 trusted="$("${EXEC[@]}" python3 - DELETE "/providers/config?user_id=${USER_A}" \
-	< "${E2E_DIR}/manager-call.py" | tail -1 | field "d['selection']")"
+	< "${E2E_DIR}/manager-call.py" | tail -1 | field "d['selection']" || true)"
 [[ "${trusted}" == "None" ]] || fail "trusted DELETE did not clear the selection: ${trusted}"
 [[ "$(sql -c "SELECT count(*) FROM provider_selection WHERE user_id = '${USER_A}'")" == "0" ]] \
 	|| fail "selection survived the trusted DELETE"

@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Security (pentest W1, 2026-10): the manager no longer runs on the
+  well-known compose default `MANAGER_TOKEN` (`dev-manager-token`). With it,
+  any unprivileged process on the host could reach the manager's bridge IP
+  and pause, resolve as, or read the registry of any tenant. `./dev.sh
+  up|reload` and `verify.sh` now generate a random `MANAGER_TOKEN` into
+  `.env` when missing, and the manager fails closed at startup on the
+  default or an empty token (`MANAGER_ALLOW_DEFAULT_TOKEN=1` is the explicit
+  opt-in for throwaway stacks). Known from the secrets audit §8.2/§8.3,
+  proven and closed by the controlled pentest.
+
 ### Added
 
 - `CADDY_BIND` setting (default `127.0.0.1`): where the published `:18080`

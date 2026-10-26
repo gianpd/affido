@@ -78,6 +78,9 @@ IDLE_GRACE_S    = int(os.getenv("IDLE_GRACE_S", str(EVICT_TICK_S)))
 RECONCILE_S     = int(os.getenv("RECONCILE_S", "60"))
 UNHEALTHY_LIMIT = int(os.getenv("UNHEALTHY_LIMIT", "3"))
 MANAGER_TOKEN     = os.getenv("MANAGER_TOKEN")  # shared secret; all endpoints but /healthz
+
+KNOWN_DEFAULT_TOKEN = "dev-manager-token"
+MANAGER_ALLOW_DEFAULT_TOKEN = os.getenv("MANAGER_ALLOW_DEFAULT_TOKEN", "") == "1"
 MANAGER_CONTAINER = os.getenv("MANAGER_CONTAINER", "sandbox-manager")  # for network connect
 CADDY_CONTAINER   = os.getenv("CADDY_CONTAINER")  # compose container_name of caddy
 WEB_CONTAINER     = os.getenv("WEB_CONTAINER")  # optional: SvelteKit app that calls /resolve
@@ -1529,6 +1532,34 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(404, {"error": "not found"})
 
 
+def enforce_token_default() -> None:
+    """Refuse to serve with no credential or the well-known default.
+
+    Fail-closed second layer behind the dev.sh/verify.sh token generation:
+    `docker compose up` without a MANAGER_TOKEN in .env would otherwise run
+    the whole stack on a constant secret. Exit 1 (compose restart policy will
+    not mask it into availability) unless MANAGER_ALLOW_DEFAULT_TOKEN=1 opts
+    into a throwaway stack explicitly."""
+    if MANAGER_ALLOW_DEFAULT_TOKEN:
+        return
+    if not MANAGER_TOKEN:
+        log.fatal(
+            "MANAGER_TOKEN is empty: every manager endpoint would be unauthenticated. "
+            "Set a random value in .env (./dev.sh up generates one) or set "
+            "MANAGER_ALLOW_DEFAULT_TOKEN=1 to accept an unauthenticated manager."
+        )
+        raise SystemExit(1)
+    if hmac.compare_digest(MANAGER_TOKEN, KNOWN_DEFAULT_TOKEN):
+        log.fatal(
+            "MANAGER_TOKEN is the well-known compose default '%s': any local process "
+            "could pause, resolve as, or read any tenant (pentest W1). Generate a "
+            "random value in .env (./dev.sh up does this) or set "
+            "MANAGER_ALLOW_DEFAULT_TOKEN=1 to explicitly accept it.",
+            KNOWN_DEFAULT_TOKEN,
+        )
+        raise SystemExit(1)
+
+
 class ManagerHTTPServer(ThreadingHTTPServer):
     """ThreadingHTTPServer with quiet peer-disconnect handling.
 
@@ -1550,6 +1581,7 @@ class ManagerHTTPServer(ThreadingHTTPServer):
 
 
 def main() -> None:
+    enforce_token_default()
     migrate()
     start_loops()
     server = ManagerHTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)

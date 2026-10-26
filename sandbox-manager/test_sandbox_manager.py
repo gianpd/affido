@@ -244,5 +244,52 @@ class QuietDisconnectTest(unittest.TestCase):
             server.server_close()
 
 
+class TokenDefaultGuardTest(unittest.TestCase):
+    """enforce_token_default fails closed on the well-known compose fallback
+    (pentest W1): with it, any unprivileged local process reaches the
+    manager's bridge IP and owns every tenant endpoint."""
+
+    def setUp(self) -> None:
+        self.saved = (os.environ.get("MANAGER_TOKEN"),
+                      os.environ.get("MANAGER_ALLOW_DEFAULT_TOKEN"))
+        os.environ.pop("MANAGER_ALLOW_DEFAULT_TOKEN", None)
+        sm.MANAGER_ALLOW_DEFAULT_TOKEN = False
+
+    def tearDown(self) -> None:
+        token, allow = self.saved
+        if token is None: os.environ.pop("MANAGER_TOKEN", None)
+        else: os.environ["MANAGER_TOKEN"] = token
+        if allow is None: os.environ.pop("MANAGER_ALLOW_DEFAULT_TOKEN", None)
+        else: os.environ["MANAGER_ALLOW_DEFAULT_TOKEN"] = allow
+        sm.MANAGER_ALLOW_DEFAULT_TOKEN = allow == "1"
+
+    def reload_token(self) -> None:
+        sm.MANAGER_TOKEN = os.environ.get("MANAGER_TOKEN")
+
+    def test_default_token_is_fatal(self) -> None:
+        os.environ["MANAGER_TOKEN"] = sm.KNOWN_DEFAULT_TOKEN
+        self.reload_token()
+        with self.assertRaises(SystemExit):
+            sm.enforce_token_default()
+
+    def test_empty_token_is_fatal(self) -> None:
+        os.environ["MANAGER_TOKEN"] = ""
+        self.reload_token()
+        with self.assertRaises(SystemExit):
+            sm.enforce_token_default()
+
+    def test_random_token_passes(self) -> None:
+        os.environ["MANAGER_TOKEN"] = "not-the-default-" + "x" * 24
+        self.reload_token()
+        sm.enforce_token_default()  # must not raise
+
+    def test_explicit_opt_in_allows_the_default(self) -> None:
+        os.environ["MANAGER_TOKEN"] = sm.KNOWN_DEFAULT_TOKEN
+        os.environ["MANAGER_ALLOW_DEFAULT_TOKEN"] = "1"
+        sm.MANAGER_ALLOW_DEFAULT_TOKEN = True
+        self.reload_token()
+        sm.enforce_token_default()  # must not raise
+
+
 if __name__ == "__main__":
     unittest.main()

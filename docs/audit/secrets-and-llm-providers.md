@@ -29,7 +29,7 @@ Files read in full or in the parts that own the behavior:
 
 | Name | Kind | Declared / set in | Read by | Stored where | Rotation in code |
 |---|---|---|---|---|---|
-| `MANAGER_TOKEN` | Shared secret, HTTP header `X-Manager-Token` | `docker-compose.yml:9` (Caddy), `:41` (manager), default `dev-manager-token`; `frontend/.env.example`; `frontend/src/env.ts:22` | Caddy `forward_auth` (`caddy/Caddyfile:17`), manager `Handler.authorized` (`sandbox_manager.py:724`), frontend trusted-caller mode (`frontend/src/lib/server/sandbox.ts:36`) | Compose environment; process memory | None. Restart with a new value. |
+| `MANAGER_TOKEN` | Shared secret, HTTP header `X-Manager-Token` | `docker-compose.yml:9` (Caddy), `:41` (manager), compose fallback `dev-manager-token` (refused at manager startup since the 2026-10 pentest fix; `./dev.sh up` generates a random value in `.env`); `frontend/.env.example`; `frontend/src/env.ts:22` | Caddy `forward_auth` (`caddy/Caddyfile:17`), manager `Handler.authorized` (`sandbox_manager.py:724`), frontend trusted-caller mode (`frontend/src/lib/server/sandbox.ts:36`) | Compose environment; process memory | None. Restart with a new value. |
 | `BETTER_AUTH_SECRET` | Signing secret for better-auth | `frontend/.env.example:11`, `frontend/src/env.ts:8` | `betterAuth({ secret })` (`frontend/src/lib/server/auth.ts:11`) | Frontend environment; process memory | None in this repo. |
 | Postgres credentials `pi:pi` | Database password | `docker-compose.yml:20-22`, manager `DATABASE_URL` at `:39` | Postgres, manager, frontend `DATABASE_URL` | Compose environment; Postgres volume | None in this repo. |
 | Session cookie `better-auth.session_token` | User session credential | Issued by better-auth; validated by manager (`AUTH_COOKIE_NAME`, `sandbox_manager.py:72`) | Caddy forwards it; manager queries `"session"` (`sandbox_manager.py:236-243`) | Postgres `"session"` table | Session lifecycle owned by better-auth. |
@@ -342,24 +342,30 @@ are repeated here because they are part of the audited behavior.
 - This is documented in RFC 0004 §2.1 and §2.2; RFC 0004's proposal to move the
   key into an `llm-gateway` is not implemented.
 
-### 8.2 High: `MANAGER_TOKEN` can be disabled by omission
+### 8.2 High: `MANAGER_TOKEN` can be disabled by omission — FIXED
 
-- `Handler.authorized()` returns `True` when `MANAGER_TOKEN` is falsy
-  (`sandbox_manager.py:724-727`). Compose always provides a value, but a
-  standalone manager run without the variable has no token wall. The peer guard
-  (`rejected_sandbox_peer`) still rejects sandbox subnets, so the exposure is
-  limited to peers outside sandbox networks.
+- `Handler.authorized()` returned `True` when `MANAGER_TOKEN` was falsy, so a
+  standalone manager run without the variable had no token wall.
+- Fixed 2026-10 (pentest W1, second layer): `enforce_token_default()` in
+  `sandbox_manager.py` refuses to start with an empty token unless
+  `MANAGER_ALLOW_DEFAULT_TOKEN=1` opts in explicitly.
 
-### 8.3 High: the compose default token is a known constant
+### 8.3 High: the compose default token is a known constant — FIXED
 
-- Both Caddy and the manager default to `dev-manager-token`
-  (`docker-compose.yml:9,41`).
-- The local `.env` does not override `MANAGER_TOKEN`, so the default is active
-  in the current checkout. `.env.example` documents it as a local default.
-- The manager API binds no host port. It is reachable from containers on the
-  compose `agents` network and from guest containers the manager attaches to
-  per-user networks; the peer guard rejects sandbox subnets regardless of the
-  token (`e2e-test/security.sh` asserts this).
+- Both Caddy and the manager defaulted to `dev-manager-token`
+  (`docker-compose.yml`), and the local `.env` did not override it, so the
+  default was active; any unprivileged process on the host could reach the
+  manager's bridge IP (`0.0.0.0:8090` in-container, bridge-routable from the
+  host without root) and pause, resolve as, or read the registry of any tenant
+  (proven by the 2026-10 controlled pentest: `POST /pause` with the default
+  token stopped a victim sandbox; `/metrics`, `/status?user_id=`,
+  `POST /resolve` all answered 200).
+- Fixed 2026-10 (pentest W1, first layer): `./dev.sh up|reload` and
+  `verify.sh` generate a random `MANAGER_TOKEN` into `.env` when missing, and
+  the manager fails closed at startup on the well-known default
+  (`enforce_token_default`, covered by `test_sandbox_manager.py`). The peer
+  guard remains the independent second wall for sandbox peers
+  (`e2e-test/security.sh` asserts it with the real token).
 
 ### 8.4 Medium: fixed Postgres credentials
 
