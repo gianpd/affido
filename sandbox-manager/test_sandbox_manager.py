@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import base64
 import http.server
+import io
 import json
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -88,7 +90,9 @@ class KekCryptoTest(unittest.TestCase):
 
 
 class _Recorder(http.server.BaseHTTPRequestHandler):
-    """The §5.6 upstream: records the Authorization header, serves /v1/models."""
+    """The §5.6 upstream: records the Authorization header, serves the
+    auth-checked GET endpoints (/v1/models default, /v1/key for entries whose
+    /models is public)."""
 
     seen: list[tuple[str, str]] = []
 
@@ -97,7 +101,7 @@ class _Recorder(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         _Recorder.seen.append((self.path, self.headers.get("Authorization") or ""))
-        status = 200 if self.path == "/v1/models" else 404
+        status = 200 if self.path in ("/v1/models", "/v1/key") else 404
         body = json.dumps({"data": [{"id": "e2e-fake-1"}]}).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -169,6 +173,29 @@ class BaseUrlTest(unittest.TestCase):
             server.shutdown()
             thread.join(timeout=5)
 
+    def test_validation_uses_the_catalog_validate_path(self) -> None:
+        # §5.6: openrouter's /models is public (any key answers 200), so its
+        # catalog entry pins /key; the check must dial that suffix, not /models.
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Recorder)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            sm.PROVIDER_DEV_HTTP = True
+            base_url = f"http://127.0.0.1:{server.server_address[1]}/v1"
+            sm.validate_upstream(base_url, "sk-or-v1-x", require_public=False, path_suffix="/key")
+            self.assertEqual(_Recorder.seen[-1], ("/v1/key", "Bearer sk-or-v1-x"))
+            # The suffix comes from the operator-built catalog, but the request
+            # line is built by concatenation: anything that is not a plain path
+            # (CRLF injection, traversal, relative, empty) fails closed pre-dial.
+            for bad in ("/a\r\nHost: x", "/../key", "key", "", "/a?x=1"):
+                with self.subTest(bad=bad):
+                    with self.assertRaises(sm.ManagerError) as ctx:
+                        sm.validate_upstream(base_url, "sk-x", require_public=False, path_suffix=bad)
+                    self.assertEqual(ctx.exception.code, "invalid_catalog")
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
     def test_validation_public_required_for_user_urls(self) -> None:
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Recorder)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -185,6 +212,36 @@ class BaseUrlTest(unittest.TestCase):
         finally:
             server.shutdown()
             thread.join(timeout=5)
+
+
+class QuietDisconnectTest(unittest.TestCase):
+    """ManagerHTTPServer answers routine peer resets with one INFO line
+    instead of handle_error's traceback (the docker-logs spam); every other
+    error keeps the stdlib traceback on stderr."""
+
+    def test_peer_resets_demoted_real_errors_keep_traceback(self) -> None:
+        server = sm.ManagerHTTPServer(("127.0.0.1", 0), _Recorder)
+        captured_err = io.StringIO()
+        stderr, sys.stderr = sys.stderr, captured_err
+        try:
+            with self.assertLogs("sandbox-manager", level="INFO") as captured:
+                for exc_type in (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                    try:
+                        raise exc_type()
+                    except OSError:
+                        server.handle_error(None, ("10.89.1.4", 49026))
+            self.assertEqual(len(captured.output), 3)
+            self.assertIn("closed the connection", captured.output[0])
+            self.assertEqual(captured_err.getvalue(), "")
+            try:
+                raise ValueError("boom")
+            except ValueError:
+                server.handle_error(None, ("10.89.1.4", 49026))
+            self.assertIn("Traceback", captured_err.getvalue())
+            self.assertIn("boom", captured_err.getvalue())
+        finally:
+            sys.stderr = stderr
+            server.server_close()
 
 
 if __name__ == "__main__":

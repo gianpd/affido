@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RFC 0013 — the sidecar container model, visually</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=IBM+Plex+Mono:wght@400;500;600&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   RFC 0013 — key-injection sidecar
+   language: same dossier aesthetic as docs/rfc/explainer.html
+   and 0005-workspace-corpus-separation.html
+   colour code (kept identical in every diagram and table):
+     client      ink / grey
+     control     blue      (caddy, sandbox-manager)
+     agent       red       (the process an attacker can own)
+     sidecar     violet    (key custodian — new in RFC 0013)
+     storage     teal      (OLTP, durable state)
+     provider    amber     (outbound traffic, pinned upstream)
+   ============================================================ */
+:root{
+	--paper:#f4eddd; --paper-2:#fbf6ea; --paper-3:#ece3cd;
+	--ink:#22303f; --ink-soft:#5a6672;
+	--rule:#d3c7a8; --rule-soft:#e2d8bf;
+	--red:#bd3f1d; --red-soft:#f3ddd2;
+	--teal:#0e7568; --teal-soft:#ddeae4;
+	--blue:#2b5d92; --blue-soft:#e0e8ef;
+	--amber:#a96f14; --amber-soft:#f0e4c8;
+	--violet:#5f3f8f; --violet-soft:#e8e1f3;
+	--gray-soft:#e7e1d2;
+	--serif:"Fraunces",Georgia,serif;
+	--body:"Spectral",Georgia,serif;
+	--mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+	background:
+		radial-gradient(ellipse at 18% -5%, rgba(255,252,240,.92), transparent 55%),
+		radial-gradient(ellipse at 96% 104%, rgba(214,197,160,.34), transparent 52%),
+		var(--paper);
+	color:var(--ink); font-family:var(--body); font-size:16.5px; line-height:1.62;
+}
+body::before{
+	content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+	background-image:
+		linear-gradient(rgba(83,94,110,.055) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(83,94,110,.055) 1px, transparent 1px);
+	background-size:28px 28px;
+}
+.page{position:relative; z-index:1; max-width:1180px; margin:0 auto; padding:0 28px 90px;}
+
+/* ---------- masthead ---------- */
+.masthead{border-bottom:3px double var(--ink); padding:34px 0 22px; position:relative;}
+.masthead .meta{
+	display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;
+	font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+	color:var(--ink-soft); border-bottom:1px solid var(--rule); padding-bottom:10px; margin-bottom:22px;
+}
+.masthead h1{
+	font-family:var(--serif); font-weight:900; font-size:clamp(34px,5.4vw,60px);
+	line-height:1; letter-spacing:-.015em; max-width:940px;
+}
+.masthead h1 em{font-style:italic; font-weight:400; color:var(--violet);}
+.masthead .sub{margin-top:18px; font-size:18px; color:var(--ink-soft); max-width:760px; font-style:italic;}
+.stamp{
+	position:absolute; right:0; top:74px; transform:rotate(6deg);
+	font-family:var(--mono); font-weight:600; font-size:11px; letter-spacing:.2em;
+	color:var(--red); border:2.5px solid var(--red); padding:8px 15px; border-radius:4px;
+	opacity:.78; text-transform:uppercase; line-height:1.6; text-align:center;
+}
+@media (max-width:900px){ .stamp{display:none;} }
+
+/* ---------- toc ---------- */
+.toc{display:flex; flex-wrap:wrap; gap:10px; margin:26px 0 8px;}
+.toc a{
+	font-family:var(--mono); font-size:12px; letter-spacing:.06em; text-decoration:none;
+	color:var(--ink); border:1px solid var(--ink); padding:6px 12px; border-radius:2px;
+	background:var(--paper-2); transition:all .18s ease; text-transform:uppercase;
+}
+.toc a:hover{background:var(--ink); color:var(--paper-2); transform:translate(-1px,-1px); box-shadow:2px 2px 0 var(--red);}
+
+/* ---------- sections ---------- */
+section{margin-top:64px;}
+.sec-head{display:flex; align-items:baseline; gap:18px; border-bottom:1.5px solid var(--ink); padding-bottom:10px; margin-bottom:8px;}
+.sec-no{font-family:var(--serif); font-weight:900; font-size:44px; line-height:1; color:var(--red); min-width:60px;}
+.sec-head h2{font-family:var(--serif); font-weight:600; font-size:clamp(23px,3.2vw,32px); letter-spacing:-.01em;}
+.sec-q{font-family:var(--mono); font-size:11.5px; letter-spacing:.1em; color:var(--ink-soft); text-transform:uppercase; margin:10px 0 18px;}
+.lede{font-size:18px; max-width:860px; margin-bottom:22px;}
+.lede strong{font-weight:600;}
+p.note{font-size:15px; color:var(--ink-soft); border-left:3px solid var(--red); padding:2px 0 2px 14px; margin:18px 0; max-width:900px; font-style:italic;}
+p.note b{color:var(--ink); font-style:normal;}
+code{font-family:var(--mono); font-size:.86em; background:rgba(34,48,63,.07); border-radius:3px; padding:1px 5px;}
+.mono{font-family:var(--mono);}
+
+/* ---------- cards ---------- */
+.grid-2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+.grid-3{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.card{background:var(--paper-2); border:1px solid var(--rule); border-radius:4px; padding:16px 18px;}
+.card h3{font-family:var(--serif); font-size:18px; font-weight:600; margin-bottom:6px;}
+.card p{font-size:14.5px; color:var(--ink-soft);}
+.card p + p{margin-top:8px;}
+.card .flag{
+	font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+	color:var(--red); display:block; margin-bottom:8px;
+}
+.card.bad{border-left:4px solid var(--red);}
+.card.ok{border-left:4px solid var(--teal);}
+.card.new{border-left:4px solid var(--violet);}
+.card.bad .flag{color:var(--red);}
+.card.ok .flag{color:var(--teal);}
+.card.new .flag{color:var(--violet);}
+@media (max-width:980px){ .grid-3,.grid-2{grid-template-columns:1fr;} }
+
+/* ---------- strip ---------- */
+.strip{
+	background:var(--paper-2); border:1px solid var(--rule); border-radius:4px;
+	padding:14px 18px 16px; margin:22px 0 8px;
+}
+.strip-row{display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:7px 0;}
+.strip-row + .strip-row{border-top:1px dashed var(--rule-soft);}
+.rowtag{
+	font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+	min-width:108px; padding:4px 8px; border-radius:2px; border:1px solid;
+}
+.rowtag.bad{color:var(--red); border-color:var(--red); background:var(--red-soft);}
+.rowtag.new{color:var(--violet); border-color:var(--violet); background:var(--violet-soft);}
+.strip .node{
+	font-family:var(--mono); font-size:10.8px; line-height:1.32; padding:8px 10px;
+	border:1.4px solid var(--ink); background:#fff; border-radius:3px; max-width:220px;
+}
+.strip .node b{display:block; font-family:var(--body); font-size:12.5px; font-weight:600; margin-bottom:3px;}
+.strip .node.bad{border-color:var(--red); background:var(--red-soft);}
+.strip .node.key{border-color:var(--violet); background:var(--violet-soft);}
+.strip .node.store{border-color:var(--teal); background:var(--teal-soft);}
+.strip .arrow{
+	align-self:center; font-family:var(--mono); font-size:12px; color:var(--ink-soft);
+	padding:0 2px; white-space:nowrap;
+}
+.strip .arrow small{display:block; font-size:9.5px; color:var(--ink-soft); opacity:.85;}
+.strip-cap{font-family:var(--mono); font-size:11px; color:var(--ink-soft); letter-spacing:.04em; margin-bottom:26px;}
+
+/* ---------- tables ---------- */
+table{border-collapse:collapse; width:100%; font-size:13.6px; margin-top:14px;}
+th,td{text-align:left; vertical-align:top; padding:9px 11px; border-bottom:1px solid var(--rule-soft);}
+thead th{
+	font-family:var(--mono); font-size:10.5px; letter-spacing:.09em; text-transform:uppercase;
+	color:var(--ink-soft); border-bottom:1.4px solid var(--ink); white-space:nowrap;
+}
+tbody tr:hover{background:rgba(255,255,255,.5);}
+td.id{font-family:var(--mono); font-size:11.5px; color:var(--red); font-weight:600; white-space:nowrap;}
+td.mono,th.mono{font-family:var(--mono); font-size:11.5px;}
+td.k{white-space:nowrap; font-weight:600;}
+.tbl-note{font-size:13px; color:var(--ink-soft); margin-top:10px; font-style:italic;}
+.tbl-wrap{overflow-x:auto;}
+
+/* legend chips */
+.legend{display:flex; flex-wrap:wrap; gap:16px; margin:18px 0 12px; font-size:12px; color:var(--ink-soft);}
+.legend span{display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:11px; letter-spacing:.03em;}
+.sw{width:20px; height:12px; border-radius:2px; display:inline-block;}
+.sw-client{background:var(--gray-soft); border:1.4px solid var(--ink-soft);}
+.sw-control{background:var(--blue-soft); border:1.6px solid var(--blue);}
+.sw-agent{background:var(--red-soft); border:1.6px solid var(--red);}
+.sw-sidecar{background:var(--violet-soft); border:1.6px solid var(--violet);}
+.sw-store{background:var(--teal-soft); border:1.6px solid var(--teal);}
+.sw-prov{background:var(--paper); border:1.4px dashed var(--amber);}
+.sw-line{height:0; width:22px; border-top:2.4px solid var(--blue);}
+.sw-line-key{border-top:2.4px solid var(--red);}
+.sw-line-prov{border-top:2.4px solid var(--amber);}
+.sw-line-dash{border-top:2.2px dashed var(--blue);}
+
+/* canvas */
+.canvas{background:var(--paper-2); border:1px solid var(--rule); border-radius:4px; padding:8px; overflow:hidden;}
+.canvas.bleed{position:relative; left:50%; transform:translateX(-50%); width:min(1600px, calc(100vw - 24px));}
+svg{display:block; width:100%; height:auto;}
+svg text{font-family:var(--body);}
+.tt{font-size:15px; font-weight:600; fill:var(--ink);}
+.tt-lg{font-size:17px; font-weight:700; fill:var(--ink);}
+.tt-w{font-size:17px; font-weight:700; fill:#fbf6ea;}
+.ts{font-size:12.2px; fill:var(--ink-soft);}
+.tm{font-family:var(--mono); font-size:10.8px; fill:#3d4b5b;}
+.tm-b{font-family:var(--mono); font-size:11.2px; font-weight:600; fill:var(--ink);}
+.tm-w{font-family:var(--mono); font-size:11px; fill:rgba(251,246,234,.85);}
+.tl{font-family:var(--mono); font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; fill:var(--ink-soft);}
+.band-lbl{font-family:var(--mono); font-size:13px; letter-spacing:.12em; text-transform:uppercase; fill:var(--ink); font-weight:600;}
+.band-lbl.sm{font-size:11.5px; letter-spacing:.06em; fill:var(--ink-soft); font-weight:400;}
+
+.box{fill:#fff; stroke:var(--ink); stroke-width:1.4;}
+.plane-client{fill:var(--gray-soft); stroke:var(--ink-soft); stroke-width:1.4;}
+.plane-control{fill:var(--blue-soft); stroke:var(--blue); stroke-width:1.8;}
+.plane-agent{fill:var(--red-soft); stroke:var(--red); stroke-width:1.8;}
+.plane-sidecar{fill:var(--violet-soft); stroke:var(--violet); stroke-width:1.8;}
+.store{fill:var(--teal-soft); stroke:var(--teal); stroke-width:1.6;}
+.ghost{fill:var(--paper-2); stroke:var(--ink-soft); stroke-width:1.2; stroke-dasharray:4 4;}
+.ghost-prov{fill:var(--amber-soft); stroke:var(--amber); stroke-width:1.5; stroke-dasharray:6 4;}
+.actor{fill:var(--ink); stroke:var(--ink);}
+.band{fill:rgba(255,255,255,.42); stroke:var(--rule); stroke-width:1.2; stroke-dasharray:2 5;}
+.inner{fill:#fff; stroke:rgba(34,48,63,.28); stroke-width:1.1;}
+.inner-store{fill:#fff; stroke:var(--teal); stroke-width:1.1;}
+.inner-key{fill:#fff; stroke:var(--violet); stroke-width:1.1;}
+.inner-nokey{fill:var(--red-soft); stroke:var(--red); stroke-width:1.3;}
+.inner-stop{fill:var(--red-soft); stroke:var(--red); stroke-width:1.3;}
+
+.edge{fill:none; stroke:var(--blue); stroke-width:2.1;}
+.edge-key{fill:none; stroke:var(--red); stroke-width:2.4;}
+.edge-prov{fill:none; stroke:var(--amber); stroke-width:2.4;}
+.edge-dash{fill:none; stroke:var(--blue); stroke-width:1.8; stroke-dasharray:7 5;}
+.n circle{stroke:var(--paper-2); stroke-width:2;}
+.n text{font-family:var(--mono); font-size:12px; font-weight:600; fill:#fff; text-anchor:middle;}
+.n-in circle{fill:var(--blue);}
+.n-key circle{fill:var(--red);}
+.n-prov circle{fill:var(--amber);}
+
+/* ---------- lanes ---------- */
+.lane{border:1px solid var(--rule); border-radius:4px; background:var(--paper-2); margin-top:26px; overflow:hidden;}
+.lane-head{
+	display:flex; flex-wrap:wrap; align-items:baseline; gap:14px;
+	padding:14px 18px; border-bottom:1.4px solid var(--ink); background:#fff;
+}
+.lane-head .tag{font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;}
+.lane-head h3{font-family:var(--serif); font-size:21px; font-weight:600;}
+.lane-a .tag{color:var(--blue);}
+.lane-b .tag{color:var(--violet);}
+.lane-c .tag{color:var(--amber);}
+.lane ol{list-style:none;}
+.lane li{
+	display:grid; grid-template-columns:46px minmax(0,1fr) 150px; gap:14px; align-items:start;
+	padding:14px 18px; border-bottom:1px dashed var(--rule-soft);
+}
+.lane li:last-child{border-bottom:0;}
+.lane .step{
+	font-family:var(--mono); font-size:11.5px; font-weight:600; text-align:center;
+	color:#fff; border-radius:50%; width:26px; height:26px; line-height:26px; margin-top:2px;
+}
+.lane-a .step{background:var(--blue);}
+.lane-b .step{background:var(--violet);}
+.lane-c .step{background:var(--amber);}
+.lane .what b{display:block; font-family:var(--body); font-size:15.5px; font-weight:600;}
+.lane .what .call{display:block; font-family:var(--mono); font-size:11.5px; color:var(--ink); margin:3px 0 4px;}
+.lane .what p{font-size:14px; color:var(--ink-soft);}
+.lane .state{
+	font-family:var(--mono); font-size:9.6px; letter-spacing:.05em; text-transform:uppercase;
+	text-align:center; padding:5px 6px; border-radius:2px; border:1px solid; line-height:1.35;
+}
+.state.key{color:var(--violet); border-color:var(--violet); background:var(--violet-soft);}
+.state.cold{color:var(--blue); border-color:var(--blue); background:var(--blue-soft);}
+.state.warm{color:var(--red); border-color:var(--red); background:var(--red-soft);}
+.state.store{color:var(--teal); border-color:var(--teal); background:var(--teal-soft);}
+.state.clean{color:var(--ink-soft); border-color:var(--rule); background:#fff;}
+.state.prov{color:var(--amber); border-color:var(--amber); background:var(--amber-soft);}
+.lane-foot{padding:12px 18px; background:var(--paper-3); font-size:13.5px; color:var(--ink-soft); border-top:1px solid var(--rule);}
+.lane-foot b{color:var(--ink);}
+@media (max-width:720px){ .lane li{grid-template-columns:34px 1fr;} .lane .state{grid-column:2;} }
+
+/* ---------- code ---------- */
+.code{
+	background:#fff; border:1px solid var(--rule); border-radius:3px;
+	padding:12px 14px; margin-top:10px; overflow-x:auto;
+	font-family:var(--mono); font-size:11.6px; line-height:1.65; color:var(--ink);
+	white-space:pre;
+}
+.code .h{color:var(--red); font-weight:600;}
+.code .g{color:var(--teal); font-weight:600;}
+.code .v{color:var(--violet); font-weight:600;}
+.code .c{color:var(--ink-soft); font-style:italic;}
+.code .x{color:var(--red);}
+.code-cap{font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); margin-top:14px;}
+
+/* matrix */
+.matrix td.c{text-align:center; width:92px;}
+.dot{display:inline-block; width:11px; height:11px; border-radius:50%; background:var(--ink);}
+.dot.o{background:transparent; border:1.6px solid var(--ink-soft); width:9px; height:9px;}
+.dot.none{background:var(--rule-soft); width:4px; height:4px;}
+.dot.key{background:var(--violet);}
+.dot.bad{background:var(--red);}
+.mhead{font-family:var(--mono); font-size:10px; letter-spacing:.06em;}
+.mkey{display:flex; flex-wrap:wrap; gap:20px; font-size:12.5px; color:var(--ink-soft); margin-top:12px;}
+.mkey span{display:inline-flex; align-items:center; gap:7px;}
+
+/* invariants */
+.inv{display:grid; grid-template-columns:repeat(2,1fr); gap:14px 28px; margin-top:16px;}
+.inv div{border-top:1px solid var(--rule); padding-top:10px;}
+.inv dt{font-family:var(--mono); font-size:11px; letter-spacing:.06em; color:var(--red); text-transform:uppercase;}
+.inv dd{font-size:14px; color:var(--ink-soft); margin-top:2px;}
+.inv dd b{color:var(--ink); font-weight:600;}
+@media (max-width:820px){ .inv{grid-template-columns:1fr;} }
+
+.foot{margin-top:60px; padding-top:16px; border-top:1.5px solid var(--ink); font-size:13px; color:var(--ink-soft); display:flex; flex-wrap:wrap; gap:12px 28px; justify-content:space-between;}
+.foot .mono{font-size:11px; letter-spacing:.06em;}
+.foot a{color:var(--red);}
+@media print{
+	body{background:#fff;}
+	body::before,body::after{display:none;}
+	.page{max-width:none; padding:0;}
+	section{break-inside:avoid;}
+	.canvas{border:0; padding:0;}
+	.toc{display:none;}
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="masthead">
+	<div class="meta">
+		<span>RFC 0013 · affido</span>
+		<span>Target: sandbox-manager/ · agent/ · e2e-test/</span>
+		<span>Status: draft · diagram of the promoted model</span>
+	</div>
+	<h1>One key,<br><em>two processes</em></h1>
+	<p class="sub">What the C4 container model becomes once RFC 0013 is promoted: the plaintext provider key lives in a per-sandbox sidecar, and the agent container stops being a place where it can be found.</p>
+	<div class="stamp">RFC 0013<br>target model</div>
+</header>
+
+<nav class="toc" aria-label="Contents">
+	<a href="#change">01 The change</a>
+	<a href="#c4">02 C4 containers</a>
+	<a href="#call">03 One proxied call</a>
+	<a href="#who">04 Who may hold it</a>
+	<a href="#life">05 Lifecycle</a>
+	<a href="#proxyable">06 Why it works</a>
+	<a href="#invariants">07 Invariants</a>
+</nav>
+
+<!-- ============================================================ 01 -->
+<section id="change">
+	<div class="sec-head"><span class="sec-no">01</span><h2>The change is one hop, in one direction</h2></div>
+	<div class="sec-q">Delivery target moves; desired state, ciphertext and isolation do not</div>
+
+	<p class="lede">Under RFC 0012 the manager hands <code>{provider, modelId, apiKey}</code> to the agent, and the agent process holds the key in an <code>InMemoryCredentialStore</code>. Bash and every other tool run as children of that process, in that container. Under RFC 0013 the same ciphertext is decrypted at the same moment, but the plaintext is delivered to a second container — and the agent gets a keyless payload plus a <code>baseUrl</code> that points at it.</p>
+
+	<div class="strip" aria-label="Delivery target, before and after">
+		<div class="strip-row">
+			<span class="rowtag bad">RFC 0012</span>
+			<div class="node store"><b>OLTP → manager</b>ciphertext = desired state<br>decrypt at delivery · unchanged</div>
+			<div class="arrow">→<small>one payload</small></div>
+			<div class="node bad"><b>agent</b>{provider, modelId, apiKey}<br>key in the attacked heap</div>
+			<div class="arrow" style="margin-left:auto; font-family:var(--mono); color:var(--ink-soft)">disclosure or abuse</div>
+		</div>
+		<div class="strip-row">
+			<span class="rowtag new">RFC 0013</span>
+			<div class="node store"><b>OLTP → manager</b>ciphertext = desired state<br>decrypt at delivery · unchanged</div>
+			<div class="arrow">→<small>key half</small></div>
+			<div class="node key"><b>sidecar</b>{provider, modelId, apiKey, baseUrl?}<br>the only key holder</div>
+			<div class="arrow">+<small>keyless half</small></div>
+			<div class="node"><b>agent</b>{provider, modelId, viaSidecar}<br>placeholder credential only</div>
+			<div class="arrow" style="margin-left:auto; font-family:var(--mono); color:var(--ink-soft)">abuse only</div>
+		</div>
+	</div>
+	<p class="strip-cap">Same inputs, same serialization, same OLTP rows. One payload is split in two, and only one half contains a secret.</p>
+
+	<div class="grid-3">
+		<div class="card bad">
+			<span class="flag">before · RFC 0012</span>
+			<h3>The key is plaintext in the attacked process</h3>
+			<p>The honest guarantee was: not persisted anywhere, plaintext exactly in the process that must use it. A prompt-injected document can direct <code>bash</code> at <code>/proc/&lt;server&gt;/mem</code> and the architecture does not forbid it.</p>
+		</div>
+		<div class="card new">
+			<span class="flag">after · RFC 0013</span>
+			<h3>The key is plaintext in a process the agent cannot read</h3>
+			<p>Full compromise of the agent — model, tools, <code>node_modules</code>, the server process itself — finds no key material in the container, and the sidecar forwards only to the host pinned at delivery time.</p>
+		</div>
+		<div class="card ok">
+			<span class="flag">what stays true</span>
+			<h3>Abuse was always possible, and still is</h3>
+			<p>An agent that must call the provider can spend quota. The threat boundary moves from <em>disclosure or abuse</em> to <em>abuse only</em>; spend limits and key rotation stay the mitigations.</p>
+		</div>
+	</div>
+
+	<p class="note"><b>Phase 0 is independent.</b> A seccomp deny-list (<code>ptrace</code>, <code>process_vm_readv/writev</code>, <code>pidfd_getfd</code>, <code>kcmp</code>) plus <code>--ulimit core=0</code> on both containers lands first and hardens today's RFC 0012 delivery without waiting for the sidecar. Both are drawn on the agent box below because they ship with it.</p>
+</section>
+
+<!-- ============================================================ 02 -->
+<section id="c4">
+	<div class="sec-head"><span class="sec-no">02</span><h2>C4 level 2 — the container model after promotion</h2></div>
+	<div class="sec-q">Read the numbers in order: setup 1–3, resolve 4–5, delivery split 6–7, the proxied call 8–9, reconcile 10</div>
+
+	<div class="legend" aria-label="Legend">
+		<span><i class="sw sw-client"></i>client</span>
+		<span><i class="sw sw-control"></i>control plane</span>
+		<span><i class="sw sw-agent"></i>agent sandbox</span>
+		<span><i class="sw sw-sidecar"></i>key custodian (sidecar)</span>
+		<span><i class="sw sw-store"></i>durable state</span>
+		<span><i class="sw sw-prov"></i>pinned upstream</span>
+		<span><i class="sw sw-line"></i>control / setup</span>
+		<span><i class="sw sw-line-key"></i>key delivery</span>
+		<span><i class="sw sw-line-prov"></i>proxied traffic</span>
+		<span><i class="sw sw-line-dash"></i>reconcile read</span>
+	</div>
+
+	<p class="strip-cap" style="margin:-4px 0 14px">The red box is the container an attacker can own. The violet box is a second container on the same per-user <code>--internal</code> network, created by the same <code>create_args</code>, with no published ports, no volumes and its own 128 MiB / 0.25 CPU caps.</p>
+
+	<div class="canvas bleed">
+	<svg viewBox="0 0 1700 1240" role="img" aria-labelledby="c4t c4d">
+		<title id="c4t">C4 container diagram of RFC 0013 — key-injection sidecar</title>
+		<desc id="c4d">Setup: the browser sends the provider key to Caddy, forward_auth hands it to the sandbox-manager, which encrypts it and stores ciphertext in the OLTP. Prompt: Caddy forward_auth calls resolve; the manager ensures the agent and sidecar pair, waits for both to be healthy, then delivers the key payload to the sidecar and a keyless payload to the agent. At prompt time the agent calls the sidecar with no credentials; the sidecar strips inbound auth headers, stamps the pinned credential, and forwards to the pinned upstream over verified TLS, relaying SSE unbuffered. The manager reconciles against both status endpoints. The key never exists in the agent container.</desc>
+
+		<defs>
+			<marker id="mk-blue" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="7" orient="auto-start-reverse">
+				<path d="M0,0 L10,4 L0,8 z" fill="#2b5d92"/>
+			</marker>
+			<marker id="mk-red" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="7" orient="auto-start-reverse">
+				<path d="M0,0 L10,4 L0,8 z" fill="#bd3f1d"/>
+			</marker>
+			<marker id="mk-amber" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="7" orient="auto-start-reverse">
+				<path d="M0,0 L10,4 L0,8 z" fill="#a96f14"/>
+			</marker>
+		</defs>
+
+		<!-- ================= bands ================= -->
+		<rect class="band" x="458" y="126" width="344" height="1008" rx="6"/>
+		<text class="band-lbl" x="462" y="116">CONTROL PLANE</text>
+
+		<rect class="band" x="900" y="458" width="430" height="700" rx="6"/>
+		<text class="band-lbl" x="904" y="448">PER-USER NETWORK</text>
+		<text class="band-lbl sm" x="1072" y="448">— --internal · no published ports</text>
+
+		<!-- ================= reading order ================= -->
+		<text class="tl" x="34" y="378">reading order</text>
+		<text class="tm" x="34" y="402">1–2  the key arrives</text>
+		<text class="tm" x="34" y="420">3  ciphertext = desired state</text>
+		<text class="tm" x="34" y="438">4–5  prompt → resolve</text>
+		<text class="tm" x="34" y="456">6–7  delivery split</text>
+		<text class="tm" x="34" y="474">8–9  the proxied call</text>
+		<text class="tm" x="34" y="492">10  reconcile</text>
+
+		<rect class="ghost" x="30" y="540" width="200" height="196" rx="4"/>
+		<text class="tl" x="44" y="566">the claim</text>
+		<text class="ts" x="44" y="590">a fully controlled</text>
+		<text class="ts" x="44" y="606">agent can spend the</text>
+		<text class="ts" x="44" y="622">key, never read it.</text>
+		<text class="ts" x="44" y="650">the boundary moves</text>
+		<text class="ts" x="44" y="666">from disclosure +</text>
+		<text class="ts" x="44" y="682">abuse to abuse only.</text>
+		<text class="ts" x="44" y="710" style="font-style:italic">no plaintext in the</text>
+		<text class="ts" x="44" y="726" style="font-style:italic">container to find.</text>
+
+		<!-- ================= client rail ================= -->
+		<rect class="actor" x="30" y="180" width="200" height="150" rx="4"/>
+		<text class="tt-w" x="130" y="212" text-anchor="middle">User + browser</text>
+		<text class="tm-w" x="130" y="232" text-anchor="middle">Settings → AI provider</text>
+		<text class="tm-w" x="130" y="256" text-anchor="middle">types the key once</text>
+		<text class="tm-w" x="130" y="272" text-anchor="middle">PUT /providers/config</text>
+		<text class="tm-w" x="130" y="296" text-anchor="middle">never displays it again</text>
+
+		<rect class="actor" x="30" y="880" width="200" height="140" rx="4"/>
+		<text class="tt-w" x="130" y="914" text-anchor="middle">User + browser</text>
+		<text class="tm-w" x="130" y="934" text-anchor="middle">chat · /u/&lt;user&gt;/prompt</text>
+		<text class="tm-w" x="130" y="950" text-anchor="middle">requestId · idempotent</text>
+		<text class="tm-w" x="130" y="974" text-anchor="middle">sees streamed tokens</text>
+
+		<!-- ================= caddy ================= -->
+		<rect class="plane-client" x="270" y="160" width="150" height="960" rx="4"/>
+		<text class="tt-lg" x="345" y="192" text-anchor="middle">Caddy</text>
+		<text class="tm" x="345" y="210" text-anchor="middle">:18080 · edge</text>
+		<text class="ts" x="345" y="236" text-anchor="middle">forward_auth</text>
+		<text class="ts" x="345" y="252" text-anchor="middle">/providers/*</text>
+		<text class="ts" x="345" y="268" text-anchor="middle">/u/&lt;user&gt;/*</text>
+		<text class="ts" x="345" y="284" text-anchor="middle">one public port</text>
+		<text class="ts" x="345" y="330" text-anchor="middle">Caddyfile</text>
+		<text class="ts" x="345" y="346" text-anchor="middle">unchanged</text>
+		<text class="ts" x="345" y="420" text-anchor="middle" style="fill:var(--red)">plaintext crosses</text>
+		<text class="ts" x="345" y="436" text-anchor="middle" style="fill:var(--red)">once — TLS buffer</text>
+		<text class="ts" x="345" y="452" text-anchor="middle" style="fill:var(--red)">of the setup POST</text>
+		<text class="ts" x="345" y="500" text-anchor="middle">strips a client</text>
+		<text class="ts" x="345" y="516" text-anchor="middle">X-Sandbox-Endpoint</text>
+		<text class="ts" x="345" y="560" text-anchor="middle">never dials the</text>
+		<text class="ts" x="345" y="576" text-anchor="middle">sidecar</text>
+		<text class="ts" x="345" y="1020" text-anchor="middle">both phases</text>
+		<text class="ts" x="345" y="1036" text-anchor="middle">enter through</text>
+		<text class="ts" x="345" y="1052" text-anchor="middle">this one port</text>
+
+		<!-- ================= manager ================= -->
+		<rect class="plane-control" x="470" y="160" width="320" height="960" rx="4"/>
+		<text class="tt-lg" x="486" y="192">sandbox-manager</text>
+		<text class="ts" x="486" y="210">trusted broker · every tenant's ciphertext</text>
+
+		<rect class="inner" x="486" y="228" width="288" height="88" rx="3"/>
+		<text class="tm-b" x="498" y="248">setup · /providers/*</text>
+		<text class="tm" x="498" y="266">validate · catalog · selection</text>
+		<text class="tm" x="498" y="282">PUT /providers/config stores</text>
+		<text class="tm" x="498" y="298">ciphertext, not the key</text>
+
+		<rect class="inner" x="486" y="328" width="288" height="88" rx="3"/>
+		<text class="tm-b" x="498" y="348">KEK · AES-256-GCM</text>
+		<text class="tm" x="498" y="366">seal at setup, open at delivery</text>
+		<text class="tm" x="498" y="382">key from secrets/llm_key_kek</text>
+		<text class="ts" x="498" y="400" style="font-style:italic">mounted into the manager only</text>
+
+		<rect class="inner" x="486" y="428" width="288" height="100" rx="3"/>
+		<text class="tm-b" x="498" y="448">resolve(user)</text>
+		<text class="tm" x="498" y="466">serialized with prompts</text>
+		<text class="tm" x="498" y="482">ensure pair · wait_healthy ×2</text>
+		<text class="tm" x="498" y="498">agent /health + sidecar /health</text>
+		<text class="ts" x="498" y="516">an idle probe never activates storage</text>
+
+		<rect class="inner" x="486" y="540" width="288" height="124" rx="3"/>
+		<text class="tm-b" x="498" y="560">delivery split · §5</text>
+		<text class="tm" x="498" y="578" style="fill:var(--violet)">→ sidecar  {provider, modelId,</text>
+		<text class="tm" x="498" y="594" style="fill:var(--violet)">             apiKey, baseUrl?}</text>
+		<text class="tm" x="498" y="616" style="fill:var(--red)">→ agent    {provider, modelId,</text>
+		<text class="tm" x="498" y="632" style="fill:var(--red)">             viaSidecar: true}</text>
+		<text class="ts" x="498" y="654" style="font-style:italic">the agent payload has no key field</text>
+
+		<rect class="inner" x="486" y="676" width="288" height="106" rx="3"/>
+		<text class="tm-b" x="498" y="696">reconcile_provider</text>
+		<text class="tm" x="498" y="714">sidecar /status: fingerprint,</text>
+		<text class="tm" x="498" y="730">provider, model, pinned upstream</text>
+		<text class="tm" x="498" y="746">agent /status: keyVia, provider,</text>
+		<text class="tm" x="498" y="762">model · a stopped sidecar lost</text>
+		<text class="tm" x="498" y="778">its key → re-deliver</text>
+
+		<rect class="inner" x="486" y="794" width="288" height="96" rx="3"/>
+		<text class="tm-b" x="498" y="814">lifecycle = the pair</text>
+		<text class="tm" x="498" y="832">idle pause · eviction · recreate</text>
+		<text class="tm" x="498" y="848">docker rm of either is one event</text>
+		<text class="ts" x="498" y="868" style="font-style:italic">an agent without its sidecar is an</text>
+		<text class="ts" x="498" y="882" style="font-style:italic">incomplete sandbox</text>
+
+		<text class="tm" x="486" y="920">binds no host port · MANAGER_TOKEN</text>
+		<text class="tm" x="486" y="936">drives the host daemon over</text>
+		<text class="tm" x="486" y="952">/var/run/docker.sock</text>
+
+		<rect class="inner-stop" x="486" y="978" width="288" height="52" rx="3"/>
+		<text class="tm-b" x="498" y="998">fail closed, never silent</text>
+		<text class="tm" x="498" y="1016">sidecar_unhealthy · egress_blocked</text>
+
+		<text class="ts" x="486" y="1062">same promise chain as /prompt:</text>
+		<text class="ts" x="486" y="1078">one delivery at a time, no interleaving</text>
+
+		<!-- ================= OLTP ================= -->
+		<rect class="store" x="1400" y="180" width="260" height="230" rx="4"/>
+		<text class="tt" x="1416" y="206">Postgres · OLTP</text>
+		<text class="ts" x="1416" y="224">desired state</text>
+		<text class="tm" x="1416" y="248">provider_selection</text>
+		<text class="tm" x="1416" y="264">api_key_ciphertext</text>
+		<text class="tm" x="1416" y="280">user_id · provider · model</text>
+		<text class="tm" x="1416" y="296">nonce · key_fingerprint</text>
+		<text class="ts" x="1416" y="322">never: KEK, plaintext</text>
+		<text class="ts" x="1416" y="346" style="font-style:italic">schema verbatim from RFC 0012</text>
+		<text class="ts" x="1416" y="368" style="font-style:italic">idempotent resolve reads here</text>
+		<text class="ts" x="1416" y="392" style="font-style:italic">eviction loses nothing</text>
+
+		<!-- ================= agent ================= -->
+		<rect class="plane-agent" x="920" y="500" width="390" height="310" rx="4"/>
+		<text class="tt" x="936" y="524">agent sandbox — affido-agent:latest</text>
+		<text class="ts" x="936" y="540">per user · created by create_args</text>
+
+		<rect class="inner-nokey" x="936" y="548" width="358" height="30" rx="3"/>
+		<text class="tm-b" x="948" y="568" style="fill:var(--red)">✕  no plaintext key in this container — R1</text>
+
+		<rect class="inner" x="936" y="588" width="358" height="46" rx="3"/>
+		<text class="tm-b" x="948" y="606">server.ts · HttpTool registry</text>
+		<text class="tm" x="948" y="622">each route declares: activates or not</text>
+
+		<rect class="inner" x="936" y="642" width="358" height="46" rx="3"/>
+		<text class="tm-b" x="948" y="660">DurableHarness · POST /prompt</text>
+		<text class="tm" x="948" y="676">open · resume · pause — one chain</text>
+
+		<rect class="inner" x="936" y="696" width="358" height="52" rx="3"/>
+		<text class="tm-b" x="948" y="714">buildProvider · sidecar mode</text>
+		<text class="tm" x="948" y="730">compat resolved from the real URL,</text>
+		<text class="tm" x="948" y="745">then baseUrl → SIDECAR_URL/&lt;provider&gt;</text>
+
+		<rect class="inner" x="936" y="756" width="358" height="44" rx="3"/>
+		<text class="tm-b" x="948" y="774">placeholder credential sk-sidecar-…</text>
+		<text class="tm" x="948" y="790">no secret · stripped before the upstream</text>
+
+		<!-- ================= sidecar ================= -->
+		<rect class="plane-sidecar" x="920" y="860" width="390" height="250" rx="4"/>
+		<text class="tt" x="936" y="884">sidecar — same image, node /app/sidecar.ts</text>
+		<text class="ts" x="936" y="900">one per sandbox · one key per process</text>
+
+		<rect class="inner-key" x="936" y="908" width="358" height="42" rx="3"/>
+		<text class="tm-b" x="948" y="926">POST /config — manager only</text>
+		<text class="tm" x="948" y="942">key held in module memory, nowhere else</text>
+
+		<rect class="inner-key" x="936" y="958" width="358" height="42" rx="3"/>
+		<text class="tm-b" x="948" y="976">pinned upstream, fixed at /config</text>
+		<text class="tm" x="948" y="992">catalog hostname | registered baseUrl</text>
+
+		<rect class="inner-key" x="936" y="1008" width="358" height="42" rx="3"/>
+		<text class="tm-b" x="948" y="1026">proxy · strip → stamp → forward</text>
+		<text class="tm" x="948" y="1042">SSE relayed unbuffered · no logging</text>
+
+		<rect class="inner-key" x="936" y="1054" width="358" height="52" rx="3"/>
+		<text class="tm-b" x="948" y="1072">GET /status · GET /health</text>
+		<text class="tm" x="948" y="1088">fingerprint, provider, model, upstream</text>
+		<text class="tm" x="948" y="1102">no volumes · caps 128m / 0.25 cpu</text>
+
+		<!-- ================= upstream ================= -->
+		<rect class="ghost ghost-prov" x="1400" y="980" width="260" height="176" rx="4"/>
+		<text class="tt" x="1416" y="1006">Pinned upstream</text>
+		<text class="ts" x="1416" y="1023">external · the only egress</text>
+		<text class="tm" x="1416" y="1048">catalog: api.deepseek.com</text>
+		<text class="tm" x="1416" y="1064">custom: user baseUrl</text>
+		<text class="ts" x="1416" y="1090">TLS verified · Host rewritten</text>
+		<text class="ts" x="1416" y="1108">faux: never dialled, no key</text>
+		<text class="ts" x="1416" y="1132" style="font-style:italic">an agent-chosen URL cannot</text>
+		<text class="ts" x="1416" y="1148" style="font-style:italic">reach this box</text>
+
+		<!-- ================= outbound annotation ================= -->
+		<text class="tl" x="1400" y="600">the key leaves the stack here</text>
+		<text class="ts" x="1400" y="626">and nowhere else: one host,</text>
+		<text class="ts" x="1400" y="642">fixed at delivery time (R3)</text>
+		<text class="tm" x="1400" y="668">Host: api.deepseek.com</text>
+		<text class="tm" x="1400" y="684">Authorization: Bearer &lt;key&gt;</text>
+		<text class="tm" x="1400" y="700">x-api-key: &lt;key&gt;   (anthropic wire)</text>
+		<text class="ts" x="1400" y="726">inbound Authorization, x-api-key</text>
+		<text class="ts" x="1400" y="742">and cookie are stripped first</text>
+		<text class="tm" x="1400" y="768">/&lt;provider&gt;/ prefix removed,</text>
+		<text class="tm" x="1400" y="784">remainder appended to the base</text>
+		<text class="ts" x="1400" y="810" style="font-style:italic">method · query · body unmodified</text>
+		<text class="ts" x="1400" y="826" style="font-style:italic">response relayed chunk by chunk</text>
+
+		<!-- ================= edges ================= -->
+		<!-- 1 browser -> caddy (setup) -->
+		<path class="edge" d="M230,240 H264" marker-end="url(#mk-blue)"/>
+		<!-- 2 caddy -> manager (setup) -->
+		<path class="edge" d="M420,240 H464" marker-end="url(#mk-blue)"/>
+		<!-- 3 manager -> OLTP (ciphertext) -->
+		<path class="edge" d="M790,250 H1394" marker-end="url(#mk-blue)"/>
+		<!-- 4 browser -> caddy (prompt) -->
+		<path class="edge" d="M230,950 H264" marker-end="url(#mk-blue)"/>
+		<!-- 5 caddy -> manager (forward_auth resolve) -->
+		<path class="edge" d="M420,950 H464" marker-end="url(#mk-blue)"/>
+		<!-- 6 manager -> sidecar (key delivery) -->
+		<path class="edge-key" d="M790,990 H914" marker-end="url(#mk-red)"/>
+		<!-- 7 manager -> agent (keyless delivery) -->
+		<path class="edge-key" d="M790,560 H914" marker-end="url(#mk-red)"/>
+		<!-- 8 agent -> sidecar (provider call, no credentials) -->
+		<path class="edge-prov" d="M1115,810 V854" marker-end="url(#mk-amber)"/>
+		<!-- 9 sidecar -> upstream (stamped, pinned) -->
+		<path class="edge-prov" d="M1310,1000 H1394" marker-end="url(#mk-amber)"/>
+		<!-- 10 sidecar -> manager (status read) -->
+		<path class="edge-dash" d="M914,1060 H796" marker-end="url(#mk-blue)"/>
+
+		<!-- ================= edge labels ================= -->
+		<text class="tm" x="798" y="546">POST /config</text>
+		<text class="tm" x="798" y="576">no apiKey</text>
+		<text class="tm" x="798" y="976">POST /config</text>
+		<text class="tm" x="798" y="1006">key + pin</text>
+		<text class="tm" x="798" y="1082">GET /status</text>
+		<text class="tm" x="1135" y="824">provider call</text>
+		<text class="tm" x="1135" y="840">no credentials</text>
+		<text class="tm" x="1352" y="1024" text-anchor="middle">pinned host</text>
+		<text class="tm" x="1000" y="238">api_key_ciphertext</text>
+
+		<!-- ================= numbers ================= -->
+		<g class="n n-in"><circle cx="247" cy="240" r="11"/><text x="247" y="244">1</text></g>
+		<g class="n n-in"><circle cx="442" cy="240" r="11"/><text x="442" y="244">2</text></g>
+		<g class="n n-in"><circle cx="960" cy="250" r="11"/><text x="960" y="254">3</text></g>
+		<g class="n n-in"><circle cx="247" cy="950" r="11"/><text x="247" y="954">4</text></g>
+		<g class="n n-in"><circle cx="442" cy="950" r="11"/><text x="442" y="954">5</text></g>
+		<g class="n n-key"><circle cx="890" cy="990" r="11"/><text x="890" y="994">6</text></g>
+		<g class="n n-key"><circle cx="890" cy="560" r="11"/><text x="890" y="564">7</text></g>
+		<g class="n n-prov"><circle cx="1115" cy="832" r="11"/><text x="1115" y="836">8</text></g>
+		<g class="n n-prov"><circle cx="1352" cy="1000" r="11"/><text x="1352" y="1004">9</text></g>
+		<g class="n n-in"><circle cx="890" cy="1060" r="11"/><text x="890" y="1064">10</text></g>
+
+		<!-- ================= phase 0 footnote ================= -->
+		<text class="ts" x="880" y="1182">M0, on both containers: seccomp deny-list on ptrace / process_vm_* / pidfd_getfd / kcmp · <tspan class="tm">--ulimit core=0</tspan></text>
+	</svg>
+	</div>
+
+	<div class="tbl-wrap">
+	<table>
+		<thead><tr><th>#</th><th>From → to</th><th>What crosses</th><th>Contract</th></tr></thead>
+		<tbody>
+			<tr><td class="id">1</td><td class="mono">browser → caddy</td><td>PUT /u/&lt;u&gt;/providers/config {provider, modelId, apiKey}</td><td>the only moment the key is in the browser; TLS terminates here</td></tr>
+			<tr><td class="id">2</td><td class="mono">caddy → manager</td><td>forward_auth + the request body</td><td>same /providers/* surface as RFC 0012, unchanged</td></tr>
+			<tr><td class="id">3</td><td class="mono">manager → OLTP</td><td>ciphertext, nonce, user_id, provider, modelId, key_fingerprint</td><td>desired state; KEK and plaintext never reach the database</td></tr>
+			<tr><td class="id">4</td><td class="mono">browser → caddy</td><td>POST /u/&lt;u&gt;/prompt {requestId}</td><td>idempotent by requestId, as today</td></tr>
+			<tr><td class="id">5</td><td class="mono">caddy → manager</td><td>GET /resolve?user_id</td><td>ensure pair, wait_healthy ×2, serialized with prompts</td></tr>
+			<tr><td class="id">6</td><td class="mono">manager → sidecar</td><td>{provider, modelId, apiKey, baseUrl?}</td><td>the only plaintext hop on the wire; pins the upstream</td></tr>
+			<tr><td class="id">7</td><td class="mono">manager → agent</td><td>{provider, modelId, viaSidecar: true}</td><td>no key field in the payload at all</td></tr>
+			<tr><td class="id">8</td><td class="mono">agent → sidecar</td><td>POST /&lt;provider&gt;/v1/… · body · SSE</td><td>no credentials the agent ever produced; placeholder is stripped</td></tr>
+			<tr><td class="id">9</td><td class="mono">sidecar → upstream</td><td>stamped Authorization / x-api-key, unmodified path, query and body</td><td>pinned host, TLS verified, SSE relayed unbuffered, no header logs</td></tr>
+			<tr><td class="id">10</td><td class="mono">sidecar → manager</td><td>GET /status {provider, modelId, keyFingerprint, upstream}</td><td>reconcile read; a stopped sidecar lost its key → re-deliver</td></tr>
+		</tbody>
+	</table>
+	</div>
+	<p class="tbl-note">Not drawn, because it must not exist: any edge from the agent to the upstream, and any edge from the agent to the ciphertext. The agent's only provider path is through the sidecar.</p>
+</section>
+
+<!-- ============================================================ 03 -->
+<section id="call">
+	<div class="sec-head"><span class="sec-no">03</span><h2>One proxied call, header by header</h2></div>
+	<div class="sec-q">The sidecar is a wire-level pass-through: it needs no pi-ai change, only a rewritten baseUrl</div>
+
+	<p class="lede">The whole mechanism is one fact from pi-ai: every supported API layer builds the upstream URL from <code>model.baseUrl</code>. Register the model with the sidecar's URL instead of the vendor's and all traffic routes through the sidecar. What the sidecar must do is narrow — strip, stamp, pin, relay.</p>
+
+	<div class="grid-3">
+		<div>
+			<div class="code-cap">agent → sidecar</div>
+			<div class="code"><span class="h">POST</span> /deepseek/chat/completions
+Host: sidecar:8081
+<span class="c">Authorization: Bearer sk-sidecar-…</span>
+Content-Type: application/json
+
+{ "model": "deepseek-chat",
+  "stream": true, … }
+
+<span class="c">// placeholder only, no secret</span></div>
+		</div>
+		<div>
+			<div class="code-cap">sidecar → upstream</div>
+			<div class="code"><span class="h">POST</span> /chat/completions
+Host: <span class="g">api.deepseek.com</span>
+<span class="v">Authorization: Bearer &lt;the user's key&gt;</span>
+Content-Type: application/json
+
+{ "model": "deepseek-chat",
+  "stream": true, … }
+
+<span class="c">// pinned, TLS verified, body untouched</span></div>
+		</div>
+		<div>
+			<div class="code-cap">sidecar → refused</div>
+			<div class="code"><span class="h">POST</span> /attacker.example/collect
+Host: sidecar:8081
+Authorization: …
+
+<span class="x">403  unpinned host</span>
+
+<span class="c">// no agent header, path or model</span>
+<span class="c">// field can redirect the key</span></div>
+		</div>
+	</div>
+
+	<p class="note">Two behaviours travel with this rewrite, both acceptable in phase 1. <b>Prompt caching:</b> pi-ai emits <code>prompt_cache_key</code> only when the baseUrl contains <code>api.openai.com</code>, so a proxied OpenAI prompt loses server-side caching while <code>cacheRetention</code> is off — the sidecar could add the header itself later, since it knows the real host. <b>Custom-endpoint quirks:</b> <code>compat</code> is resolved from the real baseUrl <em>before</em> the rewrite, so auto-detection never sees the sidecar URL.</p>
+</section>
+
+<!-- ============================================================ 04 -->
+<section id="who">
+	<div class="sec-head"><span class="sec-no">04</span><h2>Who may hold the key</h2></div>
+	<div class="sec-q">Honest list of every place the plaintext exists, before and after</div>
+
+	<div class="tbl-wrap">
+	<table class="matrix">
+		<thead>
+			<tr>
+				<th>Component</th>
+				<th class="c mhead">plaintext key</th>
+				<th class="c mhead">ciphertext</th>
+				<th class="c mhead">KEK</th>
+				<th class="c mhead">pinned upstream</th>
+				<th class="c mhead">other tenants</th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr><td><b>Browser</b></td><td class="c"><span class="dot" title="while typing"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot o"></span></td></tr>
+			<tr><td><b>Caddy</b> <span class="mono" style="font-size:11px">TLS buffer, one POST</span></td><td class="c"><span class="dot" title="transient"></span></td><td class="c"><span class="dot o"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot o"></span></td></tr>
+			<tr><td><b>sandbox-manager</b> <span class="mono" style="font-size:11px">trusted broker</span></td><td class="c"><span class="dot" title="during setup and delivery"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot" title="sees every tenant"></span></td></tr>
+			<tr><td><b>Postgres · OLTP</b></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot" title="rows are per user"></span></td></tr>
+			<tr><td><b>sidecar</b> <span class="mono" style="font-size:11px">new in RFC 0013</span></td><td class="c"><span class="dot key"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot o"></span></td></tr>
+			<tr><td><b>agent sandbox</b></td><td class="c"><span class="dot none" title="R1"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot o" title="knows the sidecar URL only"></span></td><td class="c"><span class="dot o"></span></td></tr>
+			<tr><td><b>Pinned upstream</b></td><td class="c"><span class="dot" title="receives it per request"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot none"></span></td><td class="c"><span class="dot"></span></td><td class="c"><span class="dot none"></span></td></tr>
+		</tbody>
+	</table>
+	</div>
+	<div class="mkey">
+		<span><span class="dot"></span> present</span>
+		<span><span class="dot key"></span> present for the sandbox lifetime — the whole point</span>
+		<span><span class="dot o"></span> partial / metadata only</span>
+		<span><span class="dot none"></span> never</span>
+	</div>
+
+	<div class="grid-2" style="margin-top:22px">
+		<div class="card ok">
+			<span class="flag">removed by this RFC</span>
+			<h3>Agent RAM for the entire key lifetime</h3>
+			<p>The largest window in RFC 0012 disappears: not shortened, removed. <code>docker exec</code> into the agent container, its environment, its filesystem and its process memory are all out of reach of the key by construction, not by hardening.</p>
+		</div>
+		<div class="card new">
+			<span class="flag">added by this RFC</span>
+			<h3>One more process, one key, one network</h3>
+			<p>A per-sandbox sidecar holds exactly one tenant's key. Reaching it means breaking the per-user <code>--internal</code> isolation that already separates tenants — the wall <code>e2e-test/security.sh</code> proves, now with one more target to probe.</p>
+		</div>
+	</div>
+
+	<p class="note">Why never the manager itself: routing tenant LLM traffic through one process would put every tenant's plaintext in one place, inverting the per-user isolation the stack is built on, and would make the control plane a data-plane bottleneck. The invariant is <b>one key per process</b>, not one sidecar per user.</p>
+</section>
+
+<!-- ============================================================ 05 -->
+<section id="life">
+	<div class="sec-head"><span class="sec-no">05</span><h2>Lifecycle: the pair, or nothing</h2></div>
+	<div class="sec-q">Every operation that used to act on one container now acts on two</div>
+
+	<article class="lane lane-a">
+		<header class="lane-head">
+			<h3>Resolve — every prompt pays for correctness, not for state</h3>
+			<span class="mono" style="font-size:11px; margin-left:auto; color:var(--ink-soft)">serialized on the /prompt chain</span>
+		</header>
+		<ol>
+			<li><span class="step">1</span><div class="what"><b>Ensure the pair exists</b><span class="call">create_args → agent + sidecar</span><p>Agent with <code>AGENT_MEMORY</code>/<code>AGENT_CPUS</code>, sidecar with <code>SIDECAR_MEMORY=128m</code>/<code>SIDECAR_CPUS=0.25</code>. Same <code>--internal</code> network, no volumes, no published ports.</p></div><span class="state cold">both created</span></li>
+			<li><span class="step">2</span><div class="what"><b>Wait for both</b><span class="call">wait_healthy ×2</span><p>A dead sidecar fails the resolve with <code>sidecar_unhealthy</code>, exactly as an unreachable host fails with <code>egress_blocked</code>. No silent faux fallback.</p></div><span class="state clean">fail closed</span></li>
+			<li><span class="step">3</span><div class="what"><b>Deliver the key half</b><span class="call">POST /config → sidecar</span><p>{provider, modelId, apiKey, baseUrl?}. One call pins the upstream and installs the key atomically: in-flight requests finish on the old upstream, queued prompts use the new one.</p></div><span class="state key">key resident</span></li>
+			<li><span class="step">4</span><div class="what"><b>Deliver the keyless half</b><span class="call">POST /config → agent</span><p>{provider, modelId, viaSidecar: true}. <code>buildProvider</code> resolves <code>compat</code> from the real URL, rewrites every model baseUrl to the sidecar, registers the placeholder credential.</p></div><span class="state warm">ready</span></li>
+		</ol>
+		<div class="lane-foot"><b>Idle pause still costs nothing.</b> <code>/health</code> and <code>/status</code> never open storage and never activate the harness, so an idle user keeps zero active containers — the sidecar is evicted with the agent, not left running.</div>
+	</article>
+
+	<article class="lane lane-b">
+		<header class="lane-head">
+			<h3>Reconcile, restart, switch</h3>
+			<span class="mono" style="font-size:11px; margin-left:auto; color:var(--ink-soft)">desired state lives in the OLTP</span>
+		</header>
+		<ol>
+			<li><span class="step">1</span><div class="what"><b>Sidecar restarted or evicted while idle</b><span class="call">key lost from memory</span><p>The next resolve re-delivers from the OLTP ciphertext. Nothing is persisted in the sidecar, so nothing can be stale; in-flight streams fail as a provider 5xx would today.</p></div><span class="state store">re-deliver</span></li>
+			<li><span class="step">2</span><div class="what"><b>User switches provider or key</b><span class="call">one /config, one lock</span><p>Key and pinned upstream are replaced together in a single delivery, then the agent is re-configured. The session survives: RFC 0012 R8 is untouched.</p></div><span class="state key">atomic swap</span></li>
+			<li><span class="step">3</span><div class="what"><b>docker rm of either container</b><span class="call">one event, not two</span><p>The watchdog re-provisions the pair. An agent without its sidecar is an incomplete sandbox, never a working one.</p></div><span class="state cold">pair recreated</span></li>
+			<li><span class="step">4</span><div class="what"><b>Faux provider selected</b><span class="call">no key, no hop</span><p>The sidecar accepts and ignores the config; the agent stays in direct mode and never proxies. The keyless default and <code>verify.sh</code> behave exactly as today.</p></div><span class="state prov">unchanged</span></li>
+		</ol>
+		<div class="lane-foot"><b>Egress is still network-wide in phase 1.</b> When a real provider is selected the whole per-user network opens, as before. Narrowing NAT to the sidecar only is phase 2, worth doing only if content exfiltration — already possible and accepted — enters the threat model.</div>
+	</article>
+</section>
+
+<!-- ============================================================ 06 -->
+<section id="proxyable">
+	<div class="sec-head"><span class="sec-no">06</span><h2>Why every catalog provider still works</h2></div>
+	<div class="sec-q">Verified against pi-ai 1.3.0: all four wire APIs read model.baseUrl</div>
+
+	<p class="lede">The design would be dead if any provider constrained its base URL. None does: every API layer builds the upstream from <code>model.baseUrl</code>, and the two provider-specific branches check the provider id before the baseUrl. So the rewrite is one field of plain model data, at registration time, with no fork and no wrapper.</p>
+
+	<div class="tbl-wrap">
+	<table>
+		<thead><tr><th>Catalog provider</th><th>pi-ai wire API</th><th>baseUrl-content branch</th><th>Proxyable</th></tr></thead>
+		<tbody>
+			<tr><td class="mono">openai</td><td class="mono">openai-responses</td><td>ChatGPT sign-in needs the literal vendor URL; the rewritten URL takes the normal API-key path</td><td>yes</td></tr>
+			<tr><td class="mono">openrouter</td><td class="mono">anthropic-messages, openai-completions</td><td>detection checks <code>provider === "openrouter"</code> before baseUrl — survives the rewrite</td><td>yes</td></tr>
+			<tr><td class="mono">deepseek · groq · together · cerebras</td><td class="mono">openai-completions</td><td>none</td><td>yes</td></tr>
+			<tr><td class="mono">fireworks</td><td class="mono">anthropic-messages, openai-completions</td><td>provider id checked first</td><td>yes</td></tr>
+			<tr><td class="mono">xai</td><td class="mono">openai-responses</td><td>none</td><td>yes</td></tr>
+			<tr><td class="mono">mistral</td><td class="mono">mistral-conversations</td><td>none; appends <code>/v1/chat/completions</code> to the base — the <code>/&lt;provider&gt;</code> prefix must round-trip</td><td>yes</td></tr>
+			<tr><td class="mono">custom endpoints</td><td class="mono">openai-completions</td><td><code>compat</code> auto-detect reads baseUrl → resolve it before the rewrite</td><td>yes, with A3</td></tr>
+			<tr><td class="mono">faux</td><td class="mono">—</td><td>no network at all</td><td>n/a — stays direct, no key</td></tr>
+		</tbody>
+	</table>
+	</div>
+	<p class="tbl-note">The e2e fake upstream is exactly the custom-endpoint case, which is what makes the whole chain testable keylessly: browser → manager → OLTP → sidecar → fake upstream, with an assertion that the key appears in no agent response and no log along the way.</p>
+</section>
+
+<!-- ============================================================ 07 -->
+<section id="invariants">
+	<div class="sec-head"><span class="sec-no">07</span><h2>What the promoted model must keep true</h2></div>
+	<div class="sec-q">If a later change breaks one of these, the diagram is wrong, not the requirement</div>
+
+	<dl class="inv">
+		<div><dt>R1 · agent never holds the key</dt><dd><b>No plaintext</b> in agent memory, env, disk or API responses. <code>docker exec</code> into the agent is not enough to recover it.</dd></div>
+		<div><dt>R2 · the agent can still call the provider</dt><dd>Streaming, usage, tool calls and thinking levels work unchanged; the sidecar is a wire-level pass-through.</dd></div>
+		<div><dt>R3 · upstream pinning</dt><dd><b>One host, fixed at delivery.</b> No agent-supplied URL, header or parameter redirects the key.</dd></div>
+		<div><dt>R4 · RFC 0012 flows keep their shape</dt><dd>Setup, validation, catalog, per-user isolation, idempotent resolve and session survival across provider switches.</dd></div>
+		<div><dt>R5 · topology stays manager-owned</dt><dd>The sidecar is created by <code>create_args</code>, never in compose; <code>run.sh</code> fails on <code>sidecar*</code> just as it fails on <code>agent*</code>.</dd></div>
+		<div><dt>R6 · no new published ports</dt><dd>Internal network only, like the agent's <code>:8080</code> today.</dd></div>
+		<div><dt>R7 · lifecycle is a pair</dt><dd><b>Evict, pause, recreate together.</b> A resolve never routes an agent to a dead sidecar.</dd></div>
+		<div><dt>R8 · tests stay keyless</dt><dd>The faux path is untouched; BYOK is proven against the fake upstream registered as a custom endpoint.</dd></div>
+		<div><dt>R9 · abuse stays visible</dt><dd>Provider and model remain identifiable in prompts, usage events and traces, via the sidecar <code>/status</code> fingerprint.</dd></div>
+		<div><dt>R10 · the sidecar gets its own caps</dt><dd><b>128 MiB / 0.25 CPU</b>, env-tunable; never the agent's 512 MiB / 1.0. Per-user ceiling 640 MiB + 1.25 CPU, not double.</dd></div>
+	</dl>
+
+	<div class="grid-2" style="margin-top:26px">
+		<div class="card ok">
+			<span class="flag">does not change</span>
+			<h3>Everything outside the delivery hop</h3>
+			<p>Caddyfile, frontend, the OLTP schema, the <code>/providers/*</code> surface, validation, catalog generation, the <code>verify.sh</code> shape, the faux provider and the keyless default. This is a manager, agent and e2e change; the image stays one deploy unit with two entrypoints.</p>
+		</div>
+		<div class="card bad">
+			<span class="flag">still out of scope</span>
+			<h3>Host and control-plane compromise</h3>
+			<p>Root on the host, or on the Docker daemon, still reads every key. TEEs are rejected as operational cost with no effect on abuse. Traffic analysis — that a provider call happened — is accepted. The sidecar moves one boundary, not all of them.</p>
+		</div>
+	</div>
+</section>
+
+<div class="foot">
+	<span class="mono">RFC 0013 · sidecar key injection · diagram of the promoted container model</span>
+	<span class="mono">Source: <a href="0013-sidecar-key-injection-proxy.md">0013-sidecar-key-injection-proxy.md</a> · amends <a href="0012-byok-user-selected-providers.md">RFC 0012 §5.4</a> · <a href="0003-python-sandbox-manager.md">RFC 0003</a></span>
+</div>
+
+</div>
+</body>
+</html>

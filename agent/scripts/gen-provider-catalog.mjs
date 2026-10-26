@@ -28,6 +28,16 @@ const BUILTINS = [
 	["mistral", "Mistral", MISTRAL_MODELS, undefined],
 ];
 
+// RFC 0012 §5.6: the path the manager's key check appends to the entry's
+// baseUrl. The default (absent) is "/models", but OpenRouter's /models is
+// public and ignores Authorization — any garbage key answers 200 there, so
+// validation proves nothing and a wrong-provider key only fails at the first
+// prompt (observed 2026-10-25: a DeepSeek key under openrouter passed
+// validation, then every prompt settled model_error 401 "Missing
+// Authentication header"). "/key" is OpenRouter's auth-required account
+// endpoint: it 401s for any key that is not a real sk-or-v1-… key.
+const VALIDATE_PATHS = { openrouter: "/key" };
+
 const providers = BUILTINS.map(([id, name, catalog, pinnedBaseUrl]) => {
 	const models = Object.values(catalog)
 		.filter((model) => model.type === undefined || model.type === "chat")
@@ -36,7 +46,9 @@ const providers = BUILTINS.map(([id, name, catalog, pinnedBaseUrl]) => {
 	// The model data's baseUrl can differ from the factory's (openrouter serves
 	// /api/v1); the entry pins the URL the §5.6 validation request uses, so the
 	// factory's value wins where they differ.
-	return { id, name, baseUrl: pinnedBaseUrl ?? Object.values(catalog)[0].baseUrl, builtin: true, models };
+	const entry = { id, name, baseUrl: pinnedBaseUrl ?? Object.values(catalog)[0].baseUrl, builtin: true, models };
+	if (VALIDATE_PATHS[id] !== undefined) entry.validatePath = VALIDATE_PATHS[id];
+	return entry;
 });
 
 process.stdout.write(JSON.stringify({ version: 1, providers }));

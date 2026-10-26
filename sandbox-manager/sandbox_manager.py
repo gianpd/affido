@@ -30,6 +30,7 @@ import re
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -561,20 +562,38 @@ def check_custom_base_url(base_url: str) -> None:
         )
 
 
-def validate_upstream(base_url: str, api_key: str, require_public: bool, timeout: float = 10.0) -> None:
+def validate_upstream(
+    base_url: str,
+    api_key: str,
+    require_public: bool,
+    timeout: float = 10.0,
+    path_suffix: str = "/models",
+) -> None:
     """§5.6 optional upstream validation, TOCTOU-safe: resolve the DNS name
     once, enforce the §5.1 rules on the resolved addresses (public-only when
     the URL is user-supplied), then connect to that verified address while the
-    hostname stays in Host (and SNI). Non-2xx on GET {base}/models is
+    hostname stays in Host (and SNI). Non-2xx on GET {base}{path_suffix} is
     `invalid_key`; connection problems surface as `validation_failed` without
-    a stored verdict — the key is then simply unverified (§7.2)."""
+    a stored verdict — the key is then simply unverified (§7.2).
+
+    path_suffix defaults to /models but comes from the catalog entry's
+    validatePath where the upstream's /models does not actually check auth:
+    OpenRouter's /models is public and ignores Authorization (any garbage key
+    answers 200, verified 2026-10), so its entry pins /key, the auth-required
+    account endpoint. The suffix originates in the operator-built agent image
+    but is shape-checked anyway — the request line is built by concatenation,
+    so a malformed value must never reach the socket."""
+    if not re.fullmatch(r"/[A-Za-z0-9._/-]+", path_suffix or "") or ".." in path_suffix:
+        raise ManagerError(
+            "invalid_catalog", f"catalog validatePath {path_suffix!r} is not a plain path", 500
+        )
     parts = _url_parts(base_url)
     addresses = _resolve(parts.hostname)
     if require_public and any(not address.is_global for address in addresses):
         raise ManagerError("invalid_base_url", f"{parts.hostname} resolves into a private or docker network", 400)
     address = addresses[0]
     port = parts.port or (443 if parts.scheme == "https" else 80)
-    path = (parts.path.rstrip("/") + "/models") or "/models"
+    path = parts.path.rstrip("/") + path_suffix
     try:
         sock = socket.create_connection((str(address), port), timeout=timeout)
         if parts.scheme == "https":
@@ -1334,6 +1353,7 @@ class Handler(BaseHTTPRequestHandler):
             if base_url is not None and not isinstance(base_url, str):
                 raise ManagerError("invalid_base_url", "baseUrl must be a string", 400)
             pinned_base_url: str | None = None
+            validate_path = "/models"  # §5.6 auth-checked suffix; a catalog entry may override
             if provider == "faux":
                 if model_id != "faux-1":
                     raise ManagerError("invalid_model", "the faux provider has exactly one model: faux-1", 400)
@@ -1351,6 +1371,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise ManagerError("invalid_model", f"modelId '{model_id}' is not in the {provider} catalog", 400)
                 if entry.get("baseUrl"):
                     pinned_base_url = str(entry["baseUrl"])
+                if entry.get("validatePath"):
+                    validate_path = str(entry["validatePath"])
                 # Catalog entries that are not pi-ai built-ins (the dev e2e-fake
                 # upstream) reach the agent through their pinned endpoint: the
                 # delivery payload needs that baseUrl, so it is stored on the key.
@@ -1372,7 +1394,10 @@ class Handler(BaseHTTPRequestHandler):
                     # URLs are operator-pinned and validated as-is.
                     target = base_url if base_url else pinned_base_url
                     if target:
-                        validate_upstream(target, api_key, require_public=provider == "custom")
+                        validate_upstream(
+                            target, api_key,
+                            require_public=provider == "custom", path_suffix=validate_path,
+                        )
                 provider_key_upsert(user_id, provider, api_key, base_url, verified=validate)
             provider_selection_set(user_id, provider, model_id)
             delivery = self.apply_live(user_id)
@@ -1504,10 +1529,30 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(404, {"error": "not found"})
 
 
+class ManagerHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with quiet peer-disconnect handling.
+
+    stdlib http.server funnels every client-side connection reset into
+    handle_error's full traceback. Resets are routine here: the web app aborts
+    in-flight fetches (navigation, AbortSignal timeouts) and Caddy propagates
+    the cancel by closing its upstream connections mid-request. Log one INFO
+    line; anything that is not a peer reset keeps the stdlib traceback."""
+
+    def handle_error(self, request: Any, client_address: tuple[str, int] | None) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            log.info(
+                "client %s closed the connection (%s)",
+                client_address[0] if client_address else "?", type(exc).__name__,
+            )
+            return
+        super().handle_error(request, client_address)
+
+
 def main() -> None:
     migrate()
     start_loops()
-    server = ThreadingHTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)
+    server = ManagerHTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)
     log.info(
         "sandbox-manager on %s:%s (image=%s stop_after=%ss egress=%s token=%s)",
         LISTEN_ADDR, LISTEN_PORT, AGENT_IMAGE, STOP_AFTER_S, AGENT_EGRESS,

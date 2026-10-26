@@ -206,8 +206,9 @@ Two kinds of catalog entries, both OpenAI-compatible:
 - **Built-ins** — a curated allowlist of pi-ai factories (v1: `openrouter`,
   `openai`, `deepseek`, `groq`, `together`, `fireworks`, `xai`, `cerebras`,
   `mistral`), each with `{id, name, baseUrl, models[]}` from pi-ai's static
-  catalogs. The agent imports the matching factory and overrides nothing; the
-  stored credential supplies the key (§3.3).
+  catalogs, plus an optional `validatePath` (§5.6). The agent imports the
+  matching factory and overrides nothing; the stored credential supplies the
+  key (§3.3).
 - **Custom endpoint** — `{id: "custom", name, baseUrl, models[]}` where the
   user supplies `baseUrl` and one or more model ids at setup. The agent builds
   it with the §3.2 factory.
@@ -352,14 +353,27 @@ demand) are deferred (§11).
 
 ### 5.6 Upstream key validation (optional, at setup)
 
-For entries whose catalog says the upstream serves `GET {base}/models`, the
-manager can validate before storing: `Authorization: Bearer <key>`, 10s
-timeout, result cached in `verified_at` / surfaced as `verified: true|false`.
-This is a UX nicety (catch typos early), not a gate: a provider without
-`/models` is stored unverified and failures surface at prompt time as
-`model_error`. The request originates from the manager (normal NAT egress),
-never from the sandbox, and only to the catalog's pinned `baseUrl` — the SSRF
-surface of §5.1's custom-endpoint rules.
+The manager can validate before storing: `Authorization: Bearer <key>`, 10s
+timeout, result cached in `verified_at` / surfaced as `verified: true|false`,
+on `GET {base}{validatePath}`. `validatePath` is a catalog-entry field whose
+default is `/models`; an entry overrides it when its `/models` does not
+actually check auth. OpenRouter pins `/key` (its auth-required account
+endpoint): `GET openrouter.ai/api/v1/models` is public and ignores the
+`Authorization` header — any garbage key answers 200 there, so a `/models`
+check stamped keys `verified` while proving nothing, and a wrong-provider key
+(a DeepSeek key pasted under openrouter, observed 2026-10-25) only failed at
+the first prompt as `model_error: 401 "Missing Authentication header"`.
+`/key` 401s for any key that is not a real `sk-or-v1-…` key, closing that
+hole at setup. The manager still shape-checks the suffix before building the
+request line (it comes from the operator-built agent image, the same trust
+level as the pinned `baseUrl`).
+
+This is a UX nicety (catch typos early), not a gate: a provider whose
+upstream serves neither endpoint usefully is stored unverified and failures
+surface at prompt time as `model_error`. The request originates from the
+manager (normal NAT egress), never from the sandbox, and only to the
+catalog's pinned `baseUrl` — the SSRF surface of §5.1's custom-endpoint
+rules.
 
 ## 6. Happy paths
 

@@ -5,7 +5,7 @@ providers, per-user API keys). All gates pass; see §4.
 
 ## 1. Created
 
-- `sandbox-manager/test_sandbox_manager.py` — manager unit tests: KEK round-trip (raw + base64), AAD-swap and wrong-KEK rejection, fingerprint shape, §5.1 baseUrl rules, §5.6 TOCTOU-safe validation client (RFC §5.2, §5.6; M1).
+- `sandbox-manager/test_sandbox_manager.py` — manager unit tests: KEK round-trip (raw + base64), AAD-swap and wrong-KEK rejection, fingerprint shape, §5.1 baseUrl rules, §5.6 TOCTOU-safe validation client with per-catalog validatePath routing and suffix shape guard, quiet peer-disconnect handling (RFC §5.2, §5.6; M1).
 - `agent/model.test.ts` — agent unit tests: `buildProvider` (built-ins + custom endpoints), `keyFingerprint`, `configureProvider` order, `ContainerAgent.configureModel` (status + harness pin), `ConfigTool` validation (RFC §3.2, §5.4; M2).
 - `agent/scripts/gen-provider-catalog.mjs` — build-time generator of `provider-catalog.json` from pi-ai's static catalogs (RFC §5.1; M5, replaces any static fallback).
 - `e2e-test/fake-upstream/server.mjs` + `Dockerfile` — the e2e-only fake OpenAI-compatible upstream (streaming `/v1/chat/completions`, `/v1/models`, auth log at `/_log`; RFC §10 M2).

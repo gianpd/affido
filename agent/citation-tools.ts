@@ -102,7 +102,14 @@ const readTool = ({ store }: CitationToolDeps) =>
 			docId: Type.String({ description: "Document id from corpus_grep" }),
 			version: Type.Optional(Type.Number({ description: "Document version; default the current one" })),
 			needle: Type.Optional(Type.String({ description: "Exact text to locate (copied from a grep hit)" })),
-			lineRange: Type.Optional(Type.Tuple([Type.Number(), Type.Number()], { description: "1-based [first, last] line" })),
+			// Not Type.Tuple: tuple schemas emit draft-4 array-form `items`, which
+			// 2020-12 validators (DeepSeek) reject — "is not of types \"boolean\",
+			// \"object\"" — before the first token. A bounded number-array is the
+			// same wire contract and valid in every draft; readWindow tolerates a
+			// short array anyway (workspace-store.ts readWindow).
+			lineRange: Type.Optional(
+				Type.Array(Type.Number(), { minItems: 2, maxItems: 2, description: "1-based [first, last] line" }),
+			),
 			radius: Type.Optional(Type.Number({ description: `Characters of context around the anchor (default ${DEFAULT_RADIUS}, max 4000)` })),
 			maxChars: Type.Optional(Type.Number({ description: `Window cap (default ${DEFAULT_READ_CHARS}, max 16000)` })),
 		}),
@@ -110,11 +117,16 @@ const readTool = ({ store }: CitationToolDeps) =>
 			return catchVerify(async () => {
 				const run = await requireRun(api, context);
 				await spendCall(api, run, context);
+				// Schema-level exactly-2 (minItems/maxItems) is enforced before execute;
+				// the narrowing only satisfies noUncheckedIndexedAccess for number[].
+				const [firstLine, lastLine] = args.lineRange ?? [];
+				const lineRange =
+					firstLine !== undefined && lastLine !== undefined ? ([firstLine, lastLine] as const) : undefined;
 				const window = await store.readWindow({
 					docId: args.docId,
 					version: args.version,
 					needle: args.needle,
-					lineRange: args.lineRange === undefined ? undefined : [args.lineRange[0], args.lineRange[1]],
+					lineRange,
 					radius: args.radius,
 					maxChars: args.maxChars,
 				});

@@ -6,7 +6,7 @@
 	"description": "Minimal durable pi agent serving one container workspace over HTTP",
 	"scripts": {
 		"typecheck": "tsc --noEmit",
-		"test": "node --test agent.test.ts corpus.test.ts citation-store.test.ts citation-agent.test.ts session.test.ts model.test.ts uploads.test.ts skills.test.ts artifacts.test.ts unpdf.test.ts",
+		"test": "node --test agent.test.ts corpus.test.ts citation-store.test.ts citation-agent.test.ts session.test.ts model.test.ts tool-schemas.test.ts uploads.test.ts skills.test.ts artifacts.test.ts unpdf.test.ts",
 		"start": "node server.ts"
 	},
 	"dependencies": {
@@ -19,6 +19,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "24.10.1",
+		"ajv": "^8.17.1",
 		"typescript": "5.9.3"
 	}
 }
