@@ -56,5 +56,6 @@ jobs:
       - name: Unit tests
         # Server project only: the browser-mode client project (scaffold
         # examples under src/lib/vitest-examples/) needs Playwright chromium
-        # and stays local-only ("pnpm test" runs it via the browser provider).
-        run: pnpm test:unit -- --run --project server
+        # and stays local-only. Direct script because pnpm does not reliably
+        # forward "-- --project server" args through test:unit.
+        run: pnpm test:unit:server
