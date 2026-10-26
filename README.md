@@ -209,7 +209,14 @@ networks are created `--internal` with no NAT — no route to the internet or
 other subnets — plus a per-bridge `iptables INPUT DROP` host wall installed by
 the manager (fail-closed); `open` is the opt-in for internet-reached providers
 and a prerequisite for BYOK with one (RFC 0012 §5.5) — routed egress comes
-back but the host wall stays), `OLTP_PORT` (host port for
+back but the host wall stays. That requirement is enforced at two fail-closed
+gates — `PUT /providers/config` rejects a real provider with `egress_blocked`
+at setup (§5.5) and resolve raises it again before delivery (§7.11), never a
+silent faux fallback — and `open` means full internet egress for the sandbox,
+not provider-only egress. RFC 0013 M3 (egress narrowing, §12.1) will remove
+this coupling: a per-user sidecar container will hold the key and be the only
+tenant with NAT (pinned to the provider upstream), while the agent network
+stays `--internal`), `OLTP_PORT` (host port for
 Postgres, default 15432, bound to loopback only), `CADDY_BIND` (the published
 bind address of the `:18080` entry point, `127.0.0.1` by default; set
 `0.0.0.0` to expose the stack on the LAN).
