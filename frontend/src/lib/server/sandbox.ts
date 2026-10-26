@@ -243,13 +243,18 @@ export type UploadTree = {
 	entries: UploadTreeEntry[];
 };
 
+/** What POST /uploads/file returns: the pipeline's `Staged` object verbatim
+ * (RFC 0014) — `indexing`/`searchable` are the ingest-time admission, the
+ * same decision the citation index reads from the registry forever after. */
 export type StagedUploadFile = {
+	docId: string;
 	path: string;
 	bytes: number;
-	sha256: string;
+	sourceSha256: string;
 	/** Whether corpus_grep can see the file now: text files directly, PDFs
 	 * through their staging-time extracted text, other binaries never. */
 	searchable?: boolean;
+	indexing?: 'text' | 'derived' | 'none';
 };
 
 /** Create (or confirm) a directory in the user's uploads tree. */
@@ -306,13 +311,21 @@ export type SkillVerifyReport = {
 	files: { path: string; status: 'ok' | 'mismatch' | 'missing' }[];
 };
 
+/** What POST /skills/file returns (RFC 0009 D2): unchanged by RFC 0014. */
+export type StagedSkillFile = {
+	skill: string;
+	path: string;
+	bytes: number;
+	sha256: string;
+};
+
 /** Write one catalog file at `skills/<name>/<path>` in the user's sandbox. */
 export const installSandboxSkill = (
 	event: RequestEvent,
 	input: { name: string; path: string; bytes: Uint8Array<ArrayBuffer> }
-): Promise<StagedUploadFile> => {
+): Promise<StagedSkillFile> => {
 	const params = new URLSearchParams({ skill: input.name, path: input.path });
-	return sandboxFetch<StagedUploadFile>(event, `/skills/file?${params}`, {
+	return sandboxFetch<StagedSkillFile>(event, `/skills/file?${params}`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/octet-stream' },
 		body: new Blob([input.bytes])

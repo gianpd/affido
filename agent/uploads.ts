@@ -1,8 +1,7 @@
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
 import type { Dirent } from "node:fs";
 import { HttpError, safeTreePath, workspacePath } from "./http.ts";
-import { sha256 } from "./corpus.ts";
 
 export const UPLOADS_DIR = "corpus/uploads";
 
@@ -23,40 +22,6 @@ export const createUploadDir = async (input: {
 		});
 	}
 	await mkdir(absolute, { recursive: true });
-	return { path: uploadsRelativePath(relative) };
-};
-
-export type StagedUpload = {
-	readonly path: string;
-	readonly bytes: number;
-	readonly sha256: string;
-};
-
-/** Write one file at its complete client-chosen path, creating the parents. */
-export const stageUploadFile = async (input: {
-	readonly workspace: string;
-	readonly path: string;
-	readonly bytes: Uint8Array;
-}): Promise<StagedUpload> => {
-	const relative = safeTreePath(input.path);
-	const absolute = workspacePath(input.workspace, uploadsRelativePath(relative));
-	await mkdir(dirname(absolute), { recursive: true });
-	await writeFile(absolute, input.bytes);
-	return {
-		path: uploadsRelativePath(relative),
-		bytes: input.bytes.length,
-		sha256: sha256(input.bytes),
-	};
-};
-
-/** Remove a file or a whole subtree; a missing path is not an error, like `removeRaw`. */
-export const removeUploadPath = async (input: {
-	readonly workspace: string;
-	readonly path: string;
-}): Promise<{ readonly path: string }> => {
-	const relative = safeTreePath(input.path);
-	const absolute = workspacePath(input.workspace, uploadsRelativePath(relative));
-	await rm(absolute, { recursive: true, force: true });
 	return { path: uploadsRelativePath(relative) };
 };
 

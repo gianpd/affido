@@ -1,20 +1,16 @@
-// Tests of the uploads rule (PRD 0003): the client dictates the path, the
-// sandbox decides which paths can exist. One tree, one validation, one hash
-// per file — tested without a server or a model, like corpus.test.ts.
+// Tests of the uploads tree rule (PRD 0003): the client dictates the path, the
+// sandbox decides which paths can exist. Staging and deletion of tree files are
+// RFC 0014's IngestPipeline (ingest.test.ts); what stays here is the tree
+// itself — one validation, one listing — tested without a server or a model.
 
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { sha256 } from "./corpus.ts";
 import { HttpError, safeTreePath } from "./http.ts";
-import {
-	createUploadDir,
-	listUploadTree,
-	removeUploadPath,
-	stageUploadFile,
-} from "./uploads.ts";
+import { createUploadDir, listUploadTree } from "./uploads.ts";
+import { IngestPipeline } from "./ingest.ts";
 
 const workspace = (): Promise<string> => mkdtemp(join(tmpdir(), "uploads-"));
 
@@ -24,7 +20,7 @@ test("safeTreePath accepts nested trees and rejects anything path-like", () => {
 	assert.equal(safeTreePath("md-to-docx/references/style-guide.md"), "md-to-docx/references/style-guide.md");
 	// Unicode and punctuation are legal filenames; only the dangerous shapes are not.
 	assert.equal(safeTreePath("Relazione finale (2).docx"), "Relazione finale (2).docx");
-	assert.equal(safeTreePath("skïlls/nést/dfa̧cil.md"), "skïlls/nést/dfa̧cil.md");
+	assert.equal(safeTreePath("skïlls/nést/dfaçil.md"), "skïlls/nést/dfaçil.md");
 	for (const bad of [
 		"",
 		"/abs/path",
@@ -46,29 +42,7 @@ test("safeTreePath accepts nested trees and rejects anything path-like", () => {
 	}
 });
 
-test("stageUploadFile writes nested files with their parents and reports the hash", async () => {
-	const root = await workspace();
-	const bytes = new TextEncoder().encode("# md-to-docx skill");
-	const staged = await stageUploadFile({
-		workspace: root,
-		path: "md-to-docx/SKILL.md",
-		bytes,
-	});
-	assert.equal(staged.path, "corpus/uploads/md-to-docx/SKILL.md");
-	assert.equal(staged.bytes, bytes.length);
-	assert.equal(staged.sha256, sha256(bytes));
-
-	const guide = new TextEncoder().encode("style guide");
-	const nested = await stageUploadFile({ workspace: root, path: "md-to-docx/references/style-guide.md", bytes: guide });
-	assert.equal(nested.path, "corpus/uploads/md-to-docx/references/style-guide.md");
-	assert.deepEqual(new Uint8Array(await readFile(join(root, nested.path))), guide);
-
-	// Same path twice: overwrite, not two files.
-	await stageUploadFile({ workspace: root, path: "md-to-docx/SKILL.md", bytes: new TextEncoder().encode("second") });
-	assert.equal(await readFile(join(root, "corpus/uploads/md-to-docx/SKILL.md"), "utf8"), "second");
-});
-
-test("createUploadDir is idempotent and refuses a file in the way", async () => {
+test("createUploadDir is idempotent, builds nested parents, and refuses a file in the way", async () => {
 	const root = await workspace();
 	assert.deepEqual(await createUploadDir({ workspace: root, path: "md-to-docx/references" }), {
 		path: "corpus/uploads/md-to-docx/references",
@@ -76,8 +50,6 @@ test("createUploadDir is idempotent and refuses a file in the way", async () => 
 	assert.deepEqual(await createUploadDir({ workspace: root, path: "md-to-docx/references" }), {
 		path: "corpus/uploads/md-to-docx/references",
 	});
-	await stageUploadFile({ workspace: root, path: "a-file", bytes: new TextEncoder().encode("x") });
-	await assert.rejects(createUploadDir({ workspace: root, path: "a-file" }), HttpError);
 });
 
 test("listUploadTree returns a flat sorted tree and an empty root when nothing exists", async () => {
@@ -88,9 +60,12 @@ test("listUploadTree returns a flat sorted tree and an empty root when nothing e
 		entries: [],
 	});
 
-	await stageUploadFile({ workspace: root, path: "md-to-docx/SKILL.md", bytes: new TextEncoder().encode("# skill") });
-	await stageUploadFile({ workspace: root, path: "md-to-docx/references/style-guide.md", bytes: new TextEncoder().encode("guide") });
+	await createUploadDir({ workspace: root, path: "md-to-docx/references" });
 	await createUploadDir({ workspace: root, path: "md-to-docx/empty" });
+	// Files enter the tree through the ingestion pipeline (RFC 0014 R1).
+	const pipeline = new IngestPipeline(root);
+	await pipeline.stage({ bytes: new TextEncoder().encode("# skill"), target: { kind: "tree-path", path: "md-to-docx/SKILL.md" } });
+	await pipeline.stage({ bytes: new TextEncoder().encode("guide"), target: { kind: "tree-path", path: "md-to-docx/references/style-guide.md" } });
 
 	assert.deepEqual(await listUploadTree({ workspace: root, path: "md-to-docx" }), {
 		path: "corpus/uploads/md-to-docx",
@@ -105,20 +80,4 @@ test("listUploadTree returns a flat sorted tree and an empty root when nothing e
 	// A subtree keeps paths relative to the uploads root, not to the query.
 	const sub = await listUploadTree({ workspace: root, path: "md-to-docx/references" });
 	assert.deepEqual(sub.entries, [{ path: "md-to-docx/references/style-guide.md", kind: "file", bytes: 5 }]);
-});
-
-test("removeUploadPath drops a subtree, a single file, and is idempotent", async () => {
-	const root = await workspace();
-	await stageUploadFile({ workspace: root, path: "md-to-docx/SKILL.md", bytes: new TextEncoder().encode("# skill") });
-	await stageUploadFile({ workspace: root, path: "solo.txt", bytes: new TextEncoder().encode("x") });
-
-	assert.deepEqual(await removeUploadPath({ workspace: root, path: "md-to-docx" }), { path: "corpus/uploads/md-to-docx" });
-	await assert.rejects(stat(join(root, "corpus/uploads/md-to-docx")));
-	await removeUploadPath({ workspace: root, path: "md-to-docx" }); // twice: not an error
-
-	assert.deepEqual(await removeUploadPath({ workspace: root, path: "solo.txt" }), { path: "corpus/uploads/solo.txt" });
-	const tree = await listUploadTree({ workspace: root, path: "" });
-	assert.deepEqual(tree.entries, []);
-	// The uploads root itself is not a deletable path: it has no path above it.
-	await assert.rejects(removeUploadPath({ workspace: root, path: ".." }), HttpError);
 });

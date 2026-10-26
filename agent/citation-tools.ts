@@ -4,8 +4,9 @@
 // that bounces plain-text answers back to the gate.
 
 import type { Context } from "@earendil-works/chord";
+import { normalize } from "node:path";
 import { defineExtension, defineTool, hook, section } from "@earendil-works/pi-durable";
-import { GenerationTask } from "@earendil-works/pi-durable";
+import { GenerationTask, ToolTask } from "@earendil-works/pi-durable";
 import type { Extension, ToolExecutionApi, ToolExecutionResult } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import {
@@ -67,7 +68,56 @@ const catchVerify = async (body: () => Promise<ToolExecutionResult>): Promise<To
 	}
 };
 
-export type CitationToolDeps = { readonly store: CitationStore };
+export type CitationToolDeps = { readonly store: CitationStore; readonly workspace: string };
+
+/** The workspace tools the strict gate refuses (§5.7.1). */
+const WORKSPACE_TOOLS = new Set(["bash", "read", "write", "edit"]);
+
+const STRICT_BLOCK =
+	"bash, read, write and edit are disabled in this strict-citations run: use " +
+	"corpus_grep and corpus_read; only the citation index is evidence";
+
+const CORPUS_BLOCK =
+	"corpus/ is the citation registry: documents enter it only through ingestion, never " +
+	"through write or edit; write outside corpus/ instead";
+
+/** Whether a model-supplied `write`/`edit` path argument names `corpus/**`. The
+ * argument is a single structured path (already confined to the workspace by
+ * the execution env), so a normalized prefix check is exact — the same shape
+ * that makes a path filter impossible for `bash` makes it trivial here. */
+const isCorpusPath = (path: string, workspace: string): boolean => {
+	let candidate = path.replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, " "); // mirror the tools' normalization
+	if (candidate.startsWith("@")) candidate = candidate.slice(1);
+	if (candidate.startsWith("/")) {
+		const root = workspace.endsWith("/") ? workspace : `${workspace}/`;
+		if (!candidate.startsWith(root)) return false; // outside the workspace: the env refuses it
+		candidate = candidate.slice(root.length);
+	}
+	const first = normalize(candidate).split("/")[0] ?? "";
+	return first === "corpus";
+};
+
+/** The two always-checked tool rules of RFC 0014 §5.7, one `beforeTool` hook:
+ * (1) `write`/`edit` refuse `corpus/**` in every run — a blocked call returns a
+ * named error and lands in the durable trace, where the friction is measurable
+ * like every other rejection; (2) while the current run is strict, the
+ * workspace tools are refused outright: the only readable evidence is the
+ * citation index. The hook reads the same run pointer the strict section
+ * reads, so the gate is per-submission exactly like the gate it protects. */
+const toolGate = ({ workspace }: { readonly workspace: string }) =>
+	hook(ToolTask, {
+		async beforeTool(call, api, context) {
+			if (call.name === "write" || call.name === "edit") {
+				const path = (call.arguments as Record<string, unknown>).path;
+				if (typeof path === "string" && isCorpusPath(path, workspace)) return { block: CORPUS_BLOCK };
+			}
+			if (WORKSPACE_TOOLS.has(call.name)) {
+				const run = await readCurrentRun(api, api.conversationId, context);
+				if (run !== null && run.strict) return { block: STRICT_BLOCK };
+			}
+			return undefined;
+		},
+	});
 
 const grepTool = ({ store }: CitationToolDeps) =>
 	defineTool({
@@ -292,6 +342,7 @@ const strictSection = () =>
 		return (
 			"This run is under strict citations: the reply exists only through a tool call, and the server verifies every citation.\n" +
 			"- Answer document questions only from the corpus through corpus_grep and corpus_read; never from memory, and never from a document id or filename alone.\n" +
+			"- Documents that corpus_grep cannot see are not evidence; never back a claim with them.\n" +
 			"- To use evidence, copy the exact text from corpus_read output and declare it with corpus_annotate; you get back a citationId.\n" +
 			"- End every reply with answer_publish: markdown where every non-heading, non-blank line carries at least one [cit_...] token, and citationIds listing exactly the tokens you used. Grouped tokens like [cit_a; cit_b] count.\n" +
 			"- If you consulted no document evidence at all, end with answer_plain instead; it is rejected with citations_unused if you annotated anything.\n" +
@@ -322,5 +373,5 @@ export const citationExtension = (deps: CitationToolDeps): Extension =>
 		name: "citations",
 		sections: [strictSection()],
 		tools: [grepTool(deps), readTool(deps), annotateTool(deps), publishTool(deps), plainTool(deps)],
-		hooks: [strictYieldHook()],
+		hooks: [strictYieldHook(), toolGate(deps)],
 	});

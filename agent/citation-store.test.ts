@@ -21,9 +21,8 @@ import {
 	VerifyError,
 	type Annotation,
 } from "./citation-store.ts";
-import { writeMeta } from "./corpus.ts";
-import { stageDerivedText, uploadsDocIdOf } from "./corpus.ts";
-import { stageUploadFile } from "./uploads.ts";
+import { uploadsDocIdOf } from "./corpus.ts";
+import { IngestPipeline } from "./ingest.ts";
 import { WorkspaceCitationStore } from "./workspace-store.ts";
 
 const GOLD = [
@@ -56,11 +55,12 @@ const annotation = (overrides: Partial<Annotation> = {}): Annotation => ({
 
 const runDir = async (documents: Record<string, { text: string; title?: string }>): Promise<string> => {
 	const workspace = await mkdtemp(join(tmpdir(), "citation-store-"));
-	await mkdir(join(workspace, "corpus/raw"), { recursive: true });
-	await mkdir(join(workspace, "corpus/meta"), { recursive: true });
+	const pipeline = new IngestPipeline(workspace);
 	for (const [docId, doc] of Object.entries(documents)) {
-		await writeFile(join(workspace, `corpus/raw/${docId}.md`), doc.text);
-		await writeMeta({ workspace, docId, meta: { title: doc.title ?? docId, filename: `${docId}.md` } });
+		await pipeline.stage({
+			bytes: new TextEncoder().encode(doc.text),
+			target: { kind: "document", docId, filename: `${docId}.md`, title: doc.title ?? docId },
+		});
 	}
 	return workspace;
 };
@@ -70,12 +70,98 @@ const storeOver = async (documents: Record<string, { text: string; title?: strin
 	return new WorkspaceCitationStore(new NodeExecutionEnv({ cwd: workspace }), BACKGROUND_CONTEXT);
 };
 
-test("the index sees the uploads tree: text directly, PDFs through derived text, binaries never", async () => {
+test("one registry: both entry points index the same, and only what was admitted", async () => {
 	const workspace = await mkdtemp(join(tmpdir(), "citation-uploads-"));
-	await stageUploadFile({
-		workspace,
-		path: "persona-finanza/notes.md",
+	const pipeline = new IngestPipeline(workspace);
+	const pdf = new TextEncoder().encode(
+		"%PDF-1.4\n" +
+			"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n" +
+			"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +
+			"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R" +
+			"/Resources<</Font<</F1 5 0 R>>>>>>endobj\n" +
+			"4 0 obj<</Length 59>>stream\nBT /F1 24 Tf 72 720 Td (Reddito 2024) Tj ET\nendstream endobj\n" +
+			"5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n" +
+			"trailer<</Root 1 0 R>>",
+	);
+	// The same fixtures through both UI entry points: the admission is the pipeline's.
+	const mdUploads = await pipeline.stage({
 		bytes: new TextEncoder().encode("Il tetto massimo di spesa \u00e8 15.000 EUR."),
+		target: { kind: "tree-path", path: "persona-finanza/notes.md" },
+	});
+	const mdRaw = await pipeline.stage({
+		bytes: new TextEncoder().encode("Il tetto massimo di spesa \u00e8 15.000 EUR."),
+		target: { kind: "document", docId: "doc_notes", filename: "notes.md", title: "notes" },
+	});
+	const pdfUploads = await pipeline.stage({ bytes: pdf, target: { kind: "tree-path", path: "persona-finanza/CU.pdf" } });
+	const pdfRaw = await pipeline.stage({ bytes: pdf, target: { kind: "document", docId: "doc_cu", filename: "CU.pdf", title: "CU" } });
+	await pipeline.stage({ bytes: new TextEncoder().encode("binary-ish"), target: { kind: "tree-path", path: "persona-finanza/contability.ods" } });
+	await pipeline.stage({ bytes: new TextEncoder().encode("no text layer"), target: { kind: "tree-path", path: "persona-finanza/scanned.pdf" } });
+	assert.equal(mdUploads.indexing, mdRaw.indexing);
+	assert.equal(pdfUploads.indexing, pdfRaw.indexing);
+
+	const store = new WorkspaceCitationStore(new NodeExecutionEnv({ cwd: workspace }), BACKGROUND_CONTEXT);
+	const documents = await store.documents();
+	const ids = new Set(documents.map((document) => document.docId));
+	const notes = documents.find((document) => document.docId === uploadsDocIdOf("persona-finanza/notes.md"));
+	assert.ok(notes, "the uploads .md must be indexed");
+	assert.equal(notes.title, "persona-finanza/notes.md");
+	assert.equal(notes.filename, "notes.md");
+	// The regression the audited run hit: a raw-root PDF must index through its
+	// derived text, never its bytes — and be annotatable from that text (§7).
+	assert.ok(ids.has("doc_cu"), "the raw-root PDF must be indexed through its derived text");
+	assert.ok(ids.has(uploadsDocIdOf("persona-finanza/CU.pdf")));
+	assert.equal(ids.has(uploadsDocIdOf("persona-finanza/contability.ods")), false);
+	assert.equal(ids.has(uploadsDocIdOf("persona-finanza/scanned.pdf")), false);
+	// A scanned PDF staged through /ingest is equally unreachable (R7).
+	await pipeline.stage({ bytes: new TextEncoder().encode("no text layer"), target: { kind: "document", docId: "doc_scan", filename: "scan.pdf", title: "" } });
+	const fresh = new WorkspaceCitationStore(new NodeExecutionEnv({ cwd: workspace }), BACKGROUND_CONTEXT);
+	await assert.rejects(
+		fresh.annotate({ runId: "r", docId: "doc_scan", docVersion: 1, kind: "quote", quote: "no text layer" }),
+		(error: unknown) => error instanceof VerifyError && error.reason === "not_found",
+	);
+	await assert.rejects(
+		fresh.readWindow({ docId: "doc_scan", lineRange: [1, 1] }),
+		(error: unknown) => error instanceof VerifyError && error.reason === "not_found",
+	);
+
+	// Both roots are greppable and annotatable from the same sentence.
+	const md = await store.grepLines({ pattern: "15\.000" });
+	assert.deepEqual(
+		[...new Set(md.hits.map((hit) => hit.docId))].sort(),
+		[uploadsDocIdOf("persona-finanza/notes.md"), "doc_notes"].sort(),
+	);
+	const pdfHits = await store.grepLines({ pattern: "Reddito" });
+	assert.equal(pdfHits.hits.length, 2); // raw id and uploads id, one registry
+	const annotated = await store.annotate({
+		runId: "run-1",
+		docId: "doc_cu",
+		docVersion: 1,
+		kind: "quote",
+		quote: "Reddito 2024",
+	});
+	assert.equal(annotated.status, "verified");
+});
+
+test("a sidecar-less file is invisible to the index (I1)", async () => {
+	const workspace = await mkdtemp(join(tmpdir(), "citation-sidecarless-"));
+	await mkdir(join(workspace, "corpus/raw"), { recursive: true });
+	await writeFile(join(workspace, "corpus/raw/ghost.md"), "Il contratto si rinnova il 1 marzo 2027.");
+	const store = new WorkspaceCitationStore(new NodeExecutionEnv({ cwd: workspace }), BACKGROUND_CONTEXT);
+	const documents = await store.documents();
+	assert.deepEqual(documents, []);
+	await assert.rejects(
+		store.annotate({ runId: "r", docId: "ghost", docVersion: 1, kind: "quote", quote: "Il contratto si rinnova il 1 marzo 2027." }),
+		(error: unknown) => error instanceof VerifyError && error.reason === "not_found",
+	);
+});
+
+test("tampered evidence falls out of the index, and its citations re-verify not_found (R12)", async () => {
+	const workspace = await mkdtemp(join(tmpdir(), "citation-tamper-"));
+	const pipeline = new IngestPipeline(workspace);
+	const sentence = "Il contratto si rinnova tacitamente il 1 marzo 2027.";
+	await pipeline.stage({
+		bytes: new TextEncoder().encode(sentence),
+		target: { kind: "document", docId: "doc_t", filename: "c.md", title: "c" },
 	});
 	const pdf = new TextEncoder().encode(
 		"%PDF-1.4\n" +
@@ -87,37 +173,23 @@ test("the index sees the uploads tree: text directly, PDFs through derived text,
 			"5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n" +
 			"trailer<</Root 1 0 R>>",
 	);
-	const staged = await stageUploadFile({ workspace, path: "persona-finanza/CU.pdf", bytes: pdf });
-	assert.equal(
-		await stageDerivedText({
-			workspace,
-			docId: uploadsDocIdOf("persona-finanza/CU.pdf"),
-			filename: "persona-finanza/CU.pdf",
-			bytes: pdf,
-		}),
-		true,
-	);
-	await stageUploadFile({ workspace, path: "persona-finanza/contability.ods", bytes: new TextEncoder().encode("binary-ish") });
-	await stageUploadFile({ workspace, path: "persona-finanza/scanned.pdf", bytes: new TextEncoder().encode("no text layer") });
-	// Staging paths are corpus paths now: the bucket is one namespace.
-	assert.equal(staged.path, "corpus/uploads/persona-finanza/CU.pdf");
+	await pipeline.stage({ bytes: pdf, target: { kind: "document", docId: "doc_d", filename: "d.pdf", title: "d" } });
 
 	const store = new WorkspaceCitationStore(new NodeExecutionEnv({ cwd: workspace }), BACKGROUND_CONTEXT);
-	const documents = await store.documents();
-	const ids = new Set(documents.map((document) => document.docId));
-	const notes = documents.find((document) => document.docId === uploadsDocIdOf("persona-finanza/notes.md"));
-	assert.ok(notes, "the uploads .md must be indexed");
-	assert.equal(notes.title, "persona-finanza/notes.md");
-	assert.equal(notes.filename, "notes.md");
-	assert.ok(ids.has(uploadsDocIdOf("persona-finanza/CU.pdf")), "the PDF must be indexed through its derived text");
-	assert.equal(ids.has(uploadsDocIdOf("persona-finanza/contability.ods")), false);
-	assert.equal(ids.has(uploadsDocIdOf("persona-finanza/scanned.pdf")), false);
+	const textAnnotation = await store.annotate({ runId: "r", docId: "doc_t", docVersion: 1, kind: "quote", quote: sentence });
+	const derivedAnnotation = await store.annotate({ runId: "r", docId: "doc_d", docVersion: 1, kind: "quote", quote: "Reddito 2024" });
+	assert.equal((await store.verify(textAnnotation)).status, "attribution_verified");
 
-	// Both indexed uploads are greppable: the corpus answer path of RFC 0006.
-	const md = await store.grepLines({ pattern: "15\.000" });
-	assert.equal(md.hits[0]?.docId, uploadsDocIdOf("persona-finanza/notes.md"));
-	const pdfHits = await store.grepLines({ pattern: "Reddito" });
-	assert.equal(pdfHits.hits[0]?.docId, uploadsDocIdOf("persona-finanza/CU.pdf"));
+	// Tamper the staged bytes of the text document, behind the pipeline's back.
+	await writeFile(join(workspace, "corpus/raw/doc_t.md"), `${sentence} (annullato)`);
+	// Swap the derived text of the PDF, leaving the staged PDF untouched.
+	await writeFile(join(workspace, "corpus/text/doc_d.txt"), "Il contratto si rinnova il 2030 (forgiato)");
+	const tampered = new WorkspaceCitationStore(new NodeExecutionEnv({ cwd: workspace }), BACKGROUND_CONTEXT);
+	const ids = new Set((await tampered.documents()).map((document) => document.docId));
+	assert.equal(ids.has("doc_t"), false, "mutated staged bytes must drop the document");
+	assert.equal(ids.has("doc_d"), false, "swapped derived text must drop the document");
+	assert.equal((await tampered.verify(textAnnotation)).status, "not_found");
+	assert.equal((await tampered.verify(derivedAnnotation)).status, "not_found");
 });
 
 // ── pure helpers ─────────────────────────────────────────────────────────────

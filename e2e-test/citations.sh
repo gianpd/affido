@@ -172,3 +172,120 @@ rm -f "${PDF_FIXTURE}"
 
 echo
 echo "CITATIONS E2E PASSED"
+
+echo "== RFC 0014 a: a strict prompt against a /ingest-staged PDF cites its derived text =="
+USER4="citeraw-${RUN_ID}"
+TOKEN4="tok-${USER4}"
+seed_session "${USER4}" "${TOKEN4}"
+COOKIE4="better-auth.session_token=${TOKEN4}"
+PDF_RAW_FIXTURE="$(mktemp /tmp/contratto-raw-XXXX.pdf)"
+{
+	printf '%%PDF-1.4\n'
+	printf '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n'
+	printf '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n'
+	printf '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n'
+	printf '4 0 obj<</Length 74>>stream\nBT /F1 24 Tf 72 720 Td (Il contratto si rinnova il 1 marzo 2027) Tj ET\nendstream endobj\n'
+	printf '5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n'
+	printf 'trailer<</Root 1 0 R>>'
+} >"${PDF_RAW_FIXTURE}"
+staged_raw_pdf="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE4}" \
+	-H 'content-type: application/pdf' \
+	--data-binary @"${PDF_RAW_FIXTURE}" \
+	"${BASE}/u/${USER4}/ingest?docId=doc_pdfraw&filename=contratto.pdf")" \
+	|| fail "raw PDF ingest through caddy failed"
+[[ "$(printf '%s' "${staged_raw_pdf}" | field "d['searchable']")" == "True" ]] \
+	|| fail "the raw PDF ingest must report searchable=True: ${staged_raw_pdf}"
+[[ "$(printf '%s' "${staged_raw_pdf}" | field "d['indexing']")" == "derived" ]] \
+	|| fail "the raw PDF ingest must report indexing=derived: ${staged_raw_pdf}"
+pass "raw PDF staged through /ingest with derived admission"
+
+raw_pdf_reply="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE4}" \
+	-H 'content-type: application/json' \
+	-d "{\"prompt\":\"When does the uploaded contract renew?\",\"requestId\":\"rawpdf-${RUN_ID}\",\"citations\":\"required\"}" \
+	"${BASE}/u/${USER4}/prompt")" || fail "raw PDF strict prompt failed: ${raw_pdf_reply:-}"
+[[ "$(printf '%s' "${raw_pdf_reply}" | field "d['status']")" == "done" ]] || fail "raw PDF strict run not done: ${raw_pdf_reply}"
+[[ "$(printf '%s' "${raw_pdf_reply}" | field "d['evidence']")" == "cited" ]] \
+	|| fail "raw PDF run is not cited (the index read the raw bytes?): ${raw_pdf_reply}"
+[[ "$(printf '%s' "${raw_pdf_reply}" | field "d['citations'][0]['docId']")" == "doc_pdfraw" ]] \
+	|| fail "citation does not point at the raw docId: ${raw_pdf_reply}"
+[[ "$(printf '%s' "${raw_pdf_reply}" | field "d['citations'][0]['quote']")" == *rinnova* ]] \
+	|| fail "quote does not come from the derived text: ${raw_pdf_reply}"
+pass "strict citation published from a /ingest-staged PDF's derived text"
+
+echo "== RFC 0014 b: the same fixture through both entry points, one admission =="
+staged_tree_pdf="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE4}" \
+	-H 'content-type: application/pdf' \
+	--data-binary @"${PDF_RAW_FIXTURE}" \
+	"${BASE}/u/${USER4}/uploads/file?path=persona-finanza/contratto.pdf")" \
+	|| fail "uploads PDF staging through caddy failed"
+[[ "$(printf '%s' "${staged_tree_pdf}" | field "d['indexing']")" == "$(printf '%s' "${staged_raw_pdf}" | field "d['indexing']")" ]] \
+	|| fail "the same PDF through both entry points must report the same indexing: ${staged_raw_pdf} vs ${staged_tree_pdf}"
+[[ "$(printf '%s' "${staged_tree_pdf}" | field "d['docId']")" == u-* ]] \
+	|| fail "uploads staging must report the tree docId: ${staged_tree_pdf}"
+tree_pdf_reply="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE4}" \
+	-H 'content-type: application/json' \
+	-d "{\"prompt\":\"When does the uploaded contract renew?\",\"requestId\":\"treepdf-${RUN_ID}\",\"citations\":\"required\"}" \
+	"${BASE}/u/${USER4}/prompt")" || fail "uploads PDF strict prompt failed: ${tree_pdf_reply:-}"
+[[ "$(printf '%s' "${tree_pdf_reply}" | field "d['evidence']")" == "cited" ]] \
+	|| fail "uploads PDF run is not cited: ${tree_pdf_reply}"
+[[ "$(printf '%s' "${tree_pdf_reply}" | field "d['citations'][0]['quote']")" == *rinnova* ]] \
+	|| fail "uploads PDF quote does not come from the derived text: ${tree_pdf_reply}"
+pass "the same sentence is citable from both entry points"
+
+echo "== RFC 0014 c: a scanned PDF is staged, listed, and never evidence =="
+# A user whose corpus is ONLY the scanned PDF: nothing is greppable, so the
+# scripted strict run must exit through UNANSWERED/answer_plain, never a citation.
+USER5="citescan-${RUN_ID}"
+TOKEN5="tok-${USER5}"
+seed_session "${USER5}" "${TOKEN5}"
+COOKIE5="better-auth.session_token=${TOKEN5}"
+SCAN_FIXTURE="$(mktemp /tmp/contratto-scan-XXXX.pdf)"
+printf 'not a real pdf: no text layer' >"${SCAN_FIXTURE}"
+staged_scan="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE5}" \
+	-H 'content-type: application/pdf' \
+	--data-binary @"${SCAN_FIXTURE}" \
+	"${BASE}/u/${USER5}/ingest?docId=doc_scan&filename=scansione.pdf")" \
+	|| fail "scanned PDF ingest failed"
+[[ "$(printf '%s' "${staged_scan}" | field "d['searchable']")" == "False" ]] \
+	|| fail "the scanned PDF must report searchable=False: ${staged_scan}"
+[[ "$(printf '%s' "${staged_scan}" | field "d['indexing']")" == "none" ]] \
+	|| fail "the scanned PDF must report indexing=none: ${staged_scan}"
+tree_listed="$(curl -fsS --max-time 120 -H "Cookie: ${COOKIE5}" "${BASE}/u/${USER5}/raw?docId=doc_scan&filename=scansione.pdf")" \
+	|| fail "the scanned PDF must stay readable as staged bytes"
+scan_reply="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE5}" \
+	-H 'content-type: application/json' \
+	-d "{\"prompt\":\"When does the maintenance contract renew?\",\"requestId\":\"scan-${RUN_ID}\",\"citations\":\"required\"}" \
+	"${BASE}/u/${USER5}/prompt")" || fail "scanned PDF strict prompt failed: ${scan_reply:-}"
+[[ "$(printf '%s' "${scan_reply}" | field "d['citations']")" == "[]" ]] \
+	|| fail "a scanned PDF must never produce a citation: ${scan_reply}"
+[[ "$(printf '%s' "${scan_reply}" | field "d['evidence']")" != "cited" ]] \
+	|| fail "a strict run over an unindexable corpus must not publish evidence: ${scan_reply}"
+pass "a scanned PDF never becomes evidence; the strict run exits without citations"
+
+echo "== RFC 0014 d: a strict run refuses the workspace tools with a named block =="
+gate_reply="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE4}" \
+	-H 'content-type: application/json' \
+	-d "{\"prompt\":\"When does the maintenance contract renew? Check with bash first.\",\"requestId\":\"gate-${RUN_ID}\",\"citations\":\"required\"}" \
+	"${BASE}/u/${USER4}/prompt")" || fail "strict gate prompt failed: ${gate_reply:-}"
+[[ "$(printf '%s' "${gate_reply}" | field "d['status']")" == "done" ]] || fail "strict gate run not done: ${gate_reply}"
+[[ "$(printf '%s' "${gate_reply}" | field "d['evidence']")" == "cited" ]] \
+	|| fail "the blocked bash must redirect to the corpus tools: ${gate_reply}"
+blocked_entry="$(printf '%s' "$(curl -fsS --max-time 120 -H "Cookie: ${COOKIE4}" \
+	"${BASE}/u/${USER4}/inspect?limit=60")" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for e in d['entries']['items']:
+    if e.get('role') == 'toolResult' and e.get('toolName') == 'bash' and e.get('isError'):
+        print(e['id']); break
+else:
+    print('')")"
+[[ -n "${blocked_entry}" ]] || fail "the refused bash call is not in the trace: ${gate_reply}"
+blocked_detail="$(curl -fsS --max-time 120 -H "Cookie: ${COOKIE4}" "${BASE}/u/${USER4}/entry?id=${blocked_entry}")"
+printf '%s' "${blocked_detail}" | grep -q "disabled in this strict-citations run" \
+	|| fail "the bash block must name the corpus tools: ${blocked_detail}"
+printf '%s' "${blocked_detail}" | grep -q "corpus_grep" \
+	|| fail "the bash block must point at corpus_grep: ${blocked_detail}"
+pass "the strict run blocked bash with the named block and published through the corpus tools"
+
+echo
+echo "RFC 0014 CITATIONS E2E PASSED"

@@ -26,6 +26,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { ContainerAgent } from "./agent.ts";
 import { json, HttpError, RawResponse } from "./http.ts";
 import { createModel } from "./model.ts";
+import { IngestPipeline } from "./ingest.ts";
 import {
 	ArtifactTool,
 	CitationsTool,
@@ -101,6 +102,9 @@ const agent = new ContainerAgent({
 	log,
 });
 
+// One pipeline for every staging and deletion entry point (RFC 0014 R1).
+const pipeline = new IngestPipeline(WORKSPACE);
+
 const tools: HttpTool[] = [
 	new HealthTool(),
 	new StatusTool(),
@@ -109,15 +113,15 @@ const tools: HttpTool[] = [
 	new EntryTool(),
 	new ListFilesTool(),
 	new ReadFileTool(),
-	new IngestRawTool(WORKSPACE),
+	new IngestRawTool(pipeline),
 	new RawFileTool(),
 	new DerivedTextTool(),
 	new CitationsTool(),
-	new DeleteRawTool(WORKSPACE),
+	new DeleteRawTool(pipeline),
 	new CreateUploadDirTool(WORKSPACE),
-	new UploadFileTool(WORKSPACE),
+	new UploadFileTool(pipeline),
 	new ListUploadsTool(WORKSPACE),
-	new DeleteUploadTool(WORKSPACE),
+	new DeleteUploadTool(pipeline),
 	new SkillsFileTool(WORKSPACE),
 	new ListSkillsTool(WORKSPACE),
 	new VerifySkillTool(WORKSPACE),

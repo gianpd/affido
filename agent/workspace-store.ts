@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Context } from "@earendil-works/chord";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import {
@@ -24,8 +23,8 @@ import {
 	type ReadWindow,
 	type VerifyReason,
 } from "./citation-store.ts";
-import { derivedTextRelativePath, isPdfFilename, isTextFilename, listRawDocuments, uploadsDocIdOf } from "./corpus.ts";
-import { UPLOADS_DIR } from "./uploads.ts";
+import { parseSidecar } from "./ingest.ts";
+import { META_DIR, sha256, sha256OfText } from "./corpus.ts";
 
 /** Scan budget of one grep, in lines: bounds a slow pattern over a big corpus. */
 const GREP_SCAN_BUDGET_LINES = 200_000;
@@ -35,8 +34,6 @@ type LineTable = ReturnType<typeof lineTableOf>;
 type IndexedDocument = CorpusDocument & {
 	readonly table: LineTable;
 };
-
-const sha256OfText = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 
 /** The utf16 index `count` code points after `from`, clamped to the text length. */
 const advanceCodePoints = (text: string, from: number, count: number): number => {
@@ -65,72 +62,38 @@ const retreatCodePoints = (text: string, from: number, count: number): number =>
 /** The first `count` code points of `text`, as a string. */
 const prefixCodePoints = (text: string, count: number): string => text.slice(0, advanceCodePoints(text, 0, count));
 
-/** Load and decode every staged document once per store lifetime: the staged
- * documents of corpus/raw, then the uploads tree. A text file (by extension)
- * is indexed from its bytes; a PDF from its derived text under corpus/text/;
- * any other binary is staged but never indexed — grep over undecoded bytes is
- * noise, not evidence. An uploads file whose docId collides with a corpus/raw
- * document loses: raw ids are the control plane's, tree ids are derived. */
-const UPLOADS_INDEX_FILES = 500;
-
-const walkUploadFiles = async (
-	env: ExecutionEnv,
-	directory: string,
-	out: string[],
-	context: Context,
-): Promise<void> => {
-	const listed = await env.listDir(directory, context);
-	if (!listed.ok) return; // no uploads tree yet: nothing to index
-	for (const info of [...listed.value].sort((a, b) => a.name.localeCompare(b.name))) {
-		if (out.length >= UPLOADS_INDEX_FILES) return;
-		const child = directory === UPLOADS_DIR ? `${UPLOADS_DIR}/${info.name}` : `${directory}/${info.name}`;
-		if (info.kind === "directory") await walkUploadFiles(env, child, out, context);
-		else if (info.kind === "file") out.push(child);
-	}
-};
-
-const basename = (path: string): string => path.split("/").pop() ?? path;
-
+/** Load and validate every registered document once per store lifetime
+ * (RFC 0014 §5.4/§5.7.2). Exactly one walk — `corpus/meta/` — and one text read
+ * per sidecar, along the registry's declared `textPath`; no filename
+ * inspection, no walk of corpus/raw or corpus/uploads. A document enters the
+ * index only when its admitted text still hashes to `textSha256` and its
+ * staged bytes to `sourceSha256` (a single read for `indexing: "text"`, where
+ * the two paths name one file): a document mutated behind the pipeline's back
+ * stops being evidence until re-ingested. */
 const loadDocuments = async (env: ExecutionEnv, context: Context): Promise<readonly CorpusDocument[]> => {
-	const staged = await listRawDocuments(env, context);
+	const listed = await env.listDir(META_DIR, context);
 	const documents: CorpusDocument[] = [];
-	const docIds = new Set<string>();
-	for (const item of staged) {
-		const read = await env.readTextFile(item.path, context);
-		if (!read.ok) continue; // raced with a delete; the document is simply absent
-		docIds.add(item.docId);
-		documents.push({
-			docId: item.docId,
-			filename: item.filename,
-			title: item.title,
-			version: 1,
-			text: read.value,
-			textSha256: sha256OfText(read.value),
-		});
-	}
-	const uploadFiles: string[] = [];
-	await walkUploadFiles(env, UPLOADS_DIR, uploadFiles, context);
-	for (const path of uploadFiles) {
-		const name = path.slice(UPLOADS_DIR.length + 1);
-		const docId = uploadsDocIdOf(name);
-		if (docIds.has(docId)) continue;
-		let text: string | null = null;
-		if (isTextFilename(name)) {
-			const read = await env.readTextFile(path, context);
-			text = read.ok ? read.value : null;
-		} else if (isPdfFilename(name)) {
-			const read = await env.readTextFile(derivedTextRelativePath(docId), context);
-			text = read.ok ? read.value : null;
+	if (!listed.ok) return documents; // no registry yet: nothing is evidence
+	for (const info of [...listed.value].sort((a, b) => a.name.localeCompare(b.name))) {
+		if (info.kind !== "file") continue;
+		const read = await env.readTextFile(`${META_DIR}/${info.name}`, context);
+		if (!read.ok) continue; // raced with a delete
+		const sidecar = parseSidecar(read.value);
+		if (sidecar === null || sidecar.indexing === "none" || sidecar.textPath === null) continue;
+		const text = await env.readTextFile(sidecar.textPath, context);
+		if (!text.ok) continue; // raced with a delete
+		if (sha256OfText(text.value) !== sidecar.textSha256) continue; // tampered admitted text
+		if (sidecar.stagedPath !== sidecar.textPath) {
+			const source = await env.readBinaryFile(sidecar.stagedPath, context);
+			if (!source.ok || sha256(source.value) !== sidecar.sourceSha256) continue; // tampered staged bytes
 		}
-		if (text === null || text === "") continue; // binary without derived text: staged, not indexed
-		docIds.add(docId);
 		documents.push({
-			docId,
-			filename: basename(name),
-			title: name,
+			docId: sidecar.docId,
+			filename: sidecar.filename,
+			title: sidecar.title,
 			version: 1,
-			text,
-			textSha256: sha256OfText(text),
+			text: text.value,
+			textSha256: sha256OfText(text.value),
 		});
 	}
 	return documents;
@@ -139,15 +102,25 @@ const loadDocuments = async (env: ExecutionEnv, context: Context): Promise<reado
 export class WorkspaceCitationStore implements CitationStore {
 	readonly #env: ExecutionEnv;
 	readonly #context: Context;
+	readonly #bootstrap: (() => Promise<void>) | undefined;
 	#indexed: Promise<Map<string, IndexedDocument>> | undefined;
+	#registry: Promise<void> | undefined;
 
-	constructor(env: ExecutionEnv, context: Context) {
+	constructor(env: ExecutionEnv, context: Context, bootstrap?: () => Promise<void>) {
 		this.#env = env;
 		this.#context = context;
+		this.#bootstrap = bootstrap;
+	}
+
+	/** The migration pass (RFC 0014 §6) runs once per store lifetime, before the
+	 * first index build; `invalidate()` drops the index, never the migration. */
+	#ready(): Promise<void> {
+		this.#registry ??= this.#bootstrap?.() ?? Promise.resolve();
+		return this.#registry;
 	}
 
 	#documents(): Promise<Map<string, IndexedDocument>> {
-		this.#indexed ??= loadDocuments(this.#env, this.#context).then((documents) => {
+		this.#indexed ??= this.#ready().then(() => loadDocuments(this.#env, this.#context)).then((documents) => {
 			const map = new Map<string, IndexedDocument>();
 			for (const document of documents) {
 				map.set(document.docId, { ...document, table: lineTableOf(document.text) });

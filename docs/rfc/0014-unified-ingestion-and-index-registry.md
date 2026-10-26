@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft |
+| Status | Implemented |
 | Author | Affido maintainers |
 | Date | 2026-10-26 |
 | Target | `agent/` (new `ingest.ts`, `tools.ts`, `corpus.ts`, `uploads.ts`, `workspace-store.ts`, `citation-tools.ts`), `e2e-test/` |
@@ -480,8 +480,10 @@ Why each tool is refused rather than filtered:
 
 Blocked calls return a named error to the model, which redirects to the corpus
 tools; they spend no corpus budget (`spendCall` lives in the corpus tools
-only). The block reason is counted like every other rejection, so the friction
-is measurable (RFC 0006 R12).
+only). The block lands in the durable trace as an error tool-result entry
+(readable through `/inspect` and `/entry`), so the friction is measurable; the
+run-state rejection counters of RFC 0006 R12 do not include it, because the
+`beforeTool` hook API is read-only.
 
 #### 5.7.2 Corpus integrity in every run: path refusal and the hash check
 

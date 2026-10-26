@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -16,7 +16,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { ContainerAgent, createAgentRegistry } from "./agent.ts";
 import { DurableHarness } from "./harness.ts";
 import { createModel } from "./model.ts";
-import { writeMeta } from "./corpus.ts";
+import { IngestPipeline } from "./ingest.ts";
 import { WorkspaceCitationStore } from "./workspace-store.ts";
 import type { CitationsTraceReport } from "./citation-report.ts";
 import type { PromptResult } from "./types.ts";
@@ -41,13 +41,9 @@ const build = async () => {
 	const workspace = await mkdtemp(join(tmpdir(), "citation-demo-"));
 	const sessionDb = join(workspace, "session.sqlite");
 	const bundle = await createModel();
-	await mkdir(join(workspace, "corpus/raw"), { recursive: true });
-	await mkdir(join(workspace, "corpus/meta"), { recursive: true });
-	await writeFile(join(workspace, "corpus/raw/doc_vendor.md"), AGREEMENT);
-	await writeMeta({
-		workspace,
-		docId: "doc_vendor",
-		meta: { title: "Vendor Services Agreement", filename: "vendor-services-agreement.md" },
+	await new IngestPipeline(workspace).stage({
+		bytes: new TextEncoder().encode(AGREEMENT),
+		target: { kind: "document", docId: "doc_vendor", filename: "vendor-services-agreement.md", title: "Vendor Services Agreement" },
 	});
 
 	const { models, credentials, model } = bundle;

@@ -322,12 +322,12 @@ workspace filesystem, like `/ingest`, and never activate the agent.
 | GET | `/entry?id=11` | yes | one entry unprojected: stored messages (tool results, thinking), tool-call arguments, `data` |
 | GET | `/files?path=.` | yes | list a workspace directory |
 | GET | `/file?path=...` | yes | read a workspace text file |
-| POST | `/ingest?docId=...&filename=...` | no | raw body -> `{ docId, path, bytes, sourceSha256, searchable }`; stages the bytes at `corpus/raw/<docId><ext>`, derives PDF text into `corpus/text/` |
+| POST | `/ingest?docId=...&filename=...&title=...` | no | raw body -> `{ docId, path, bytes, sourceSha256, searchable, indexing }` (RFC 0014): stages the bytes, decides admission once (`text`/`derived`/`none`), derives PDF text into `corpus/text/`, writes the registry sidecar |
 | GET | `/raw?docId=...&filename=...` | yes | read the staged bytes of a document back |
 | GET | `/text?docId=...` | yes | read the text derived from a staged PDF (`corpus/text/<docId>.txt`); 404 when none was extracted |
 | DELETE | `/ingest?docId=...&filename=...` | no | remove the staged bytes of a document |
 | POST | `/uploads/dir` | no | `{ path }` -> create/confirm a directory under `corpus/uploads/` (PRD 0003) |
-| POST | `/uploads/file?path=md-to-docx/SKILL.md` | no | raw body -> `{ path, bytes, sha256, searchable }`; writes the file at `corpus/uploads/<path>`; a PDF also gets its text derived into `corpus/text/` |
+| POST | `/uploads/file?path=md-to-docx/SKILL.md` | no | raw body -> `{ docId, path, bytes, sourceSha256, searchable, indexing }`; the same pipeline as `/ingest` (RFC 0014), target the uploads tree |
 | GET | `/uploads?path=md-to-docx` | no | recursive tree of the uploads root or of one subtree |
 | DELETE | `/uploads?path=md-to-docx` | no | remove a file or a subtree under `uploads/` |
 | POST | `/skills/file?skill=md-to-docx&path=SKILL.md` | no | raw body -> `{ skill, path, bytes, sha256 }`; installs one bundle file at `skills/<skill>/<path>` (RFC 0009) |
@@ -350,10 +350,13 @@ ingestion event; the bytes and any parsed markdown stay on the volume.
 `/uploads` is a different contract (PRD 0003): the client dictates every path.
 A directory tree a user shares with the agent — a skill with `SKILL.md` and a
 `references/` folder, say — lands under `WORKSPACE/corpus/uploads/<path>` with
-the structure intact, and the agent reads those files with its own tools. The
-tree lives inside the corpus bucket: text files are indexed directly and PDFs
-through text extracted at upload time (`corpus/text/`), so `corpus_grep` sees
-them like any ingested document; other binaries are staged but not indexed.
+the structure intact, and the agent reads those files with its own tools. Both
+entry points ingest through one pipeline (RFC 0014): admission to the citation
+index is decided once, at ingest, and recorded in the `corpus/meta/<docId>.json`
+registry — text files when their bytes are strict UTF-8, PDFs through text
+extracted at upload time (`corpus/text/`), other binaries never. The citation
+store reads only the registry: a document whose staged bytes or admitted text no
+longer hash to its registry entry stops being evidence until re-ingested.
 The sandbox validates each path (`safeTreePath`: relative, no `..`, bounded
 depth) and prefixes `corpus/uploads/` itself, so a crafted request cannot
 write outside the workspace.
@@ -407,11 +410,16 @@ stored document produces no `citationId` at all, so it cannot be cited: further
 `answer_publish` attempts are refused, and the model's remaining exit is
 `answer_plain`, whose reply carries the explicit *no document evidence* label.
 The envelope reports `evidence: "cited" | "plain" | "none"` plus the `citations`
-array; the fields are server-built, never typed by the model. Requests without
-the field keep today's free-form answer; `AGENT_CITATIONS_DEFAULT=required`
-(followed by `./dev.sh reload`) flips that default. The chat UI carries the
-per-question toggle; the report at `/inspect?report=citations` measures
-exactness from the trace alone.
+array; the fields are server-built, never typed by the model. While the current
+run is strict, the workspace tools (`bash`, `read`, `write`, `edit`) are refused
+outright (RFC 0014 §5.7): the only readable evidence is the citation index, so a
+fact the index cannot verify cannot even be read; in every run `write`/`edit`
+refuse `corpus/**`, and the index build verifies each admitted document's staged
+bytes and admitted text against the hashes its registry entry recorded.
+Requests without the field keep today's free-form answer;
+`AGENT_CITATIONS_DEFAULT=required` (followed by `./dev.sh reload`) flips that
+default. The chat UI carries the per-question toggle; the report at
+`/inspect?report=citations` measures exactness from the trace alone.
 
 ## Architecture
 

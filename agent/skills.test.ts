@@ -10,7 +10,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { sha256 } from "./corpus.ts";
 import { HttpError } from "./http.ts";
-import { stageUploadFile } from "./uploads.ts";
+import { IngestPipeline } from "./ingest.ts";
 import {
 	buildSkillHint,
 	installSkillFile,
@@ -128,7 +128,7 @@ test("listInstalledSkills reports both roots, versions, and a fresh verify; non-
 	const root = await workspace();
 	const manifest = await installFixture(root);
 	// A user-shared tree is a skill too (PRD 0003 provenance).
-	await stageUploadFile({ workspace: root, path: "my-skill/SKILL.md", bytes: encoder.encode("---\ndescription: mine\n---\n# mine") });
+	await new IngestPipeline(root).stage({ bytes: encoder.encode("---\ndescription: mine\n---\n# mine"), target: { kind: "tree-path", path: "my-skill/SKILL.md" } });
 	// Directories without a SKILL.md, or with one that has no description, are not skills.
 	await mkdir(join(root, "skills/not-a-skill"), { recursive: true });
 	await installSkillFile({
@@ -218,7 +218,7 @@ test("buildSkillHint resolves, strips, and names reality for unknown names", asy
 	assert.ok(bare?.content.startsWith("[skill hint]"));
 
 	// A user-shared tree is invocable the same way (PRD 0003 provenance).
-	await stageUploadFile({ workspace: root, path: "my-skill/SKILL.md", bytes: encoder.encode("---\ndescription: mine\n---\n# mine") });
+	await new IngestPipeline(root).stage({ bytes: encoder.encode("---\ndescription: mine\n---\n# mine"), target: { kind: "tree-path", path: "my-skill/SKILL.md" } });
 	const uploaded = await buildSkillHint({ workspace: root, prompt: "/my-skill go" });
 	assert.equal(uploaded?.kind, "resolved");
 	assert.ok(uploaded?.content.includes(`${root}/corpus/uploads/my-skill/SKILL.md`));

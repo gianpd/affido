@@ -193,6 +193,14 @@ const scripted: FauxResponseFactory = (transcript) => {
 	if (demo !== undefined) return demo;
 	const tool = lastToolResult(transcript.messages);
 	const userText = lastUserText(transcript.messages);
+	// A bounced strict answer exits through answer_plain, exactly as the gate
+	// demands; without this the scripted model would loop on prose.
+	if (/strict-citations run/i.test(userText)) {
+		return fauxAssistantMessage(
+			[fauxToolCall("answer_plain", { markdown: "UNANSWERED: the request could not be met with corpus evidence." }, { id: callId("plain") })],
+			{ stopReason: "toolUse" },
+		);
+	}
 	// The skill hint is server-built, so these branches key on its exact shape.
 	if (userText.includes("[skill hint]") && userText.includes("is not installed")) {
 		return fauxAssistantMessage([
@@ -206,6 +214,47 @@ const scripted: FauxResponseFactory = (transcript) => {
 		return fauxAssistantMessage([fauxToolCall("bash", { command: DOCX_DANCE }, { id: callId("docx") })], {
 			stopReason: "toolUse",
 		});
+	}
+	// RFC 0014 §5.7.1 e2e/unit dance: a strict prompt that says "with bash first"
+	// attempts one workspace-tool call, takes the named block, then proceeds
+	// through the corpus tools like every strict run.
+	if (userText.includes("with bash first") && tool === undefined) {
+		return fauxAssistantMessage([fauxToolCall("bash", { command: "grep -r rinnova corpus" }, { id: callId("bash") })], {
+			stopReason: "toolUse",
+		});
+	}
+	if (tool?.name === "bash" && tool.isError && /renew/i.test(userText)) {
+		return fauxAssistantMessage([fauxToolCall("corpus_grep", { pattern: "rinnova" }, { id: callId("grep") })], {
+			stopReason: "toolUse",
+		});
+	}
+	// A corpus the registry did not admit (or a pattern that matches nothing):
+	// the honest strict exit is UNANSWERED through answer_plain, never a citation.
+	if (tool?.name === "corpus_grep" && tool.isError) {
+		return fauxAssistantMessage(
+			[fauxToolCall("answer_plain", { markdown: "UNANSWERED: the corpus does not contain the renewal date." }, { id: callId("plain") })],
+			{ stopReason: "toolUse" },
+		);
+	}
+	// RFC 0014 R12 dance: write outside corpus/ succeeds in a free run; a
+	// corpus/** target takes the named block and the model gives up in prose.
+	if (/write a workspace note/i.test(userText) && tool === undefined) {
+		return fauxAssistantMessage(
+			[fauxToolCall("write", { path: "workspace/notes.md", content: "note" }, { id: callId("write") })],
+			{ stopReason: "toolUse" },
+		);
+	}
+	if (/write into the corpus/i.test(userText) && tool === undefined) {
+		return fauxAssistantMessage(
+			[fauxToolCall("write", { path: "corpus/uploads/facts.md", content: "fabricated" }, { id: callId("write") })],
+			{ stopReason: "toolUse" },
+		);
+	}
+	if (tool?.name === "write" && tool.isError) {
+		return fauxAssistantMessage([fauxText("The write was refused: corpus/ is write-protected.")]);
+	}
+	if (tool?.name === "write" && !tool.isError) {
+		return fauxAssistantMessage([fauxText("The note was written.")]);
 	}
 	if (tool?.name === "corpus_grep" && !tool.isError) {
 		const parsed = JSON.parse(tool.text) as { hits: { docId: string; text: string }[] };

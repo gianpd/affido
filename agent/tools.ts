@@ -1,21 +1,10 @@
 // Tools: one HTTP operation each — a method, a path, and a handler.
 
 import type { EntryId } from "@earendil-works/pi-durable";
-import { HttpError, RawResponse, readBody, readRawBody } from "./http.ts";
-import {
-	derivedTextRelativePath,
-	indexedAsText,
-	MAX_UPLOAD_BYTES,
-	rawRelativePath,
-	removeDerivedText,
-	removeRaw,
-	safeDocId,
-	stageDerivedText,
-	stageRaw,
-	uploadsDocIdOf,
-	writeMeta,
-} from "./corpus.ts";
-import { createUploadDir, listUploadTree, removeUploadPath, stageUploadFile, UPLOADS_DIR } from "./uploads.ts";
+import { HttpError, RawResponse, readBody, readRawBody, safeTreePath } from "./http.ts";
+import { derivedTextRelativePath, MAX_UPLOAD_BYTES, rawRelativePath, safeDocId } from "./corpus.ts";
+import { IngestPipeline, type IngestTarget } from "./ingest.ts";
+import { createUploadDir, listUploadTree } from "./uploads.ts";
 import {
 	installSkillFile,
 	listInstalledSkills,
@@ -168,30 +157,23 @@ export class CreateUploadDirTool extends HttpTool {
 
 /** Write one uploaded file at its complete client-chosen path under
  * `corpus/uploads/` (PRD 0003): `?path=md-to-docx/references/style-guide.md` in
- * the query, raw bytes as the body. A PDF also gets its text derived into
- * `corpus/text/` so the citation index sees it. Never activates the agent. */
+ * the query, raw bytes as the body. An HTTP adapter over `IngestPipeline`
+ * (RFC 0014 R1): parse, stage, `noteCorpusChange`, return the pipeline's
+ * `Staged` object verbatim. Never activates the agent. */
 export class UploadFileTool extends HttpTool {
-	readonly #workspace: string;
+	readonly #pipeline: IngestPipeline;
 
-	constructor(workspace: string) {
+	constructor(pipeline: IngestPipeline) {
 		super("uploads_file", "POST", "/uploads/file");
-		this.#workspace = workspace;
+		this.#pipeline = pipeline;
 	}
 
 	async handle({ req, url, agent }: ToolRequest): Promise<unknown> {
-		const path = url.searchParams.get("path") ?? "";
 		const bytes = await readRawBody(req, MAX_UPLOAD_BYTES);
 		if (bytes.length === 0) throw new HttpError(400, { error: "empty_body", message: "the upload is empty" });
-		const staged = await stageUploadFile({ workspace: this.#workspace, path, bytes });
-		const name = staged.path.slice(UPLOADS_DIR.length + 1);
-		const derived = await stageDerivedText({
-			workspace: this.#workspace,
-			docId: uploadsDocIdOf(name),
-			filename: name,
-			bytes,
-		});
+		const staged = await this.#pipeline.stage({ bytes, target: { kind: "tree-path", path: url.searchParams.get("path") ?? "" } });
 		agent.noteCorpusChange();
-		return { ...staged, searchable: indexedAsText(name, derived) };
+		return staged;
 	}
 }
 
@@ -210,21 +192,21 @@ export class ListUploadsTool extends HttpTool {
 	}
 }
 
-/** Remove a file or a whole subtree under `corpus/uploads/`. The derived text
- * of a deleted PDF stays behind (keyed by docId, inert without its file);
- * never activates the agent. */
+/** Remove a file or a whole subtree under `corpus/uploads/` — bytes, derived
+ * text, and registry sidecar together (RFC 0014 R9). Never activates the agent. */
 export class DeleteUploadTool extends HttpTool {
-	readonly #workspace: string;
+	readonly #pipeline: IngestPipeline;
 
-	constructor(workspace: string) {
+	constructor(pipeline: IngestPipeline) {
 		super("uploads_delete", "DELETE", "/uploads");
-		this.#workspace = workspace;
+		this.#pipeline = pipeline;
 	}
 
 	async handle({ url, agent }: ToolRequest): Promise<unknown> {
-		const removed = removeUploadPath({ workspace: this.#workspace, path: url.searchParams.get("path") ?? "" });
+		const relative = safeTreePath(url.searchParams.get("path") ?? "");
+		await this.#pipeline.remove({ target: { kind: "tree-path", path: relative } });
 		agent.noteCorpusChange();
-		return removed;
+		return { path: `corpus/uploads/${relative}` };
 	}
 }
 
@@ -497,21 +479,21 @@ export class PauseTool extends HttpTool {
 	}
 }
 
-/** Stage the raw bytes of an uploaded document in the workspace. A PDF also
- * gets its text derived into `corpus/text/` so the citation index sees it.
+/** Stage the raw bytes of an uploaded document in the workspace: an HTTP
+ * adapter over `IngestPipeline` (RFC 0014 R1) that parses the query, stages,
+ * calls `noteCorpusChange`, and returns the pipeline's `Staged` object
+ * verbatim — `searchable`/`indexing` are the ingest-time admission, the same
+ * decision the citation index reads from the registry forever after.
  *
- * No parse beyond that: the response reports what arrived (`sourceSha256`,
- * `path`, `searchable`) so the control plane can record the ingestion event.
- * The workspace owns the bytes; the web app never names a corpus path itself.
  * This tool does not touch the conversation, so an upload cannot defeat the
- * idle pause. `title` and `filename` land in the `corpus/meta/<docId>.json`
- * sidecar the citation store reads (RFC 0006 §5.2). */
+ * idle pause. The workspace owns the bytes; the web app never names a corpus
+ * path itself. */
 export class IngestRawTool extends HttpTool {
-	readonly #workspace: string;
+	readonly #pipeline: IngestPipeline;
 
-	constructor(workspace: string) {
+	constructor(pipeline: IngestPipeline) {
 		super("ingest", "POST", "/ingest");
-		this.#workspace = workspace;
+		this.#pipeline = pipeline;
 	}
 
 	async handle({ req, url, agent }: ToolRequest): Promise<unknown> {
@@ -520,11 +502,10 @@ export class IngestRawTool extends HttpTool {
 		const title = url.searchParams.get("title") ?? "";
 		const bytes = await readRawBody(req, MAX_UPLOAD_BYTES);
 		if (bytes.length === 0) throw new HttpError(400, { error: "empty_body", message: "the upload is empty" });
-		const staged = await stageRaw({ workspace: this.#workspace, docId, filename, bytes });
-		await writeMeta({ workspace: this.#workspace, docId, meta: { title: title === "" ? filename : title, filename } });
-		const derived = await stageDerivedText({ workspace: this.#workspace, docId, filename, bytes });
+		const target: IngestTarget = { kind: "document", docId, filename, title };
+		const staged = await this.#pipeline.stage({ bytes, target });
 		agent.noteCorpusChange();
-		return { ...staged, searchable: indexedAsText(filename, derived) };
+		return staged;
 	}
 }
 
@@ -556,21 +537,21 @@ export class DerivedTextTool extends HttpTool {
 	}
 }
 
-/** Delete the staged bytes of one document, its sidecar and its derived text. */
+/** Delete the staged bytes of one document, its derived text, and its
+ * registry sidecar — together (RFC 0014 R9). */
 export class DeleteRawTool extends HttpTool {
-	readonly #workspace: string;
+	readonly #pipeline: IngestPipeline;
 
-	constructor(workspace: string) {
+	constructor(pipeline: IngestPipeline) {
 		super("delete_raw", "DELETE", "/ingest");
-		this.#workspace = workspace;
+		this.#pipeline = pipeline;
 	}
 
 	async handle({ url, agent }: ToolRequest): Promise<unknown> {
 		const docId = safeDocId(url.searchParams.get("docId") ?? "");
 		const filename = url.searchParams.get("filename") ?? "";
-		const removed = removeRaw({ workspace: this.#workspace, docId, filename });
-		await removeDerivedText({ workspace: this.#workspace, docId });
+		await this.#pipeline.remove({ target: { kind: "document", docId, filename } });
 		agent.noteCorpusChange();
-		return removed;
+		return { docId, path: rawRelativePath(docId, filename) };
 	}
 }

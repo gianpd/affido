@@ -21,6 +21,7 @@ import { TraceReader, type TraceEntryDetail, type TraceQuery, type TraceReport, 
 import type { CitationsTraceReport } from "./citation-report.ts";
 import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, PromptResult, ProviderConfig, RunCitations } from "./types.ts";
 import { configureProvider } from "./model.ts";
+import { IngestPipeline } from "./ingest.ts";
 
 /** The registry every `ContainerAgent` runs on: the coding tools, the citation
  * tools, and the container prompt section. Exported so an injected, real
@@ -45,7 +46,7 @@ export const createAgentRegistry = (options: {
 }) => {
 	const registry = createRegistry();
 	registry.install(CodingTools);
-	registry.install(citationExtension({ store: options.store }));
+	registry.install(citationExtension({ store: options.store, workspace: options.workspace }));
 	registry.install(
 		defineExtension({
 			name: "container",
@@ -90,7 +91,9 @@ export class ContainerAgent implements AgentApi {
 		// A separate environment for the file API; same local file system id as the tools.
 		this.#apiEnv = new NodeExecutionEnv({ cwd: workspace });
 		// One citation store per agent: the corpus index is lazy and shared (RFC 0006 §5.2).
-		this.#store = new WorkspaceCitationStore(this.#apiEnv, context);
+		// Its first build runs the registry migration pass (RFC 0014 §6) once.
+		const pipeline = new IngestPipeline(workspace);
+		this.#store = new WorkspaceCitationStore(this.#apiEnv, context, () => pipeline.bootstrap((message) => this.#log(message)));
 
 		const registry = createAgentRegistry({ name, workspace, store: this.#store });
 

@@ -1,9 +1,10 @@
-// Tests of the corpus staging rule: one doc id, one relative path, one hash.
-// These are the only things the control plane trusts about an upload, so they
-// are tested without a server, a parser, or a model.
+// Tests of the corpus path rules: one doc id, one relative path, one hash.
+// Staging and admission are RFC 0014's IngestPipeline (ingest.test.ts); what
+// stays here are the identities the control plane and the tools trust, tested
+// without a server, a parser, or a model.
 
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -11,19 +12,15 @@ import test from "node:test";
 import type { IncomingMessage } from "node:http";
 import {
 	derivedTextRelativePath,
-	indexedAsText,
 	isPdfFilename,
 	isTextFilename,
 	rawRelativePath,
-	removeDerivedText,
-	removeRaw,
 	safeDocId,
 	sha256,
-	stageDerivedText,
-	stageRaw,
 	uploadsDocIdOf,
 } from "./corpus.ts";
 import { HttpError } from "./http.ts";
+import { IngestPipeline } from "./ingest.ts";
 import { DerivedTextTool, IngestRawTool } from "./tools.ts";
 import type { AgentApi } from "./types.ts";
 
@@ -53,16 +50,12 @@ test("uploadsDocIdOf is a legal safeDocId, deterministic, and path-shaped", () =
 	assert.notEqual(uploadsDocIdOf("a/report.pdf"), uploadsDocIdOf("b/report.pdf"));
 });
 
-test("text and pdf classification drives what the index can see", () => {
+test("filename classification stays extension-driven", () => {
 	assert.equal(isPdfFilename("CU2024.PDF"), true);
 	assert.equal(isPdfFilename("notes.md"), false);
 	assert.equal(isTextFilename("notes.md"), true);
 	assert.equal(isTextFilename("tabella.CSV"), true);
 	assert.equal(isTextFilename("contability.ods"), false);
-	assert.equal(indexedAsText("notes.md", false), true);
-	assert.equal(indexedAsText("doc.pdf", true), true);
-	assert.equal(indexedAsText("doc.pdf", false), false); // scanned or failed extraction
-	assert.equal(indexedAsText("contability.ods", false), false);
 });
 
 test("rawRelativePath keeps a bounded extension and falls back to .bin", () => {
@@ -71,73 +64,16 @@ test("rawRelativePath keeps a bounded extension and falls back to .bin", () => {
 	assert.equal(rawRelativePath("doc1", "no-extension"), "corpus/raw/doc1.bin");
 	assert.equal(rawRelativePath("doc1", "archive.tar.gz"), "corpus/raw/doc1.gz");
 	assert.equal(rawRelativePath("doc1", "weird.p df"), "corpus/raw/doc1.bin");
-});
-
-test("stageRaw writes the exact bytes and reports their hash", async () => {
-	const root = await workspace();
-	const bytes = new TextEncoder().encode("cauzione provvisoria 2%");
-	const staged = await stageRaw({ workspace: root, docId: "doc1", filename: "gara.txt", bytes });
-
-	assert.equal(staged.path, "corpus/raw/doc1.txt");
-	assert.equal(staged.bytes, bytes.length);
-	assert.equal(staged.sourceSha256, sha256(bytes));
-	assert.deepEqual(new Uint8Array(await readFile(join(root, staged.path))), bytes);
-	// The same bytes always hash the same: the citation id formula depends on it.
-	assert.equal(sha256(bytes), sha256(new TextEncoder().encode("cauzione provvisoria 2%")));
-});
-
-test("stageRaw rewrites the same doc id in place and removeRaw drops the file", async () => {
-	const root = await workspace();
-	await stageRaw({ workspace: root, docId: "doc1", filename: "a.txt", bytes: new TextEncoder().encode("first") });
-	await stageRaw({ workspace: root, docId: "doc1", filename: "a.txt", bytes: new TextEncoder().encode("second") });
-	assert.equal(await readFile(join(root, "corpus/raw/doc1.txt"), "utf8"), "second");
-
-	await removeRaw({ workspace: root, docId: "doc1", filename: "a.txt" });
-	await assert.rejects(stat(join(root, "corpus/raw/doc1.txt")));
-	// Deleting twice is not an error: the row is the source of truth for "exists".
-	await removeRaw({ workspace: root, docId: "doc1", filename: "a.txt" });
-});
-
-/** Smallest PDF.js-compatible one-page PDF, the same shape unpdf.test.ts uses. */
-const MINIMAL_PDF = (): Uint8Array =>
-	new TextEncoder().encode(
-		"%PDF-1.4\n" +
-			"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n" +
-			"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +
-			"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R" +
-			"/Resources<</Font<</F1 5 0 R>>>>>>endobj\n" +
-			"4 0 obj<</Length 59>>stream\nBT /F1 24 Tf 72 720 Td (Reddito 2024) Tj ET\nendstream endobj\n" +
-			"5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n" +
-			"trailer<</Root 1 0 R>>",
-	);
-
-test("stageDerivedText extracts a PDF into corpus/text and reports success", async () => {
-	const root = await workspace();
-	const bytes = MINIMAL_PDF();
-	const written = await stageDerivedText({ workspace: root, docId: "doc9", filename: "CU.pdf", bytes });
-	assert.equal(written, true);
-	assert.equal(await readFile(join(root, derivedTextRelativePath("doc9")), "utf8"), "Reddito 2024");
-
-	// A non-PDF never writes derived text; a broken PDF stays staged but unindexed.
-	assert.equal(await stageDerivedText({ workspace: root, docId: "docA", filename: "notes.md", bytes }), false);
-	assert.equal(
-		await stageDerivedText({ workspace: root, docId: "docB", filename: "broken.pdf", bytes: new TextEncoder().encode("not a pdf") }),
-		false,
-	);
-	await assert.rejects(stat(join(root, derivedTextRelativePath("docB"))));
-
-	await removeDerivedText({ workspace: root, docId: "doc9" });
-	await assert.rejects(stat(join(root, derivedTextRelativePath("doc9"))));
-	await removeDerivedText({ workspace: root, docId: "doc9" }); // twice: not an error
+	assert.equal(derivedTextRelativePath("doc1"), "corpus/text/doc1.txt");
 });
 
 // The control plane records what this tool returns: an ingest response
 // without bytes/sourceSha256 wrote NOT NULL violations upstream (the missing
-// `await` spread a Promise, which has no properties). stageRaw's own tests
+// `await` spread a Promise, which has no properties). The pipeline's own tests
 // cannot reach the handle() seam, so this one does.
-test("IngestRawTool answers with the staged hash and byte count", async () => {
+test("IngestRawTool answers with the staged hash, byte count, and admission", async () => {
 	const root = await workspace();
-	const tool = new IngestRawTool(root);
+	const tool = new IngestRawTool(new IngestPipeline(root));
 	const bytes = new TextEncoder().encode("il contratto si rinnova a marzo");
 	const req = Readable.from([bytes]) as unknown as IncomingMessage;
 	let noted = 0;
@@ -151,6 +87,7 @@ test("IngestRawTool answers with the staged hash and byte count", async () => {
 	assert.equal(out.bytes, bytes.length);
 	assert.equal(out.sourceSha256, sha256(bytes));
 	assert.equal(out.searchable, true);
+	assert.equal(out.indexing, "text");
 	assert.equal(noted, 1);
 });
 
