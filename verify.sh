@@ -23,8 +23,11 @@ fail() { printf 'FAIL %s\n' "$1"; exit 1; }
 # the manager only; docker would turn a missing file into a directory, so it
 # must exist before any `up`. Random once, 0600, gitignored with all of secrets/.
 ensure_kek() {
+	# secrets/ is gitignored, so it does not exist in a fresh clone: create it
+	# or the redirect below fails with "No such file or directory" in CI.
 	if [ ! -f secrets/llm_key_kek ]; then
 		umask 077
+		mkdir -p secrets
 		openssl rand -base64 32 > secrets/llm_key_kek
 		pass "created secrets/llm_key_kek (BYOK KEK, base64 of 32 bytes)"
 	fi

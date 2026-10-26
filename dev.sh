@@ -89,6 +89,7 @@ ensure_kek() {
 	# kek_unavailable (the keyless faux default is unaffected).
 	if [ ! -f "${ROOT}/secrets/llm_key_kek" ]; then
 		umask 077
+		mkdir -p "${ROOT}/secrets"
 		openssl rand -base64 32 > "${ROOT}/secrets/llm_key_kek"
 		pass "created secrets/llm_key_kek (BYOK KEK; back it up: keys are unrecoverable without it)"
 	fi
