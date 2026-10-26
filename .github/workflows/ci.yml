@@ -54,4 +54,7 @@ jobs:
         run: pnpm lint
 
       - name: Unit tests
-        run: pnpm test:unit -- --run
+        # Server project only: the browser-mode client project (scaffold
+        # examples under src/lib/vitest-examples/) needs Playwright chromium
+        # and stays local-only ("pnpm test" runs it via the browser provider).
+        run: pnpm test:unit -- --run --project server
