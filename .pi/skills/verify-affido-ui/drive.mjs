@@ -38,7 +38,7 @@ const { chromium } = resolvePlaywright();
 const args = process.argv.slice(2);
 const scenario = args.find((a) => !a.startsWith('--'));
 if (!scenario) {
-	console.error('usage: drive.mjs <signup|login|chat|documents|skills|traces|uploads|logout> [--base URL] [--out DIR] [--state FILE] [--email E] [--password P] [--name N] [--prompt TXT]');
+	console.error('usage: drive.mjs <signup|login|chat|documents|skills|traces|uploads|logout> [--base URL] [--out DIR] [--state FILE] [--email E] [--password P] [--name N] [--prompt TXT] [--strict] [--upload FILE] [--doc-title T] [--delete-title T] [--upload-dir DIR] [--find-text TXT]');
 	process.exit(2);
 }
 const flag = (name, fallback) => {
@@ -61,6 +61,16 @@ const password = flag('password', cred.password ?? `verify-${runId}-Passw0rd`);
 const name = flag('name', cred.name ?? 'UI Verifier');
 const prompt = flag('prompt', 'Reply with exactly: READY');
 const installBudget = Number(flag('install-budget-ms', '1200000'));
+// chat: flip the strict-citations switch before sending (RFC 0006 / 0014).
+const strict = args.includes('--strict');
+// documents: upload a file through the real form, and/or delete a document.
+const uploadFile = flag('upload', '');
+const docTitle = flag('doc-title', '');
+const deleteTitle = flag('delete-title', '');
+// uploads: pick a directory in the real (webkitdirectory) input.
+const uploadDir = flag('upload-dir', '');
+// traces: find the entry whose row text contains this, expand it, screenshot.
+const findText = flag('find-text', '');
 
 const facts = {
 	scenario,
@@ -136,9 +146,14 @@ const url = (p) => `${base}${p}`;
 const doSignup = async () => {
 	await page.goto(url('/login'));
 	const form = page.locator('form[action*="signUp"]');
-	// The tab click can land pre-hydration and do nothing; wait for the
-	// target form to actually become visible before filling.
-	await page.getByRole('tab', { name: 'Create account' }).click();
+	// The tab click can land pre-hydration and do nothing; re-click until the
+	// target form is actually visible before filling.
+	const tab = page.getByRole('tab', { name: 'Create account' });
+	await tab.waitFor({ state: 'visible' });
+	for (let i = 0; i < 10 && !(await form.isVisible()); i += 1) {
+		await tab.click().catch(() => {});
+		await page.waitForTimeout(1500);
+	}
 	await form.waitFor({ state: 'visible' });
 	await form.getByLabel('Name', { exact: true }).fill(name);
 	await form.getByLabel('Email', { exact: true }).fill(email);
@@ -200,6 +215,23 @@ const scenarios = {
 			throw new Error('composer still disabled: sandbox unreachable after 150s');
 		});
 		await shot('chat-composer-ready');
+		if (strict) {
+			await step('enable strict citations mode', async () => {
+				const toggle = page.getByRole('switch', { name: 'Strict citations mode' });
+				await toggle.waitFor({ state: 'visible' });
+				if ((await toggle.getAttribute('aria-checked')) !== 'true') {
+					// A click can land pre-hydration; re-click until the switch reports on.
+					for (let i = 0; i < 20; i += 1) {
+						await toggle.click().catch(() => {});
+						await page.waitForTimeout(700);
+						if ((await toggle.getAttribute('aria-checked')) === 'true') break;
+					}
+				}
+				if ((await toggle.getAttribute('aria-checked')) !== 'true')
+					throw new Error('the Strict citations switch is still off');
+				await shot('chat-strict-enabled');
+			});
+		}
 		await step('send prompt', async () => {
 			await composer.fill(prompt);
 			await page.getByRole('button', { name: 'Send message' }).click();
@@ -228,6 +260,58 @@ const scenarios = {
 
 	documents: async () => {
 		await step('open documents authenticated', ensureAuthed);
+		if (args.includes('--list')) {
+			await step('the documents list renders (no rows created)', async () => {
+				await page.goto(url('/dashboard/documents'));
+				await page.getByText('Documents the agent can cite', { exact: false }).first().waitFor();
+				await page.waitForTimeout(1500); // let the server load settle
+				await shot('documents-list-only');
+			});
+			return;
+		}
+		if (deleteTitle) {
+			await step('delete the document through the row menu and its confirmation', async () => {
+				await page.goto(url('/dashboard/documents'));
+				const row = page.getByRole('row').filter({ hasText: deleteTitle }).first();
+				await row.waitFor({ state: 'visible' });
+				await shot('documents-before-delete');
+				await row.getByRole('button', { name: 'Actions' }).click();
+				await page.getByRole('menuitem', { name: 'Delete' }).click();
+				await page.getByRole('alertdialog').waitFor({ state: 'visible' });
+				await shot('documents-delete-confirm');
+				await page.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click();
+				await page.waitForURL(/\/dashboard\/documents(\?.*)?$/);
+				await page.getByText(deleteTitle, { exact: true }).first().waitFor({ state: 'detached' });
+				await shot('documents-after-delete');
+			});
+			return;
+		}
+		if (uploadFile) {
+			const title = docTitle || path.basename(uploadFile);
+			await step('upload a file through the document form', async () => {
+				await page.goto(url('/dashboard/documents?new=1'));
+				await page.getByLabel('Title', { exact: true }).fill(title);
+				await page.getByLabel('Upload file').setInputFiles(uploadFile);
+				await page.getByRole('button', { name: 'Save document' }).click();
+				// The create action redirects to ?doc=<id>, which opens the detail dialog.
+				await page.waitForURL(/\/dashboard\/documents\?doc=/);
+			});
+			await step('the uploaded document appears in the list', async () => {
+				await page.getByText(title, { exact: true }).first().waitFor();
+				await shot('documents-list');
+			});
+			await step('the document detail opens without a failed ingest', async () => {
+				await page.getByRole('dialog').waitFor({ state: 'visible' });
+				await page.getByRole('dialog').getByText(title).waitFor();
+				const dialog = page.getByRole('dialog');
+				if ((await dialog.getByText(/failed|error/i).count()) > 0) {
+					throw new Error(`the detail reports a failed ingest: ${await dialog.innerText()}`);
+				}
+				await page.waitForTimeout(2000); // let the preview fetch settle
+				await shot('documents-detail');
+			});
+			return;
+		}
 		const title = `Verify note ${runId}`;
 		await step('create document through the form', async () => {
 			await page.goto(url('/dashboard/documents?new=1'));
@@ -311,6 +395,22 @@ const scenarios = {
 				await shot('trace-detail');
 			});
 		}
+		if (count > 0 && findText) {
+			await step(`find the entry containing "${findText}" and expand it`, async () => {
+				const row = page.getByRole('row').filter({ hasText: findText }).first();
+				// The tab click can land pre-hydration; re-click until the row shows up.
+				for (let i = 0; i < 10; i += 1) {
+					if (await row.isVisible().catch(() => false)) break;
+					await page.getByRole('tab', { name: /^Entries/ }).click().catch(() => {});
+					await page.waitForTimeout(1000);
+				}
+				await row.waitFor({ state: 'visible', timeout: 20_000 });
+				await shot('trace-entry-match');
+				await row.getByRole('button', { name: 'Show exact content' }).click();
+				await page.waitForTimeout(2500); // the exact content is fetched from /entry
+				await shot('trace-entry-expanded');
+			});
+		}
 	},
 
 	uploads: async () => {
@@ -320,6 +420,30 @@ const scenarios = {
 			await page.getByText('uploads/', { exact: false }).first().waitFor();
 			await shot('uploads-page');
 		});
+		if (uploadDir) {
+			await step('upload a directory through the real picker', async () => {
+				await page.goto(url('/dashboard/uploads?new=dir'));
+				const input = page.locator('#dir-upload');
+				await input.waitFor({ state: 'visible' });
+				// The page sets webkitdirectory from an $effect; Playwright refuses a
+				// directory path on an input that does not have the attribute yet.
+				for (let i = 0; i < 20; i += 1) {
+					if ((await input.getAttribute('webkitdirectory')) !== null) break;
+					await page.waitForTimeout(500);
+				}
+				// The input is a webkitdirectory input, so a directory path populates
+				// each file's webkitRelativePath (the form posts those paths).
+				await input.setInputFiles(uploadDir);
+				await shot('uploads-picked');
+				await page.getByRole('button', { name: 'Upload directory' }).click();
+				// The tree lists the picked directory by name once the upload lands.
+				await page
+					.getByText(path.basename(uploadDir), { exact: true })
+					.first()
+					.waitFor({ timeout: 180_000 });
+				await shot('uploads-tree');
+			});
+		}
 	},
 
 	logout: async () => {

@@ -16,6 +16,8 @@ Dashboard sidebar → *Chat* (`/dashboard/chat`). Type in the composer (`Ask you
 
 `drive.mjs chat --state <run>/state.json --prompt "..."`. The scenario: waits until the composer is enabled (disabled means the server-side sandbox status call failed; the driver reloads for up to 150 s because the first visit triggers provisioning), fills the prompt, clicks `Send message`, waits for the stop button to appear and detach (up to 5 min — first run includes container create + agent boot + model call), screenshots the conversation, then asserts `/dashboard/traces` lists the run.
 
+`--strict` flips the `Strict citations mode` switch (role `switch`, aria-label on the composer toolbar) before sending, screenshots it in the on state (`chat-strict-enabled.png`), and the run then carries `citations: "required"` to `/prompt`.
+
 Cost note: one prompt per run. On the faux provider (`affido-agent:latest`) it is free and fast; on `affido-agent:openrouter` it is a real model call — keep the prompt tiny.
 
 ## Gotchas

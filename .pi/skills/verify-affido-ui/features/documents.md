@@ -13,7 +13,12 @@ Sidebar → *Documents* (`/dashboard/documents`), or *New document* button (`?ne
 
 ## Driving it with Playwright
 
-`drive.mjs documents --state <run>/state.json` creates a note titled `Verify note <runId>` through the real form, asserts it appears in the list, clicks it, and asserts + screenshots the detail dialog (the detail is a modal `Dialog.Root`, not a navigation). For upload-driven ingestion (file input instead of pasted text), extend the scenario with `page.getByLabel('Upload file').setInputFiles(...)` — the file goes through the same form and ingest path.
+`drive.mjs documents --state <run>/state.json` creates a note titled `Verify note <runId>` through the real form, asserts it appears in the list, clicks it, and asserts + screenshots the detail dialog (the detail is a modal `Dialog.Root`, not a navigation).
+
+Two variants exist:
+
+- `--upload FILE [--doc-title TITLE]` — fills *Title*, sets the file on `page.getByLabel('Upload file')` (input `#doc-file`), saves, and lands on `?doc=<id>` where the detail dialog is already open. The step fails if the dialog text matches `/failed|error/i`, so a failed ingest cannot pass silently. Same form, same ingest path as pasted text.
+- `--delete-title TITLE` — finds the row, opens its `Actions` menu, clicks `Delete`, confirms in the `alertdialog`, and asserts the row is gone (`documents-before-delete*`, `documents-delete-confirm*`, `documents-after-delete*`).
 
 ## Gotchas
 

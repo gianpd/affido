@@ -12,7 +12,9 @@ Sidebar → *Uploads* (`/dashboard/uploads`). The page explains `uploads/<your p
 
 ## Driving it with Playwright
 
-`drive.mjs uploads --state <run>/state.json` renders and screenshots the page (counts of files under `uploads/` and `artifacts/`). Driving an actual directory upload needs `setInputFiles` with the multiple/directory input plus a sandbox round-trip; extend the scenario in `drive.mjs` when that path needs proof (the form is `enctype="multipart/form-data"` at the bottom of the page).
+`drive.mjs uploads --state <run>/state.json` renders and screenshots the page (counts of files under `uploads/` and `artifacts/`).
+
+`--upload-dir DIR` drives a real directory upload: open `/dashboard/uploads?new=dir`, `setInputFiles(DIR)` on `#dir-upload`, click `Upload directory`, then wait for the tree to show the path. The input gets `webkitdirectory` from a page `$effect`, so pass a *directory* path (a plain file path is rejected by Playwright). The tree path keeps the picked directory's name: to land a file at `persona-finanza/rinnova.pdf`, pass the directory `persona-finanza` containing `rinnova.pdf`.
 
 ## Gotchas
 

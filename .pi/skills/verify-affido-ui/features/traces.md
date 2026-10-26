@@ -12,7 +12,9 @@ Sidebar → *Traces* (`/dashboard/traces`). Click a session row to open the deta
 
 ## Driving it with Playwright
 
-`drive.mjs traces --state <run>/state.json` screenshots the list and, if any session exists, opens the first detail. The `chat` scenario also asserts a trace row appears for its own prompt — that cross-check (chat side effect visible in traces) is the strongest proof the whole pipeline ran.
+`drive.mjs traces --state <run>/state.json` screenshots the list and, if any session exists, opens the first detail (newest capture first). The `chat` scenario also asserts a trace row appears for its own prompt — that cross-check (chat side effect visible in traces) is the strongest proof the whole pipeline ran.
+
+`--find-text TXT` opens the newest session, switches to the `Entries` tab, finds the row whose summary contains `TXT`, screenshots it (`trace-entry-match`), clicks `Show exact content` (fetches `/entry`) and screenshots the expanded entry (`trace-entry-expanded`). Use it to prove a specific tool result — e.g. the strict-run block on `bash`. Summaries are truncated at 160 chars, so search for a substring near the start of the expected text.
 
 ## Gotchas
 
