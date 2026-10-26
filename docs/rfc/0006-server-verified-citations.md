@@ -186,7 +186,8 @@ resolve the current run's entry through the tool API's document access, never
 from a model-supplied id. Citations do not cross runs — R3's `foreign_citation`
 check is the same per-run scoping as free-hall.
 
-v1 reads the staged bytes directly:
+v1 reads the staged bytes directly (the read path is superseded by RFC 0014's
+one registry, written at ingestion; this paragraph remains the port's contract):
 
 - Documents are the files in `corpus/raw/` (metadata from the Postgres upload
   row: title, original filename) plus the uploads tree under `corpus/uploads/`

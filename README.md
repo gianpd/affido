@@ -544,7 +544,8 @@ license; everything in this repository is Apache-2.0.
 ## Docs
 
 - [docs/rfc/](docs/rfc/) — design records: sandboxes (0002, 0003), citations
-  gate (0006), sessions (0008), skills and artifacts (0009)
+  gate (0006), sessions (0008), skills and artifacts (0009), ingestion and
+  index registry (0014)
 - [docs/security.md](docs/security.md) — threat model (draft)
 - [CONTRIBUTING.md](CONTRIBUTING.md) — the gate and the rules
 - [CHANGELOG.md](CHANGELOG.md)
