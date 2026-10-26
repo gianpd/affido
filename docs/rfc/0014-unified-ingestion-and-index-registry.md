@@ -38,9 +38,9 @@ This RFC makes three decisions:
    (`bash`, `read`, `write`, `edit`) are refused: the only readable evidence is
    the citation index, reached through the server-managed `corpus_*` tools. In
    every run, `write`/`edit` cannot touch `corpus/**`, and the index build
-   verifies each admitted document's bytes against the hash the registry
-   recorded — so evidence cannot be planted or tampered with from a free run
-   either.
+   verifies each admitted document's staged bytes *and* admitted text against
+   the hashes the registry recorded — so evidence cannot be planted or
+   tampered with from a free run either.
 
 The three walkers of today — the `corpus/raw/` walk, the `corpus/uploads/` tree
 walk, and the derived-text lookup — collapse into one registry read. Listing,
@@ -161,7 +161,7 @@ that look more grounded than they are.
 | R9 | Deletion removes bytes, derived text, and sidecar together. | `removeUploadPath` and the raw delete route go through the pipeline; no orphaned `corpus/text/` or `corpus/meta/` entries remain after any delete (unit-tested). |
 | R10 | Existing volumes migrate once, explicitly. | A bootstrap pass registers pre-RFC files (raw without sidecar fields, uploads tree without sidecars) by applying the same admission rules and writing sidecars; after it, read-time never decides anything again. The pass is idempotent and logged. |
 | R11 | A strict run is a closed evidence channel. | While the current run is strict, a `beforeTool` hook refuses `bash`, `read`, `write`, `edit` with a named block naming the corpus tools; the only remaining paths to a gated reply are `corpus_grep`/`corpus_read`/`corpus_annotate` and the two exits. Free runs are untouched (§5.7.1). |
-| R12 | Evidence cannot be planted or tampered with from any run. | `write`/`edit` are refused for `corpus/**` paths in every run (structured path argument, so the check is exact); the index build drops any admitted document whose staged bytes no longer hash to the sidecar's `sourceSha256` (§5.7.2). A fabricated citation therefore cannot exist: planted files have no sidecar (I1), and tampered documents fall out of the index. |
+| R12 | Evidence cannot be planted or tampered with from any run. | `write`/`edit` are refused for `corpus/**` paths in every run (structured path argument, so the check is exact); the index build drops any admitted document whose staged bytes no longer hash to `sourceSha256` **or** whose admitted text no longer hashes to `textSha256` (§5.7.2). A fabricated citation therefore cannot exist: planted files have no sidecar (I1), and tampered documents — raw bytes or derived text alike — fall out of the index. |
 
 ## 5. Design
 
@@ -198,7 +198,8 @@ export type Staged = {
    `stageUploadFile` as today — they move into this module).
 2. **Admit** (§5.3): decide `indexing` and `textPath`, deriving PDF text into
    `corpus/text/<docId>.txt` when extraction succeeds; validate strict UTF-8
-   for text extensions.
+   for text extensions. Whatever text is admitted, its hash becomes
+   `textSha256` — recorded now, verified at every index build (§5.7.2).
 3. **Register**: write the sidecar (§5.2) — both roots, same shape.
 4. **Report**: return `Staged`. The control plane records exactly this object;
    the HTTP tools return it verbatim.
@@ -245,11 +246,17 @@ document exists at all. Today only `raw` documents have one, carrying
   "bytes": 2831442,
   "indexing": "derived",
   "textPath": "corpus/text/4015c037-….txt",
+  "textSha256": "…",
   "at": 1792937043811
 }
 ```
 
-`textPath` is `null` when `indexing` is `"none"`. Keying: `raw` keeps the
+`textPath` (and `textSha256`) is `null` when `indexing` is `"none"`. The two
+hashes pin the two files an admitted document consists of: `sourceSha256` the
+staged bytes, `textSha256` the exact text the index may read. For
+`indexing: "text"` they are the same file and the two hashes agree by R4's
+roundtrip check; for `derived` they differ, and §5.7.2's index build verifies
+both. Keying: `raw` keeps the
 control-plane docId; `uploads` uses `uploadsDocIdOf(path)` — deterministic, so
 the tree path and the registry agree without coordination. Listings
 (`/corpus`, `/uploads`) and the citation store read this file; the frontend
@@ -264,8 +271,8 @@ Deterministic, in this order, evaluated only by `IngestPipeline.stage`:
 
 | File (by original filename) | Admission step | Result |
 |---|---|---|
-| `.pdf` | unpdf extraction, bounded as today (1000 pages, 16 MB images, 30 s) | non-empty text → `derived`, `textPath = corpus/text/<docId>.txt`; else → `none` |
-| text extension (`md`, `txt`, …) | decode UTF-8, re-encode, byte-compare | equal → `text`, `textPath = stagedPath`; not equal → `none` |
+| `.pdf` | unpdf extraction, bounded as today (1000 pages, 16 MB images, 30 s) | non-empty text → `derived`, `textPath = corpus/text/<docId>.txt`, `textSha256` of the extracted text; else → `none` |
+| text extension (`md`, `txt`, …) | decode UTF-8, re-encode, byte-compare | equal → `text`, `textPath = stagedPath`, `textSha256 = sourceSha256`; not equal → `none` |
 | anything else | — | `none` |
 
 The UTF-8 roundtrip check exists because Node's `readFile(…, "utf8")` never
@@ -280,7 +287,9 @@ never pays it again.
 
 `loadDocuments` today walks `corpus/raw/`, then walks `corpus/uploads/`, then
 resolves derived text per branch — two rule sets re-deriving what ingestion
-already knew. After this RFC it performs exactly one walk and one kind of read:
+already knew. After this RFC it performs exactly one walk, reads text only
+along the registry's declared `textPath`, and admits that text only when it
+still hashes to the registry (§5.7.2):
 
 ```ts
 const loadDocuments = async (env, context) => {
@@ -290,8 +299,9 @@ const loadDocuments = async (env, context) => {
 		if (name.kind !== "file") continue;
 		const sidecar = await readSidecar(env, name, context); // {…} | null
 		if (sidecar === null || sidecar.indexing === "none" || sidecar.textPath === null) continue;
-		const read = await env.readTextFile(sidecar.textPath, context);  // the only read
+		const read = await env.readTextFile(sidecar.textPath, context);  // the only text read
 		if (!read.ok) continue;                                  // raced with a delete
+		if (sha256OfText(read.value) !== sidecar.textSha256) continue; // §5.7.2: tampered text
 		documents.push({
 			docId: sidecar.docId, filename: sidecar.filename, title: sidecar.title,
 			version: 1, text: read.value, textSha256: sha256OfText(read.value),
@@ -301,8 +311,11 @@ const loadDocuments = async (env, context) => {
 };
 ```
 
-No filename inspection, no `RAW_DIR`/`UPLOADS_DIR` reads, no branch on root.
-The lazy index and `invalidate()` stay as they are; `grepLines`, `readWindow`,
+No filename inspection, no walk of `RAW_DIR` or `UPLOADS_DIR`, no branch on
+root. Besides `textPath`, the store touches bytes only to hash them: a
+`readBinaryFile` of the sidecar's `stagedPath` against `sourceSha256` —
+reached through the registry, never through a tree walk (§5.7.2). The lazy
+index and `invalidate()` stay as they are; `grepLines`, `readWindow`,
 `annotate`, `verify` are unchanged above the document map. The title/filename
 fallback heuristics of `listRawDocuments`/`readMeta` disappear: the registry is
 total, so there is nothing to fall back to.
@@ -324,8 +337,8 @@ are the documents it can cite.* Formally, for every staged document `D`:
 - **I5 (no side doors)** — every staging caller is `IngestPipeline` (R1).
 - **I6 (evidence immutability)** — no model-issued tool call can plant or
   mutate evidence: `write`/`edit` refuse `corpus/**` in every run, and a
-  document whose bytes no longer hash to its registry entry falls out of the
-  index (§5.7.2).
+  document whose staged bytes or admitted text no longer hash to its registry
+  entry falls out of the index (§5.7.2).
 
 I1–I6 are checked structurally (unit tests, R1's import rule) and behaviorally
 (e2e): the same PDF fixture and the same `.md` fixture are pushed through
@@ -481,14 +494,27 @@ the strict run. Two always-on rules close it:
    filter impossible for `bash` makes it trivial here. The same `beforeTool`
    hook implements it: when the tool is `write` or `edit` and the resolved
    argument path is under `corpus/`, block unconditionally.
-2. **The index build verifies bytes against the registry.** `bash` in a free
-   run can still write into `corpus/` through the shell — no tool hook sees a
-   shell's redirections. So admission is not just declared once; it is
-   *checked on every index build*: a document enters the index only when
-   `sha256(read of stagedPath) === sidecar.sourceSha256`. A mutated raw file or
-   a swapped derived text changes the hash, the document falls out of the
-   index, and any stored citation to it re-verifies as `quote_mismatch`
-   (RFC 0006 R11's honest failure). What remains possible — planting a new
+2. **The index build verifies both files of every admitted document against
+   the registry.** `bash` in a free run can still write into `corpus/` through
+   the shell — no tool hook sees a shell's redirections. So admission is not
+   just declared once; it is *checked on every index build*. The check must
+   cover both files, because a derived document is two files and the index
+   reads the second while the first carries the only obvious hash: if
+   `sourceSha256` (over `stagedPath`) were the only check, a free-run shell
+   could overwrite `corpus/text/<docId>.txt` with fabricated text, leave the
+   staged PDF untouched, and the check would pass while the index ingests the
+   forgery — a `corpus_annotate` quote would then verify against text the
+   document never contained. The registry therefore pins both halves: the
+   sidecar records `textSha256`, the hash of the admitted text, computed at
+   ingest when the derived text is already in memory (no second extraction,
+   ever — re-deriving at read time is the failure mode this RFC deletes). A
+   document enters the index only when both hold: `sha256(readBinaryFile of
+   stagedPath) === sourceSha256` and `sha256OfText(read of textPath) ===
+   textSha256`; for `indexing: "text"` the two paths name one file and the
+   check degenerates to a single read. A mutated raw file or a swapped derived
+   text drops the document out of the index, and any stored citation to it
+   re-verifies as `not_found` (RFC 0006 R11's honest failure: the document
+   stopped being evidence). What remains possible — planting a new
    sidecar-less file — is inert by I1: no sidecar, no index entry.
 
 The residual, stated plainly: a free-run shell can corrupt an admitted
@@ -515,9 +541,11 @@ One bootstrap pass, run once per sandbox at first store load after the upgrade:
 1. Walk `corpus/raw/` and `corpus/uploads/` (the last directory walk the read
    path will ever do).
 2. For every file without a complete sidecar, run the same admission rules
-   (§5.3) and write the sidecar. Uploads tree files get sidecars keyed by
-   `uploadsDocIdOf(path)`; orphaned `corpus/text/` files with no staged source
-   are deleted.
+   (§5.3) and write the sidecar, `textSha256` included. A PDF whose derived
+   text already sits in `corpus/text/` (pre-RFC ingests wrote it at upload)
+   takes `textSha256` from those bytes; extraction runs only when the text is
+   absent. Uploads tree files get sidecars keyed by `uploadsDocIdOf(path)`;
+   orphaned `corpus/text/` files with no staged source are deleted.
 3. Log what was registered. Idempotent by construction: a second run finds
    complete sidecars and does nothing.
 
@@ -539,16 +567,19 @@ that were never the documents' text. No other back-compatibility shims.
   `corpus/text/…txt` (the regression the current suite misses: the uploads
   mirror test exists, `citation-store.test.ts:73`, the raw one does not); a
   sidecar-less file is invisible; `corpus_annotate` of a derived-text sentence
-  succeeds (the exact operation that failed 23 times in the audited sessions).
+  succeeds (the exact operation that failed 23 times in the audited sessions);
+  a derived document whose `corpus/text/<docId>.txt` is edited behind the
+  pipeline's back is dropped from the index — R12's second hash.
 - **Unit, bootstrap**: a pre-RFC layout (raw + sidecar-less uploads + orphaned
   derived text) migrates to total registry coverage; second run is a no-op.
 - **Unit, gate** (`agent/citation-agent.test.ts`): a strict run refuses
   `bash`/`read`/`write`/`edit` with the named block and succeeds through
   `corpus_grep`/`corpus_read`; a free run executes them (R11). `write`/`edit`
   with a `corpus/**` path are refused in a free run too; `workspace/notes.md`
-  still writes (R12). A tampered staged file (bytes edited behind the
-  pipeline's back) drops out of the next index build; the stored citation
-  re-verifies `quote_mismatch` (R12, RFC 0006 R11).
+  still writes (R12). A tampered staged file — bytes edited behind the
+  pipeline's back — drops out of the next index build, and so does a derived
+  document whose `corpus/text/<docId>.txt` was swapped; in both cases the
+  stored citation re-verifies `not_found` (R12, RFC 0006 R11).
 - **E2E** (`e2e-test/citations.sh`): (a) strict prompt against a `/ingest`-staged
   PDF — `evidence: cited`, quote contains `rinnova`, `docId` is the raw id
   (this fails on current `main`); (b) the same fixture through both UI entry
