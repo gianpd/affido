@@ -12,13 +12,6 @@
 			class="h-8 w-auto"
 		/>
 	{:else}
-		<img
-			src="/brand/favicon.svg"
-			alt=""
-			width="32"
-			height="32"
-			class="size-8"
-			aria-hidden="true"
-		/>
+		<img src="/brand/favicon.svg" alt="" width="32" height="32" class="size-8" aria-hidden="true" />
 	{/if}
 </a>
