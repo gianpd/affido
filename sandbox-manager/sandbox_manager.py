@@ -338,7 +338,8 @@ def load_kek() -> bytes:
     if "key" in _kek:
         return _kek["key"]
     try:
-        raw = open(LLM_KEK_FILE, "rb").read()
+        with open(LLM_KEK_FILE, "rb") as fh:
+            raw = fh.read()
     except OSError as exc:
         raise ManagerError(
             "kek_unavailable", f"KEK unreadable at {LLM_KEK_FILE}: {exc.strerror}"
@@ -1623,6 +1624,32 @@ def enforce_token_default() -> None:
         raise SystemExit(1)
 
 
+def warn_unknown_runtime() -> None:
+    """One-line cause and fix in the startup log when the host lacks
+    AGENT_RUNTIME.
+
+    Not fatal: provision still fails closed (docker create refuses the
+    runtime), but that failure reaches clients as a 503 whose body is the
+    whole docker command line. This puts the diagnosis where the operator
+    looks first — `docker logs sandbox-manager` at boot (CI runners ship no
+    gVisor; AGENT_RUNTIME=runc is the documented fallback, RFC 0003 §11)."""
+    try:
+        known = docker(
+            "info", "--format", "{{range $k, $v := .Runtimes}}{{$k}} {{end}}"
+        ).split()
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        log.warning("cannot list docker runtimes: %s", exc)
+        return
+    if AGENT_RUNTIME not in known:
+        log.error(
+            "AGENT_RUNTIME '%s' is not known to the docker daemon (have: %s): "
+            "every cold provision will fail with 503. Install gVisor or set "
+            "AGENT_RUNTIME=runc (the documented fallback: agent sandboxes "
+            "share the host kernel again).",
+            AGENT_RUNTIME, " ".join(sorted(known)) or "none",
+        )
+
+
 class ManagerHTTPServer(ThreadingHTTPServer):
     """ThreadingHTTPServer with quiet peer-disconnect handling.
 
@@ -1645,6 +1672,7 @@ class ManagerHTTPServer(ThreadingHTTPServer):
 
 def main() -> None:
     enforce_token_default()
+    warn_unknown_runtime()
     migrate()
     start_loops()
     server = ManagerHTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)

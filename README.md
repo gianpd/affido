@@ -221,7 +221,10 @@ under gVisor, a userspace kernel — model-generated code never executes
 host-kernel syscalls and `/proc`, `/sys` are synthetic, so tenants never share
 the host kernel; `runc` is the documented fallback for hosts without gVisor,
 weakening isolation back to a shared kernel — control-plane containers always
-run `runc`; takes effect on the next provision), `AGENT_DNS` (`1.1.1.1` by
+run `runc`; takes effect on the next provision; `./verify.sh` probes the
+daemon for the configured runtime and falls back to `runc` with a warning
+when it is absent, so the gate stays runnable on hosts without gVisor such
+as CI runners), `AGENT_DNS` (`1.1.1.1` by
 default, `--dns` for the sandbox plus a resolv.conf rewrite at provision
 time: Docker never writes `--dns` into resolv.conf on user-defined networks
 -- it becomes an upstream of the embedded resolver, which gVisor does not
@@ -550,7 +553,11 @@ BYOK chain against a fake OpenAI-compatible upstream (RFC 0012 §10: the
 default gate stays keyless; the BYOK phase re-creates the stack with egress
 open and a same-network fake provider, proves delivery, rotation,
 validation and the L0/L1/recreation durability, then restores the keyless
-default). It exits non-zero on the first failure.
+default). It exits non-zero on the first failure. Before starting the stack
+the gate probes the Docker daemon for the configured `AGENT_RUNTIME`: when
+the host does not provide it (CI runners ship no gVisor) the gate takes the
+documented `AGENT_RUNTIME=runc` fallback and says so in the log, instead of
+failing every cold provision with 503 at `docker create`.
 
 `./e2e-test/run.sh` asserts that compose declares only the control plane, then
 runs these checks through Caddy only:

@@ -87,7 +87,7 @@ want_runtime="$(manager_env AGENT_RUNTIME || true)"
 want_runtime="${want_runtime:-runsc}"
 runtime="$(docker inspect -f '{{.HostConfig.Runtime}}' "${CONTAINER}")"
 [[ "${runtime}" == "${want_runtime}" ]] \
-	|| fail "${CONTAINER} runs on runtime '${runtime}', expected '${want_runtime}' (gVisor)"
+	|| fail "${CONTAINER} runs on runtime '${runtime}', expected '${want_runtime}'"
 pass "sandbox runs under the configured runtime (${runtime})"
 
 net="pi-net-${CONTAINER#u}"

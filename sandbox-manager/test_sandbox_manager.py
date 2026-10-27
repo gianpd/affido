@@ -171,6 +171,7 @@ class BaseUrlTest(unittest.TestCase):
             )
         finally:
             server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
 
     def test_validation_uses_the_catalog_validate_path(self) -> None:
@@ -194,6 +195,7 @@ class BaseUrlTest(unittest.TestCase):
                     self.assertEqual(ctx.exception.code, "invalid_catalog")
         finally:
             server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
 
     def test_validation_public_required_for_user_urls(self) -> None:
@@ -211,6 +213,7 @@ class BaseUrlTest(unittest.TestCase):
             )
         finally:
             server.shutdown()
+            server.server_close()
             thread.join(timeout=5)
 
 
@@ -289,6 +292,46 @@ class TokenDefaultGuardTest(unittest.TestCase):
         sm.MANAGER_ALLOW_DEFAULT_TOKEN = True
         self.reload_token()
         sm.enforce_token_default()  # must not raise
+
+
+class RuntimeHintTest(unittest.TestCase):
+    """warn_unknown_runtime puts a one-line cause and fix in the startup log
+    when the daemon lacks AGENT_RUNTIME (CI runners ship no gVisor); the
+    provision path still fails closed, this only makes the 503 diagnosable
+    from `docker logs` without waiting for a client to hit it."""
+
+    def setUp(self) -> None:
+        self.saved = (sm.AGENT_RUNTIME, sm.docker)
+        sm.AGENT_RUNTIME = "runsc"
+
+    def tearDown(self) -> None:
+        sm.AGENT_RUNTIME, sm.docker = self.saved
+
+    def test_missing_runtime_logs_the_fallback_hint(self) -> None:
+        sm.docker = lambda *a, **k: "io.containerd.runc.v2 runc "
+        with self.assertLogs("sandbox-manager", level="ERROR") as captured:
+            sm.warn_unknown_runtime()
+        self.assertTrue(
+            any("AGENT_RUNTIME=runc" in line for line in captured.output),
+            captured.output,
+        )
+
+    def test_installed_runtime_is_silent(self) -> None:
+        sm.docker = lambda *a, **k: "runsc io.containerd.runc.v2 runc "
+        with self.assertNoLogs("sandbox-manager", level="ERROR"):
+            sm.warn_unknown_runtime()
+
+    def test_daemon_query_failure_does_not_break_startup(self) -> None:
+        def _boom(*a: str, **k: object) -> str:
+            raise RuntimeError("docker info failed")
+
+        sm.docker = _boom
+        with self.assertLogs("sandbox-manager", level="WARNING") as captured:
+            sm.warn_unknown_runtime()
+        self.assertTrue(
+            any("cannot list docker runtimes" in line for line in captured.output),
+            captured.output,
+        )
 
 
 class CreateArgsTest(unittest.TestCase):

@@ -50,6 +50,23 @@ ensure_manager_token() {
 	fi
 }
 
+select_agent_runtime() {
+	# gVisor is not part of stock Docker: hosts without it (CI runners, plain
+	# installs) would fail every cold provision with 503 at
+	# `docker create --runtime runsc`. Take the documented AGENT_RUNTIME=runc
+	# fallback instead (RFC 0003 §11) — loudly, so the log shows the gate did
+	# not exercise gVisor. Exported: every compose up below must agree.
+	local want="${AGENT_RUNTIME:-runsc}"
+	if docker info --format '{{range $k, $v := .Runtimes}}{{$k}} {{end}}' 2>/dev/null \
+		| grep -qw "${want}"; then
+		export AGENT_RUNTIME="${want}"
+		pass "agent sandboxes run under ${want}"
+	else
+		export AGENT_RUNTIME=runc
+		printf 'warn docker daemon has no %s runtime: gate falls back to AGENT_RUNTIME=runc (gVisor isolation not exercised)\n' "${want}"
+	fi
+}
+
 echo "== typecheck: server.ts must pass tsc --noEmit =="
 (
 	cd agent
@@ -91,6 +108,7 @@ pass "catalog manifest matches the bundle"
 echo "== build and start the control plane =="
 ensure_kek
 ensure_manager_token
+select_agent_runtime
 # Start from a clean control plane: the BYOK phase below recreates the manager
 # twice more per run, and back-to-back runs on containerd-store daemons can
 # otherwise leave a manager container on a garbage-collected image digest.

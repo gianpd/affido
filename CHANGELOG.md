@@ -8,6 +8,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- CI (2026-10): `./verify.sh` no longer assumes the host has gVisor. GitHub
+  runners ship stock Docker, so after the runsc default landed every cold
+  provision in CI died with 503 at `docker create --runtime runsc`. The gate
+  now probes the daemon for the configured `AGENT_RUNTIME` before starting
+  the stack and takes the documented `AGENT_RUNTIME=runc` fallback (with a
+  warning line) when it is absent. The manager also logs a one-line cause
+  and fix at startup when its runtime is unknown to the daemon — the
+  provision path still fails closed, but `docker logs` diagnoses it without
+  a client hitting the 503 first.
+
 - Security (pentest W1, 2026-10): the manager no longer runs on the
   well-known compose default `MANAGER_TOKEN` (`dev-manager-token`). With it,
   any unprivileged process on the host could reach the manager's bridge IP
