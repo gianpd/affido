@@ -51,18 +51,26 @@ the tokens ship in `src/routes/layout.css` and the brand art in `static/brand/`
 ## Setup
 
 The control plane lives at the repository root. Start Postgres and the manager
-first:
+with the developer script, which also writes a random `MANAGER_TOKEN` into `.env`:
 
 ```bash
 cd ..
-docker compose up -d --build
+./dev.sh up
 ```
+
+Plain `docker compose up` on a fresh clone crash-loops: with no token the
+compose fallback is the well-known `dev-manager-token`, and the manager refuses
+to start on it. `MANAGER_ALLOW_DEFAULT_TOKEN=1` is the explicit opt-in for a
+throwaway stack.
 
 Postgres is published on `localhost:15432` by default (`OLTP_PORT` overrides).
 
+Back in `frontend/`:
+
 ```bash
+cd frontend
 cp .env.example .env
-# set BETTER_AUTH_SECRET (32+ random characters) and DATABASE_URL
+# set BETTER_AUTH_SECRET (32+ random characters); DATABASE_URL is pre-filled
 pnpm install
 pnpm db:migrate
 pnpm dev

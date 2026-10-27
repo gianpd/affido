@@ -9,7 +9,7 @@ claim extends to the code: changes are gated by checks, not by promises.
 ```bash
 git clone <your fork>
 cd affido
-cp .env.example .env          # set MANAGER_TOKEN (local default is fine)
+cp .env.example .env          # dev.sh writes a random MANAGER_TOKEN here
 ./dev.sh up                   # fake provider, no API key needed
 ```
 

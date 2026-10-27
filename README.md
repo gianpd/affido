@@ -59,7 +59,7 @@ provenance in [`docs/assets/README.md`](docs/assets/README.md).*
 ## Quickstart (5 minutes)
 
 ```bash
-cp .env.example .env        # set MANAGER_TOKEN (the local default works)
+cp .env.example .env        # no MANAGER_TOKEN yet: dev.sh generates one
 ./dev.sh up                 # fake provider: no API key, deterministic demo
 ```
 
