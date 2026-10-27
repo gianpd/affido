@@ -21,7 +21,7 @@ RUN npm ci --omit=dev --ignore-scripts
 RUN rm -rf /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
 
-COPY server.ts types.ts harness.ts model.ts tools.ts agent.ts http.ts trace.ts corpus.ts \
+COPY server.ts types.ts harness.ts model.ts tools.ts agent.ts http.ts trace.ts corpus.ts sidecar.ts \
      uploads.ts skills.ts artifacts.ts citation-store.ts workspace-store.ts citation-run.ts \
      citation-tools.ts citation-report.ts citation-gate-demo.ts ingest.ts scripts/gen-provider-catalog.mjs ./
 
@@ -41,7 +41,15 @@ RUN mkdir -p /workspace /data
 EXPOSE 8080
 
 # /health replies without activating the agent, so the probe never defeats idle pause.
+# PORT-aware: the same image runs the key-injection sidecar (RFC 0013 §6.1) on
+# :8081 via `-e PORT=8081` + `node /app/sidecar.ts`, and its healthcheck must
+# probe its own listener.
 HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=3 \
-    CMD node -e "fetch('http://127.0.0.1:8080/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+    CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
-CMD ["node", "/app/server.ts"]
+# RFC 0013 §6.4 P0.2: RLIMIT_CORE=0 inside the image, for every launch path —
+# Node core has no setrlimit binding, so the enforcement point is the shell
+# that execs the server. `docker create --ulimit core=0` (the manager) covers
+# container runs the same way; with both, the kernel writes no core file
+# regardless of the host's core_pattern.
+CMD ["sh", "-c", "ulimit -c 0 && exec node /app/server.ts"]

@@ -163,9 +163,20 @@ restart_json="$(curl -fsS --max-time 90 -H "Cookie: ${COOKIE}" "${BASE}/u/${USER
 [[ "$(sql -c "SELECT status FROM sandbox_registry WHERE user_id = '${USER_ID}'")" == "running" ]] \
 	|| fail "registry did not return to running"
 [[ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER}")" == "true" ]] || fail "${CONTAINER} was not restarted"
+# RFC 0013: the daemon regenerates /etc/resolv.conf at every container start,
+# so the manager's rewrite must be re-applied on the restart path too — under
+# runsc the regenerated 127.0.0.11 is a dead resolver, and the sidecar (which
+# dials real provider upstreams) would be first to notice.
+first_ns_restart="$(docker exec "${CONTAINER}" head -1 /etc/resolv.conf | awk '{print $2}')"
+[[ "${first_ns_restart}" == "${want_dns}" ]] \
+	|| fail "after L1 restart the first nameserver is '${first_ns_restart}', expected ${want_dns}: a restarted pair must get the rewrite again"
+sidecar_c="${CONTAINER}-sidecar"
+sidecar_ns="$(docker exec "${sidecar_c}" head -1 /etc/resolv.conf | awk '{print $2}')"
+[[ "${sidecar_ns}" == "${want_dns}" ]] \
+	|| fail "sidecar resolv.conf first nameserver is '${sidecar_ns}', expected ${want_dns}"
 [[ "$(sql -c "SELECT count(*) FROM sandbox_registry WHERE user_id = '${USER_ID}'")" == "1" ]] \
 	|| fail "more than one sandbox row for ${USER_ID}"
-pass "manager restarted ${CONTAINER}; conversation 1 kept ${entries} entries"
+pass "manager restarted ${CONTAINER}; conversation 1 kept ${entries} entries; resolver rewritten on both halves"
 
 echo "== negative: identity comes from the session, not the path =="
 code="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/u/${USER_ID}/status")"

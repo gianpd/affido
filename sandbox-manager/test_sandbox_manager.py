@@ -364,6 +364,19 @@ class CreateArgsTest(unittest.TestCase):
             self.assertIn(flag, args)
         self.assertIn("no-new-privileges", args)
 
+    def test_phase0_hardening_is_applied(self) -> None:
+        # RFC 0013 §6.4: both the seccomp deny list (P0.1) and core=0 (P0.2)
+        # are manager-enforced on every created container, not host defaults.
+        for args in (sm.create_args("user-hard"), sm.sidecar_create_args("user-hard")):
+            self.assertIn(f"seccomp={sm.SECCOMP_PROFILE}", args)
+            i = args.index("--ulimit")
+            self.assertEqual(args[i + 1], "core=0")
+
+    def test_create_args_bakes_the_sidecar_url(self) -> None:
+        args = sm.create_args("user-sc")
+        env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+        self.assertIn(f"SIDECAR_URL=http://{sm.sidecar_name('user-sc')}:{sm.SIDECAR_PORT}", env)
+
     def test_guest_hosts_are_baked_sorted_before_the_image(self) -> None:
         args = sm.create_args("user-runtime",
                               hosts={"caddy": "10.0.0.9", "sandbox-manager": "10.0.0.2"})
@@ -378,6 +391,171 @@ class CreateArgsTest(unittest.TestCase):
         sm.AGENT_DNS = ""  # empty: keep Docker's resolv.conf (runc fallback)
         args = sm.create_args("user-runtime")
         self.assertNotIn("--dns", args)
+
+
+class SidecarCreateArgsTest(unittest.TestCase):
+    """RFC 0013 §6.3/R10: the sidecar half of the pair — same network, no
+    volumes, no published ports, own reduced caps, same runtime and Phase 0
+    hardening, and the second entrypoint of the same agent image."""
+
+    def test_sidecar_create_args_shape(self) -> None:
+        user = "user-side"
+        args = sm.sidecar_create_args(user)
+        self.assertEqual(args[0], "create")
+        self.assertIn(sm.sidecar_name(user), args)
+        self.assertIn(sm.network_name(user), args)
+        # Reduced caps, never the agent's (R10).
+        self.assertEqual(args[args.index("--memory") + 1], sm.SIDECAR_MEMORY)
+        self.assertNotEqual(sm.SIDECAR_MEMORY, sm.AGENT_MEMORY)
+        self.assertEqual(args[args.index("--cpus") + 1], sm.SIDECAR_CPUS)
+        # No volumes, no published ports: the key arrives via POST /config.
+        self.assertNotIn("-v", args)
+        self.assertNotIn("-p", args)
+        env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+        self.assertIn(f"PORT={sm.SIDECAR_PORT}", env)
+        # The sidecar carries no agent env: no workspace, no session db, no idle
+        # clock, and no SIDECAR_URL of its own.
+        for entry in env:
+            for forbidden in ("WORKSPACE", "SESSION_DB", "AGENT_NAME", "IDLE_MS", "SIDECAR_URL"):
+                self.assertFalse(entry.startswith(forbidden + "="), entry)
+        # Same image, second entrypoint: the image and its command come last.
+        self.assertEqual(args[-4], sm.AGENT_IMAGE)
+        self.assertIn("node /app/sidecar.ts", args[-1])
+
+    def test_sidecar_guests_baked_and_dns(self) -> None:
+        args = sm.sidecar_create_args(
+            "user-side", hosts={"e2e-fake-upstream": "10.0.0.9"})
+        flags = [args[i + 1] for i, f in enumerate(args) if f == "--add-host"]
+        self.assertIn("e2e-fake-upstream:10.0.0.9", flags)
+        self.assertIn("--dns", args)
+
+
+class DeliverySplitTest(unittest.TestCase):
+    """RFC 0013 §6.3: the keyed half of a selection goes to the sidecar, the
+    keyless half to the agent; mismatches re-deliver both; fail-closed codes
+    (agent_image_old, egress_blocked) keep RFC 0012 §7's discipline. All
+    docker/db/network touchpoints are stubbed: this tests the split logic."""
+
+    KEY_ROW = {
+        "fingerprint": "abc123def456",
+        "base_url": "http://e2e-fake-upstream:8090/v1",
+        "ciphertext": b"ct",
+        "nonce": b"nonce",
+    }
+
+    def setUp(self) -> None:
+        self.saved = {
+            name: getattr(sm, name)
+            for name in (
+                "provider_selection_get", "provider_key_get", "agent_get",
+                "sidecar_get", "agent_post", "sidecar_post", "catalog_entry",
+                "decrypt_key", "AGENT_EGRESS",
+            )
+        }
+        self.agent_status: dict = {}
+        self.sidecar_status: dict = {}
+        self.agent_posts: list = []
+        self.sidecar_posts: list = []
+        sm.provider_selection_get = lambda uid: {"provider": "e2e-fake", "model_id": "e2e-fake-1"}
+        sm.provider_key_get = lambda uid, provider: dict(self.KEY_ROW)
+        sm.agent_get = lambda c, p, timeout=5.0: self.agent_status
+        sm.sidecar_get = lambda c, p, timeout=5.0: self.sidecar_status
+        sm.agent_post = lambda c, p, payload, timeout=15.0: self.agent_posts.append(payload)
+        sm.sidecar_post = lambda c, p, payload, timeout=15.0: self.sidecar_posts.append(payload)
+        sm.catalog_entry = lambda provider: {"baseUrl": "https://api.example.com"}
+        sm.decrypt_key = lambda uid, provider, ct, nonce: "sk-plaintext"
+        sm.AGENT_EGRESS = "open"
+
+    def tearDown(self) -> None:
+        for name, value in self.saved.items():
+            setattr(sm, name, value)
+
+    def matched_statuses(self) -> None:
+        self.sidecar_status = {
+            "provider": "e2e-fake", "modelId": "e2e-fake-1",
+            "keyFingerprint": self.KEY_ROW["fingerprint"],
+            "upstream": self.KEY_ROW["base_url"],
+        }
+        self.agent_status = {
+            "model": {"provider": "e2e-fake", "modelId": "e2e-fake-1"},
+            "keyFingerprint": None, "keyVia": "sidecar",
+        }
+
+    def test_matching_pair_re_delivers_nothing(self) -> None:
+        self.matched_statuses()
+        sm.reconcile_provider("u", "agent-c", "agent-c-sidecar")
+        self.assertEqual(self.agent_posts, [])
+        self.assertEqual(self.sidecar_posts, [])
+
+    def test_sidecar_lost_its_key_re_delivers_both_halves(self) -> None:
+        self.matched_statuses()
+        self.sidecar_status["keyFingerprint"] = None  # restarted: RAM key gone
+        sm.reconcile_provider("u", "agent-c", "agent-c-sidecar")
+        self.assertEqual(len(self.sidecar_posts), 1)
+        side = self.sidecar_posts[0]
+        self.assertEqual(side["apiKey"], "sk-plaintext")
+        self.assertEqual(side["baseUrl"], self.KEY_ROW["base_url"])
+        self.assertEqual(len(self.agent_posts), 1)
+        agent = self.agent_posts[0]
+        self.assertEqual(agent["viaSidecar"], True)
+        self.assertNotIn("apiKey", agent)  # the split: no key in the agent payload
+        self.assertEqual(agent["baseUrl"], self.KEY_ROW["base_url"])  # A3 compat
+
+    def test_old_image_without_keyvia_fails_closed(self) -> None:
+        self.matched_statuses()
+        del self.agent_status["keyVia"]  # image from before RFC 0013
+        with self.assertRaises(sm.ManagerError) as ctx:
+            sm.reconcile_provider("u", "agent-c", "agent-c-sidecar")
+        self.assertEqual(ctx.exception.code, "agent_image_old")
+        self.assertEqual(self.sidecar_posts, [])
+
+    def test_keyed_selection_with_egress_off_fails_closed(self) -> None:
+        sm.AGENT_EGRESS = "off"
+        self.matched_statuses()
+        self.sidecar_status["keyFingerprint"] = None
+        with self.assertRaises(sm.ManagerError) as ctx:
+            sm.reconcile_provider("u", "agent-c", "agent-c-sidecar")
+        self.assertEqual(ctx.exception.code, "egress_blocked")
+
+    def test_faux_clearing_delivers_faux_to_both_halves(self) -> None:
+        sm.provider_selection_get = lambda uid: None
+        self.agent_status = {"model": {"provider": "e2e-fake", "modelId": "e2e-fake-1"}, "keyFingerprint": None, "keyVia": "sidecar"}
+        self.sidecar_status = {"provider": "e2e-fake", "modelId": "e2e-fake-1", "keyFingerprint": "x", "upstream": "u"}
+        sm.reconcile_provider("u", "agent-c", "agent-c-sidecar")
+        self.assertEqual(self.agent_posts, [sm.FAUX_CONFIG])
+        self.assertEqual(self.sidecar_posts, [sm.FAUX_CONFIG])
+
+    def test_keyless_selection_stays_direct_and_never_touches_the_sidecar(self) -> None:
+        sm.provider_selection_get = lambda uid: {"provider": "deepseek", "model_id": "m"}
+        sm.provider_key_get = lambda uid, provider: None
+        self.agent_status = {"model": {"provider": "faux", "modelId": "faux-1"}, "keyFingerprint": None, "keyVia": None}
+        sm.reconcile_provider("u", "agent-c", "agent-c-sidecar")
+        self.assertEqual(self.agent_posts, [{"provider": "deepseek", "modelId": "m"}])
+        self.assertEqual(self.sidecar_posts, [])
+
+    def test_catalog_upstream_is_pinned_from_the_entry(self) -> None:
+        sm.provider_key_get = lambda uid, provider: {**self.KEY_ROW, "base_url": None}
+        self.sidecar_status = {"provider": "deepseek", "modelId": "m", "keyFingerprint": "other", "upstream": None}
+        self.agent_status = {"model": {"provider": "faux", "modelId": "faux-1"}, "keyVia": None}
+        sm.reconcile_provider("u", "agent-c", "agent-c-sidecar")
+        # delivered; and the match next time requires the entry's baseUrl
+        self.assertTrue(self.sidecar_posts)
+
+
+class WaitHealthySidecarTest(unittest.TestCase):
+    """§8: an unanswerable sidecar fails the resolve closed with
+    sidecar_unhealthy instead of routing an agent to a dead proxy."""
+
+    def test_unreachable_sidecar_raises_sidecar_unhealthy(self) -> None:
+        saved = (sm.READY_TIMEOUT_S, sm.sidecar_get)
+        sm.READY_TIMEOUT_S = 0.2
+        sm.sidecar_get = lambda c, p, timeout=3.0: (_ for _ in ()).throw(ConnectionError("dead"))
+        try:
+            with self.assertRaises(sm.ManagerError) as ctx:
+                sm.wait_healthy_sidecar("side-c")
+            self.assertEqual(ctx.exception.code, "sidecar_unhealthy")
+        finally:
+            sm.READY_TIMEOUT_S, sm.sidecar_get = saved
 
 
 if __name__ == "__main__":

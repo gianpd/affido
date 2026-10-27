@@ -295,19 +295,33 @@ are first-class (R9); the Caddy route is the one browsers use.
 
 ### 5.4 Delivery and reconciliation (the core loop)
 
-The manager never writes the key into anything `docker create` owns. It
-delivers it to the running agent and reconciles on every activation:
+> **Amended by RFC 0013 §5** (implemented): the delivery is now a *split* —
+> the key half goes to the per-sandbox sidecar, the keyless half to the agent.
+> The desired-state model below is unchanged; only the targets moved. This
+> section describes the OLTP/reconciliation half that RFC 0013 inherited
+> verbatim.
 
-1. `resolve()` finishes `ensure_started` + `wait_healthy` (unchanged).
+The manager never writes the key into anything `docker create` owns. It
+delivers it to the running pair and reconciles on every activation:
+
+1. `resolve()` finishes `ensure_started` + `wait_healthy` for **both** halves
+   of the pair (agent + key-injection sidecar, RFC 0013 §6.3).
 2. Manager reads desired `provider_selection` + `provider_key`.
-3. Manager reads the agent's `GET /status`; it reports
-   `{ model: {provider, modelId}, keyFingerprint }` (fingerprint only, §8.3).
-4. If desired is set and `(provider, modelId, fingerprint)` differs → decrypt,
-   `POST http://<container>:8080/config` with
-   `{provider, modelId, apiKey, baseUrl?}` (the manager is already attached to
-   the per-user network and already speaks to the agent for `/health`).
+3. Manager reads the **sidecar's** `GET /status` — it reports
+   `{provider, modelId, keyFingerprint, upstream}` — and the **agent's**
+   `GET /status`, which reports `{ model: {provider, modelId}, keyVia }`
+   (`"sidecar"` | `"direct"` | null; the agent can no longer compute a
+   fingerprint for sidecar-held keys, RFC 0013 §6.2).
+4. If desired is set and either half differs → decrypt and
+   `POST http://<sidecar>:8081/config` with `{provider, modelId, apiKey,
+   baseUrl?}` (the only plaintext holder), then
+   `POST http://<container>:8080/config` with the keyless
+   `{provider, modelId, viaSidecar: true, baseUrl?}`. Keyless selections
+   (faux, or a model without a stored key) keep the single-target delivery of
+   this section as originally written.
 5. If desired is unset and the agent runs a non-faux provider →
-   `POST /config {provider: "faux", modelId: "faux-1"}`.
+   `POST /config {provider: "faux", modelId: "faux-1"}` to the agent, and the
+   same faux config to the sidecar so it drops any key still in RAM.
 
 Agent-side `POST /config` (idempotent, serialized with prompts on the agent's
 existing promise chain — `DurableHarness`'s serialization discipline,

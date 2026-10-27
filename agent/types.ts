@@ -20,13 +20,16 @@ export type ModelBundle = {
 	readonly model: ModelRef;
 };
 
-/** The POST /config payload (RFC 0012 §5.4): the desired runtime state the
- * manager reconciles. `apiKey` and `baseUrl` are absent for faux. */
+/** The POST /config payload (RFC 0012 §5.4, amended by RFC 0013 §5): the
+ * desired runtime state the manager reconciles. `apiKey`/`baseUrl` are absent
+ * for faux; a `viaSidecar` delivery carries the key's provider and model but
+ * never the key itself — that half went to the sidecar. */
 export type ProviderConfig = {
 	readonly provider: string;
 	readonly modelId: string;
 	readonly apiKey?: string;
 	readonly baseUrl?: string;
+	readonly viaSidecar?: boolean;
 };
 
 export type AgentOptions = {

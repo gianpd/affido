@@ -77,6 +77,11 @@ export class ContainerAgent implements AgentApi {
 	/** sha256(key)[:12] of the delivered key, or null; the only key-derived
 	 * value /status reports (RFC 0012 §5.4 step 3). Never the key itself. */
 	#keyFingerprint: string | null = null;
+	/** RFC 0013 §6.2: where the current selection's key lives — "sidecar"
+	 * (this process holds only a placeholder), "direct" (delivered or
+	 * secret-file key in memory), or null (faux / keyless). Reported by
+	 * /status instead of a fingerprint the agent can no longer compute. */
+	#keyVia: "sidecar" | "direct" | null = null;
 
 	constructor({ name, workspace, sessionDb, idleMs, models, credentials, model, thinkingLevel, citationsDefault, context, log, harness }: AgentOptions) {
 		this.#name = name;
@@ -132,6 +137,7 @@ export class ContainerAgent implements AgentApi {
 			paused: this.#harness.paused,
 			model: this.#model,
 			keyFingerprint: this.#keyFingerprint,
+			keyVia: this.#keyVia,
 			workspace: this.#workspace,
 			sessionDb: this.#sessionDb,
 			conversationId: this.#harness.conversationId,
@@ -357,16 +363,25 @@ export class ContainerAgent implements AgentApi {
 		return { agent: this.#name, conversationId: activeId, entries };
 	}
 
-	/** RFC 0012 §5.4: apply a delivered provider config. The credential and
-	 * provider upserts land on the shared collection first; the harness then
-	 * pins the active conversation to the new ModelRef on its serialization
-	 * chain (§7.1). The key itself never leaves process memory. */
-	async configureModel({ provider, modelId, apiKey, baseUrl }: ProviderConfig) {
-		const applied = await configureProvider(this.#models, this.#credentials, { id: provider, modelId, baseUrl, apiKey });
+	/** RFC 0012 §5.4 / RFC 0013 §6.2: apply a delivered provider config. The
+	 * credential and provider upserts land on the shared collection first; the
+	 * harness then pins the active conversation to the new ModelRef on its
+	 * serialization chain (§7.1). In sidecar mode the only "credential" that
+	 * reaches this process is the placeholder — the key itself lives in the
+	 * sidecar container (R1). */
+	async configureModel({ provider, modelId, apiKey, baseUrl, viaSidecar }: ProviderConfig) {
+		const applied = await configureProvider(this.#models, this.#credentials, {
+			id: provider,
+			modelId,
+			baseUrl,
+			apiKey,
+			viaSidecar,
+		});
 		this.#model = applied.model;
 		this.#keyFingerprint = applied.fingerprint;
+		this.#keyVia = applied.keyVia;
 		await this.#harness.configureModel(applied.model);
-		return { agent: this.#name, model: this.#model, keyFingerprint: this.#keyFingerprint };
+		return { agent: this.#name, model: this.#model, keyFingerprint: this.#keyFingerprint, keyVia: this.#keyVia };
 	}
 
 	/** Start a new context: older entries stay in storage, the model stops seeing them. */

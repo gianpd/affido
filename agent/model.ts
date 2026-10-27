@@ -1,10 +1,14 @@
-// Model selection: the BYOK runtime (RFC 0012) plus the legacy standalone path.
-// The manager delivers {provider, modelId, apiKey, baseUrl?} to POST /config at
-// resolve time; the key lives in the InMemoryCredentialStore only (R3) and
-// re-delivery after any restart is the manager's job (§5.4). Standalone image
-// runs (no manager) keep the secret-file branch below: API keys come from
-// secret files, not environment variables. Default: the bundled faux provider,
-// scripted by transcript state, so the demo runs without a key.
+// Model selection: the BYOK runtime (RFC 0012, amended by RFC 0013 §5) plus
+// the legacy standalone path. The manager delivers the key half of a BYOK
+// selection to the per-sandbox sidecar (POST sidecar:8081/config) and a
+// keyless {provider, modelId, viaSidecar: true} to the agent's POST /config:
+// the agent registers its models with the sidecar's URL and a placeholder
+// credential, and no plaintext key ever exists in this process (RFC 0013 R1).
+// Direct mode remains for faux (no key by definition) and for standalone image
+// runs (no manager, secret files): keys then live in the
+// InMemoryCredentialStore only (RFC 0012 R3) and re-delivery after any restart
+// is the manager's job (§5.4). Default: the bundled faux provider, scripted
+// by transcript state, so the demo runs without a key.
 
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -68,6 +72,34 @@ export type ProviderBuild = {
 	readonly modelId: string;
 	/** Required for non-built-in, non-faux providers (custom endpoints, the e2e fake upstream). */
 	readonly baseUrl?: string;
+	/** RFC 0013 §6.2: route every model call through the key-injection sidecar. */
+	readonly via?: "sidecar";
+};
+
+/** The sidecar's base URL, baked by the manager at container create
+ * (SIDECAR_URL=http://<sidecar-container>:8081). Read per call so tests can
+ * point it at a local server; empty string means "no sidecar deployed". */
+export const sidecarUrl = (): string => process.env.SIDECAR_URL ?? "";
+
+/** RFC 0013 §6.2: the placeholder credential registered in sidecar mode. It
+ * exists only so pi-ai's auth resolution does not report "provider not
+ * configured"; it carries no secret, and the sidecar strips it before the
+ * upstream sees anything. */
+export const SIDECAR_PLACEHOLDER_KEY = "sk-sidecar-placeholder";
+
+/** The proxy path scheme of RFC 0013 §6.1: the encoded real base rides along
+ * so pi-ai's baseUrl-substring detection (compat quirks, prompt-cache key —
+ * §4 A1/A3) behaves exactly as against the real URL. */
+export const sidecarBaseUrl = (provider: string, realBase: string): string =>
+	`${sidecarUrl()}/${provider}/~/${encodeURIComponent(realBase)}`;
+
+const viaSidecar = (provider: Provider, id: string): Provider => {
+	const rewrite = <T extends { readonly baseUrl: string }>(model: T): T => ({ ...model, baseUrl: sidecarBaseUrl(id, model.baseUrl) });
+	return {
+		...provider,
+		getModels: () => provider.getModels().map(rewrite),
+		getAllModels: () => (provider.getAllModels?.() ?? provider.getModels()).map(rewrite),
+	};
 };
 
 /** One model entry of a custom OpenAI-compatible endpoint: conservative
@@ -91,12 +123,15 @@ const openAICompatModel = (provider: string, id: string, baseUrl: string): Model
  * endpoint built with `createProvider` + `openAICompletionsApi()`, registering
  * the delivered modelId as its single model (custom endpoints carry one
  * selection at a time, §5.2). */
-export const buildProvider = ({ id, modelId, baseUrl }: ProviderBuild): Provider => {
+export const buildProvider = ({ id, modelId, baseUrl, via }: ProviderBuild): Provider => {
 	const builtin = BUILTIN_PROVIDERS[id];
-	if (builtin !== undefined) return builtin();
+	if (builtin !== undefined) {
+		const provider = builtin();
+		return via === "sidecar" && sidecarUrl() !== "" ? viaSidecar(provider, id) : provider;
+	}
 	if (id === "faux") return fauxProviderScripted();
 	if (baseUrl === undefined) throw new Error(`provider "${id}" is neither a catalog built-in nor faux; baseUrl is required`);
-	return createProvider({
+	const provider = createProvider({
 		id,
 		name: id,
 		baseUrl,
@@ -104,17 +139,24 @@ export const buildProvider = ({ id, modelId, baseUrl }: ProviderBuild): Provider
 		models: [openAICompatModel(id, modelId, baseUrl)],
 		api: openAICompletionsApi(),
 	});
+	return via === "sidecar" && sidecarUrl() !== "" ? viaSidecar(provider, id) : provider;
 };
 
 export type DeliveredConfig = ProviderBuild & {
 	/** Absent for faux and for keyless selections; the manager always re-delivers it for real providers (§5.4). */
 	readonly apiKey?: string;
+	/** RFC 0013 §5: the key lives in the sidecar; this delivery carries none. */
+	readonly viaSidecar?: boolean;
 };
 
 export type AppliedConfig = {
 	readonly model: ModelRef;
 	/** Null when no key was delivered; never the key itself. */
 	readonly fingerprint: string | null;
+	/** RFC 0013 §6.2: where the key of this selection lives. `"sidecar"` when
+	 * the agent holds only a placeholder; `"direct"` for delivered or
+	 * secret-file keys; null for keyless/faux selections. */
+	readonly keyVia: "sidecar" | "direct" | null;
 };
 
 /** The §5.4 sketch, verbatim order: credentials.modify -> models.setProvider
@@ -124,11 +166,24 @@ export type AppliedConfig = {
 export const configureProvider = async (
 	models: MutableModels,
 	credentials: CredentialStore,
-	{ id, modelId, baseUrl, apiKey }: DeliveredConfig,
+	{ id, modelId, baseUrl, apiKey, viaSidecar: viaFlag }: DeliveredConfig,
 ): Promise<AppliedConfig> => {
+	if (viaFlag === true) {
+		if (id === "faux") throw new Error("faux is never delivered viaSidecar: the faux provider needs no key");
+		if (sidecarUrl() === "")
+			throw new Error("sidecar delivery requires SIDECAR_URL: the container predates RFC 0013, reprovision (./dev.sh reload)");
+		if (apiKey !== undefined) throw new Error("viaSidecar deliveries carry no apiKey (RFC 0013 R1: no key in this process)");
+		await credentials.modify(id, async () => ({ type: "api_key", key: SIDECAR_PLACEHOLDER_KEY }));
+		models.setProvider(buildProvider({ id, modelId, baseUrl, via: "sidecar" }));
+		return { model: { provider: id, modelId }, fingerprint: null, keyVia: "sidecar" };
+	}
 	if (apiKey !== undefined) await credentials.modify(id, async () => ({ type: "api_key", key: apiKey }));
 	models.setProvider(buildProvider({ id, modelId, baseUrl }));
-	return { model: { provider: id, modelId }, fingerprint: apiKey === undefined ? null : keyFingerprint(apiKey) };
+	return {
+		model: { provider: id, modelId },
+		fingerprint: apiKey === undefined ? null : keyFingerprint(apiKey),
+		keyVia: apiKey === undefined ? null : "direct",
+	};
 };
 
 const lastToolResult = (messages: readonly Message[]): { name: string; text: string; isError: boolean } | undefined => {

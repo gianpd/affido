@@ -38,6 +38,15 @@ const BUILTINS = [
 // endpoint: it 401s for any key that is not a real sk-or-v1-… key.
 const VALIDATE_PATHS = { openrouter: "/key" };
 
+// RFC 0013 §6.1 step 3: which header the key-injection sidecar stamps for the
+// entry. Every catalog provider speaks an OpenAI-compatible or
+// Mistral/OpenRouter wire API that authenticates with `Authorization: Bearer`
+// (OpenRouter's and Fireworks' anthropic-messages models included);
+// "x-api-key" is the native Anthropic header and reserved for a future
+// native-anthropic entry. Read by the sidecar at /config time from the same
+// file (no drift: one generator, one image).
+const AUTH_HEADERS = {}; // id -> "x-api-key"; absent means bearer
+
 const providers = BUILTINS.map(([id, name, catalog, pinnedBaseUrl]) => {
 	const models = Object.values(catalog)
 		.filter((model) => model.type === undefined || model.type === "chat")
@@ -48,6 +57,7 @@ const providers = BUILTINS.map(([id, name, catalog, pinnedBaseUrl]) => {
 	// factory's value wins where they differ.
 	const entry = { id, name, baseUrl: pinnedBaseUrl ?? Object.values(catalog)[0].baseUrl, builtin: true, models };
 	if (VALIDATE_PATHS[id] !== undefined) entry.validatePath = VALIDATE_PATHS[id];
+	if (AUTH_HEADERS[id] !== undefined) entry.auth = AUTH_HEADERS[id];
 	return entry;
 });
 

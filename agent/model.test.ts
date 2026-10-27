@@ -160,7 +160,7 @@ test("ConfigTool validates the delivered payload and forwards it to the agent", 
 	const ok = (await call({ provider: "e2e-fake", modelId: "e2e-fake-1", apiKey: "sk-x", baseUrl: "http://e2e-fake-upstream:8090/v1" }, agent)) as Record<string, unknown>;
 	assert.deepEqual(ok.model, { provider: "e2e-fake", modelId: "e2e-fake-1" });
 	assert.deepEqual(captured, [
-		{ provider: "e2e-fake", modelId: "e2e-fake-1", apiKey: "sk-x", baseUrl: "http://e2e-fake-upstream:8090/v1" },
+		{ provider: "e2e-fake", modelId: "e2e-fake-1", apiKey: "sk-x", baseUrl: "http://e2e-fake-upstream:8090/v1", viaSidecar: undefined },
 	]);
 
 	await assert.rejects(call({ provider: "FAUX", modelId: "faux-1" }, agent), /invalid_provider/);

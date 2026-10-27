@@ -58,8 +58,12 @@ done
 	|| fail "users share a sandbox: ${CONTAINERS[1]} ${CONTAINERS[2]} ${CONTAINERS[3]}"
 pass "3 distinct sandbox agents answered (${CONTAINERS[1]}, ${CONTAINERS[2]}, ${CONTAINERS[3]})"
 
-[[ "$(sql -c "SELECT count(*) FROM sandbox_registry WHERE status = 'running' AND user_id IN ('${USERS[1]}','${USERS[2]}','${USERS[3]}')")" == "3" ]] \
-	|| fail "the registry does not show 3 running sandboxes"
+# The rows may already show 'idle_paused': the gate stack evicts aggressively
+# (IDLE_GRACE_S=EVICT_TICK_S=2s), and the per-user queries above cost seconds of
+# docker-CLI latency. The invariant under test is one live sandbox per user —
+# the containers' Running state was asserted per user above.
+[[ "$(sql -c "SELECT count(*) FROM sandbox_registry WHERE status IN ('running','idle_paused') AND user_id IN ('${USERS[1]}','${USERS[2]}','${USERS[3]}')")" == "3" ]] \
+	|| fail "the registry does not show 3 live sandboxes"
 
 python3 - "${TMP}" <<'PY' || fail "the three request intervals do not overlap (not concurrent)"
 import glob, os, sys

@@ -66,7 +66,7 @@ fi
 	|| fail "expected exactly one provider_key row"
 pass "key stored as ciphertext; response carries only fingerprint ${FINGERPRINT1}"
 
-echo "== first prompt: answered by the fake upstream, bearer seen exactly once (§6.2) =="
+echo "== first prompt: answered through the sidecar, bearer seen exactly once (§6.2) =="
 answer="$(prompt "byok-1")"
 [[ "$(printf '%s' "${answer}" | field "d['status']")" == "done" ]] || fail "prompt did not finish: ${answer}"
 [[ "$(printf '%s' "${answer}" | field "d['answer']")" == *"fake upstream answered"* ]] \
@@ -77,17 +77,63 @@ CONV="$(printf '%s' "${answer}" | field "d['conversationId']")"
 status_json="$(agent_status)"
 [[ "$(printf '%s' "${status_json}" | field "d['model']['provider']")" == "e2e-fake" ]] \
 	|| fail "status model is not e2e-fake: ${status_json}"
-[[ "$(printf '%s' "${status_json}" | field "d['keyFingerprint']")" == "${FINGERPRINT1}" ]] \
-	|| fail "status fingerprint mismatch: ${status_json}"
-pass "delivery -> generation with Bearer <key> exactly once; /status shows the fingerprint"
+# RFC 0013 R1: the agent process holds no key at all — /status reports where
+# the key lives instead of a fingerprint it can no longer compute (§6.2).
+[[ "$(printf '%s' "${status_json}" | field "d['keyVia']")" == "sidecar" ]] \
+	|| fail "agent keyVia is not sidecar: ${status_json}"
+[[ "$(printf '%s' "${status_json}" | field "d['keyFingerprint']")" == "None" ]] \
+	|| fail "agent reports a keyFingerprint in sidecar mode: ${status_json}"
+pass "delivery -> generation through the sidecar with Bearer <key> exactly once; agent /status: keyVia=sidecar, no fingerprint"
 
-echo "== no key material in env, filesystem, or logs (R3, §8.1) =="
+echo "== the sidecar pair exists and reports the key half (RFC 0013 §6.3, R9) =="
 CONTAINER="$(sql -c "SELECT container_name FROM sandbox_registry WHERE user_id = '${USER_K}'")"
+SIDECAR_C="${CONTAINER}-sidecar"
+[[ "$(docker inspect -f '{{.State.Running}}' "${SIDECAR_C}")" == "true" ]] \
+	|| fail "sidecar ${SIDECAR_C} is not running"
+# Same image, second entrypoint, reduced caps (R10), phase 0 hardening.
+[[ "$(docker inspect -f '{{.Config.Image}}' "${SIDECAR_C}")" == "$(docker inspect -f '{{.Config.Image}}' "${CONTAINER}")" ]] \
+	|| fail "sidecar runs a different image than the agent"
+side_mem="$(docker inspect -f '{{.HostConfig.Memory}}' "${SIDECAR_C}")"
+agent_mem="$(docker inspect -f '{{.HostConfig.Memory}}' "${CONTAINER}")"
+[[ "${side_mem}" -lt "${agent_mem}" ]] \
+	|| fail "sidecar memory cap ${side_mem} is not below the agent's ${agent_mem} (R10)"
+sidecar_status() {
+	docker exec "${SIDECAR_C}" node -e \
+		"fetch('http://127.0.0.1:8081/status').then((r)=>r.text()).then(console.log)"
+}
+side_json="$(sidecar_status)"
+[[ "$(printf '%s' "${side_json}" | field "d['provider']")" == "e2e-fake" ]] \
+	|| fail "sidecar /status provider: ${side_json}"
+[[ "$(printf '%s' "${side_json}" | field "d['keyFingerprint']")" == "${FINGERPRINT1}" ]] \
+	|| fail "sidecar /status fingerprint mismatch: ${side_json}"
+[[ "$(printf '%s' "${side_json}" | field "d['upstream']")" == "http://${FAKE}:8090/v1" ]] \
+	|| fail "sidecar upstream is not the pinned fake endpoint: ${side_json}"
+# No agent<->sidecar auth by design (§6.1): the peer on that network is the
+# agent, and the only thing it can do is spend quota on the pinned upstream.
+# R3 from the inside: a request for an unpinned host is refused.
+unpinned="$(docker exec "${CONTAINER}" node -e \
+	"fetch('http://${SIDECAR_C}:8081/e2e-fake/~/'+encodeURIComponent('http://attacker.example/v1')+'/chat/completions',{method:'POST',body:'{}'}).then(async(r)=>console.log(r.status+' '+(await r.text()))).catch(()=>console.log('dial-failed'))")"
+[[ "${unpinned}" == "403"*unpinned_upstream* ]] \
+	|| fail "the agent's own sidecar did not refuse an unpinned upstream: ${unpinned}"
+foreign="$(docker exec "${CONTAINER}" node -e \
+	"fetch('http://${SIDECAR_C}:8081/openai/~/'+encodeURIComponent('https://api.openai.com/v1')+'/models').then(async(r)=>console.log(r.status)).catch(()=>console.log('dial-failed'))")"
+[[ "${foreign}" == "404" ]] \
+	|| fail "the sidecar answered a foreign provider prefix: ${foreign}"
+pass "sidecar running (same image, capped), /status reports fingerprint+upstream, unpinned/foreign requests refused"
+
+echo "== no key material in the agent's env, filesystem, or logs (R3/§8.1, RFC 0013 R1) =="
 if docker inspect "${CONTAINER}" | grep -qF "${KEY1}"; then fail "key in docker inspect"; fi
 if docker exec "${CONTAINER}" sh -c 'cat /proc/1/environ' | grep -qF "${KEY1}"; then fail "key in /proc/1/environ"; fi
 if docker exec "${CONTAINER}" grep -R -qF "${KEY1}" /data /workspace; then fail "key in /data or /workspace"; fi
+if docker exec "${CONTAINER}" grep -R -qF "${KEY1}" /app; then fail "key in the agent image layer /app"; fi
 if docker logs sandbox-manager 2>&1 | grep -qF "${KEY1}"; then fail "key in manager logs"; fi
-pass "docker inspect, /proc/1/environ, /data, /workspace and manager logs are key-free"
+# The key's only plaintext home is the sidecar process's RAM: not its env,
+# not its filesystem, not its docker metadata, not its logs.
+if docker inspect "${SIDECAR_C}" | grep -qF "${KEY1}"; then fail "key in sidecar docker inspect"; fi
+if docker exec "${SIDECAR_C}" sh -c 'cat /proc/1/environ' | grep -qF "${KEY1}"; then fail "key in sidecar /proc/1/environ"; fi
+if docker exec "${SIDECAR_C}" grep -R -qF "${KEY1}" /app /tmp; then fail "key in sidecar filesystem"; fi
+if docker logs "${SIDECAR_C}" 2>&1 | grep -qF "${KEY1}"; then fail "key in sidecar logs"; fi
+pass "agent and sidecar: docker inspect, env, filesystems and logs are key-free (RAM-only custody)"
 
 echo "== later requests re-deliver nothing: resolve reconciles to matching state =="
 before="$(bearers | wc -l)"
@@ -107,9 +153,12 @@ answer="$(prompt "byok-2")"
 expected_log="$(printf '/v1/chat/completions Bearer %s\n/v1/chat/completions Bearer %s' "${KEY1}" "${KEY2}")"
 [[ "$(bearers)" == "${expected_log}" ]] || fail "rotation did not change the bearer: $(bearers)"
 status_json="$(agent_status)"
-[[ "$(printf '%s' "${status_json}" | field "d['keyFingerprint']")" == "${FINGERPRINT2}" ]] \
-	|| fail "status fingerprint after rotation: ${status_json}"
-pass "rotation re-delivered; upstream saw the new bearer; fingerprint ${FINGERPRINT2}"
+[[ "$(printf '%s' "${status_json}" | field "d['keyVia']")" == "sidecar" ]] \
+	|| fail "keyVia after rotation: ${status_json}"
+side_json="$(sidecar_status)"
+[[ "$(printf '%s' "${side_json}" | field "d['keyFingerprint']")" == "${FINGERPRINT2}" ]] \
+	|| fail "sidecar /status fingerprint after rotation: ${side_json}"
+pass "rotation re-delivered; upstream saw the new bearer; sidecar fingerprint ${FINGERPRINT2}"
 
 echo "== upstream validation: verified keys pass, invalid_key stores nothing (§5.6, §7.2) =="
 put="$(curl -fsS --max-time 60 -X PUT -H "Cookie: ${COOKIE_V}" -H "Origin: ${BASE}" \
@@ -133,7 +182,7 @@ print(len(d['keys']))")"
 [[ "${keys_v}" == "1" ]] || fail "invalid key was stored or evicted the good one: ${config_v}"
 pass "validation: good key verified via /v1/models; invalid_key stores nothing"
 
-echo "== durability: L0 pause keeps model and fingerprint (§10 M3) =="
+echo "== durability: L0 pause keeps model and key custody (§10 M3) =="
 paused=""
 for _ in $(seq 1 30); do
 	paused="$(agent_status | field "d['paused']")"
@@ -146,9 +195,9 @@ answer="$(prompt "byok-3")"
 	|| fail "L0 recovery changed the conversation: ${answer}"
 status_json="$(agent_status)"
 [[ "$(printf '%s' "${status_json}" | field "d['model']['provider']")" == "e2e-fake" ]] \
-	&& [[ "$(printf '%s' "${status_json}" | field "d['keyFingerprint']")" == "${FINGERPRINT2}" ]] \
+	&& [[ "$(printf '%s' "${status_json}" | field "d['keyVia']")" == "sidecar" ]] \
 	|| fail "L0 recovery lost the runtime model: ${status_json}"
-pass "L0 pause + resolve: same model ${FINGERPRINT2}, same conversation ${CONV}"
+pass "L0 pause + resolve: same model (keyVia=sidecar, ${FINGERPRINT2}), same conversation ${CONV}"
 
 echo "== durability: L1 stop re-delivers, session intact (§6.4) =="
 docker stop "${CONTAINER}" >/dev/null
@@ -161,7 +210,7 @@ answer="$(prompt "byok-4")"
 	|| fail "re-delivery did not generate from the upstream again: $(bearers)"
 pass "docker stop + resolve: re-delivery, conversation ${CONV} intact"
 
-echo "== durability: container recreation re-provisions and re-delivers (§10 M3) =="
+echo "== durability: agent recreation re-provisions and re-delivers (§10 M3) =="
 docker rm -f "${CONTAINER}" >/dev/null
 answer="$(prompt "byok-5")"
 [[ "$(printf '%s' "${answer}" | field "d['conversationId']")" == "${CONV}" ]] \
@@ -170,7 +219,23 @@ answer="$(prompt "byok-5")"
 	|| fail "recreation did not re-deliver: ${answer}"
 [[ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER}")" == "true" ]] \
 	|| fail "container was not recreated"
-pass "docker rm + resolve: reprovision, re-delivery, session intact"
+pass "docker rm agent + resolve: reprovision, re-delivery, session intact"
+
+echo "== RFC 0013 R7: docker rm of the SIDECAR re-provisions the pair (§6.3) =="
+docker rm -f "${SIDECAR_C}" >/dev/null
+answer="$(prompt "byok-6")"
+[[ "$(printf '%s' "${answer}" | field "d['conversationId']")" == "${CONV}" ]] \
+	|| fail "sidecar recreation changed the conversation: ${answer}"
+[[ "$(printf '%s' "${answer}" | field "d['answer']")" == *"fake upstream answered"* ]] \
+	|| fail "sidecar recreation broke generation: ${answer}"
+[[ "$(docker inspect -f '{{.State.Running}}' "${SIDECAR_C}")" == "true" ]] \
+	|| fail "sidecar was not recreated"
+[[ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER}")" == "true" ]] \
+	|| fail "agent is not running after pair reprovision"
+side_json="$(sidecar_status)"
+[[ "$(printf '%s' "${side_json}" | field "d['keyFingerprint']")" == "${FINGERPRINT2}" ]] \
+	|| fail "recreated sidecar holds no key: ${side_json}"
+pass "docker rm sidecar + resolve: pair recreated, key re-delivered, session intact"
 
 echo "== account-deletion cascade (§7.13) =="
 del="$(curl -fsS --max-time 60 -X DELETE -H "Cookie: ${COOKIE_V}" -H "Origin: ${BASE}" \

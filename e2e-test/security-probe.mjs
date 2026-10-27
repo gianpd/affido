@@ -10,7 +10,7 @@ import dns from "node:dns";
 import os from "node:os";
 import { readFileSync } from "node:fs";
 
-const out = { gateway: null, gatewayPg: null, hostService: null, internet: null, managerMetrics: null, managerPause: null, victimDial: null, victimIp: null };
+const out = { gateway: null, gatewayPg: null, hostService: null, internet: null, managerMetrics: null, managerPause: null, victimDial: null, victimIp: null, victimSidecar: null, victimSidecarIp: null, ptrace: null, coreLimit: null };
 
 // default-route gateway from /proc/net/route (hex, little-endian words).
 // --internal networks have no default route, so fall back to the subnet's own
@@ -75,11 +75,28 @@ out.managerPause = await http("http://sandbox-manager:8090/pause", {
 	headers: { "content-type": "application/json", "x-manager-token": token },
 	body: JSON.stringify({ user_id: "nobody" }),
 });
-// 4. another tenant's agent
+// 4. another tenant's agent and its key sidecar (RFC 0013 §9.2: the sidecar
+//    adds one target, same subnet wall)
 if (victim) {
 	out.victimIp = await new Promise((resolve) => dns.lookup(victim, { family: 4 }, (e, a) => resolve(e ? `dns:${e.code}` : a)));
 	if (!String(out.victimIp).startsWith("dns:")) out.victimDial = await tcp(out.victimIp, 8080, 3000);
 	else out.victimDial = out.victimIp;
+	const victimSidecar = `${victim}-sidecar`;
+	out.victimSidecarIp = await new Promise((resolve) => dns.lookup(victimSidecar, { family: 4 }, (e, a) => resolve(e ? `dns:${e.code}` : a)));
+	if (!String(out.victimSidecarIp).startsWith("dns:")) out.victimSidecar = await tcp(out.victimSidecarIp, 8081, 3000);
+	else out.victimSidecar = out.victimSidecarIp;
+}
+
+// 5. Phase 0 (RFC 0013 §6.4), from inside the sandbox: a tool child must not
+//    read the server process's memory, and cores must be off. The ptrace probe
+//    is a bash child of THIS node process opening /proc/$PPID/mem — the exact
+//    §2.1 step-5 gesture — and must fail (non-zero) under both runsc and runc.
+{
+	const { spawnSync } = await import("node:child_process");
+	const probe = spawnSync("bash", ["-c", "exec 3< /proc/$PPID/mem"]);
+	out.ptrace = { status: probe.status, stderr: String(probe.stderr).trim() };
+	const ulimitc = spawnSync("sh", ["-c", "ulimit -c"]);
+	out.coreLimit = String(ulimitc.stdout).trim();
 }
 
 out.breach =
@@ -88,5 +105,8 @@ out.breach =
 	(out.internet === "connect:ok" ? "internet_reachable " : "") +
 	(out.managerMetrics.status === 200 ? "manager_answered_sandbox " : "") +
 	(out.managerPause.status === 200 ? "manager_pausable " : "") +
-	(out.victimDial === "connect:ok" ? "victim_agent_reachable" : "");
+	(out.victimDial === "connect:ok" ? "victim_agent_reachable " : "") +
+	(out.victimSidecar === "connect:ok" ? "victim_sidecar_reachable " : "") +
+	(out.ptrace.status === 0 ? "ptrace_opened_parent_mem " : "") +
+	(out.coreLimit !== "0" ? "core_dumps_enabled" : "");
 console.log(JSON.stringify(out));

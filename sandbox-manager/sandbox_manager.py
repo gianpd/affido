@@ -62,6 +62,19 @@ AGENT_CITATIONS_DEFAULT = os.getenv("AGENT_CITATIONS_DEFAULT", "")
 AGENT_EGRESS    = os.getenv("AGENT_EGRESS", "off")
 AGENT_MEMORY    = os.getenv("AGENT_MEMORY", "512m")
 AGENT_CPUS      = os.getenv("AGENT_CPUS", "1.0")
+# RFC 0013 §6.1/§6.3/R10: the per-sandbox key-injection sidecar. One image,
+# second entrypoint (`node /app/sidecar.ts`), own reduced resource caps — a
+# Node HTTP pass-through idles at ~10 MiB RSS (~25 MiB realistic), so cloning
+# the agent's 512m would double the nominal per-user ceiling for nothing.
+SIDECAR_PORT    = int(os.getenv("SIDECAR_PORT", "8081"))
+SIDECAR_MEMORY  = os.getenv("SIDECAR_MEMORY", "128m")
+SIDECAR_CPUS    = os.getenv("SIDECAR_CPUS", "0.25")
+# RFC 0013 §6.4 P0.1: explicit seccomp profile (deny-list, EPERM) for the
+# ptrace_may_access-gated syscall family, shipped in this image and read
+# client-side by the docker CLI (the daemon never touches the host fs for
+# it). Applied to BOTH agent and sidecar containers so the no-ptrace
+# boundary no longer rides on host Yama/seccomp defaults.
+SECCOMP_PROFILE = os.getenv("SECCOMP_PROFILE", "/app/seccomp-no-ptrace.json")
 AGENT_RUNTIME   = os.getenv("AGENT_RUNTIME", "runsc")  # gVisor: agents never run host-kernel syscalls
 AGENT_DNS       = os.getenv("AGENT_DNS", "1.1.1.1")  # gVisor ignores Docker's 127.0.0.11 embedded DNS
 # RFC 0012 BYOK: the manager owns no plaintext provider secrets anymore. Keys
@@ -127,6 +140,13 @@ def slug(user_id: str) -> str:
 
 def container_name(user_id: str) -> str:
     return "u" + slug(user_id)
+
+
+def sidecar_name(user_id: str) -> str:
+    """RFC 0013 §6.3: the key-injection sidecar of one user's pair. Same
+    per-user network, no volumes, no published ports; created by create_args
+    beside the agent (R5/R6)."""
+    return container_name(user_id) + "-sidecar"
 
 
 def network_name(user_id: str) -> str:
@@ -623,23 +643,40 @@ def validate_upstream(
         raise ManagerError("invalid_key", f"upstream answered {status} on GET {path}", 400)
 
 
-# ── BYOK delivery: reconcile desired state into the running agent (§5.4) ────
+# ── BYOK delivery: reconcile desired state into the running pair (§5.4, RFC 0013 §6.3) ──
 
 FAUX_CONFIG = {"provider": "faux", "modelId": "faux-1"}
 
 
-def reconcile_provider(user_id: str, container: str) -> None:
-    """§5.4 steps 2-5, inside resolve() after ensure_started + wait_healthy.
+def desired_upstream(provider: str, key_row: dict[str, Any] | None) -> str | None:
+    """The upstream the sidecar must pin for this selection: the user-registered
+    custom endpoint when one is stored, else the catalog entry's baseUrl (the
+    operator-built agent image), null for faux/keyless."""
+    if provider == "faux" or key_row is None:
+        return None
+    if key_row.get("base_url"):
+        return str(key_row["base_url"])
+    entry = catalog_entry(provider)  # unknown_provider: fail closed, never guess
+    return str(entry.get("baseUrl") or "") or None
 
-    Desired state is the OLTP row; the agent's /status reports its runtime
-    {model, keyFingerprint}. On mismatch — or when a stopped sandbox lost its
-    in-memory key — decrypt and POST /config on the per-user network. Never
-    writes the key anywhere docker create owns (R3/R5). Raises ManagerError
-    (egress_blocked §7.11, kek_unavailable §7.9, agent_image_old §7.5) so
-    resolve fails closed instead of silently degrading to faux."""
+
+def reconcile_provider(user_id: str, container: str, sidecar: str | None = None) -> None:
+    """RFC 0012 §5.4 steps 2-5 as amended by RFC 0013 §5: the delivery split.
+
+    Desired state is the OLTP row. The runtime state is read from BOTH halves
+    of the pair: the sidecar's /status (provider, modelId, keyFingerprint,
+    upstream — the key half) and the agent's /status (model, keyVia — the
+    keyless half). On mismatch — or when a stopped sidecar lost its in-memory
+    key — decrypt and POST the key payload to the sidecar, then the keyless
+    payload ({provider, modelId, viaSidecar: true, baseUrl?}) to the agent.
+    Never writes the key anywhere docker create owns (R3/R5). Raises
+    ManagerError (egress_blocked §7.11, kek_unavailable §7.9, agent_image_old
+    §7.5, sidecar_unhealthy §8) so resolve fails closed instead of silently
+    degrading to faux."""
     selection = provider_selection_get(user_id)
     try:
         status = agent_get(container, "/status", timeout=5.0)
+        side_status = sidecar_get(sidecar, "/status", timeout=5.0) if sidecar else {}
     except Exception:
         return  # healthy moments ago; the reconcile tick or next resolve repairs
     model = status.get("model") or {}
@@ -647,30 +684,82 @@ def reconcile_provider(user_id: str, container: str) -> None:
     if selection is None:
         if current[0] not in (None, "faux"):
             agent_post(container, "/config", FAUX_CONFIG)  # §5.4 step 5
+            if sidecar and side_status.get("provider") not in (None, "faux"):
+                # The sidecar drops its key: nothing of the old selection stays in RAM.
+                sidecar_post(sidecar, "/config", FAUX_CONFIG)
         return
+    provider, model_id = selection["provider"], selection["model_id"]
     key_row = None
-    if selection["provider"] != "faux":
-        key_row = provider_key_get(user_id, selection["provider"])
+    if provider != "faux":
+        key_row = provider_key_get(user_id, provider)
     want_fingerprint = key_row["fingerprint"] if key_row else None
-    if (selection["provider"], selection["model_id"], want_fingerprint) == current:
+    if provider == "faux" or key_row is None:
+        # Keyless selection (faux, or a model without a stored key): the agent
+        # half alone, exactly as RFC 0012 delivered it — but a stale sidecar-mode
+        # runtime must not satisfy the match.
+        keyless_match = (
+            (provider, model_id, want_fingerprint) == current
+            and status.get("keyVia") in (None, "direct")
+        )
+        if keyless_match:
+            return
+        if provider != "faux" and AGENT_EGRESS != "open":
+            raise ManagerError(
+                "egress_blocked",
+                f"provider '{provider}' is selected but AGENT_EGRESS is not open"
+                " (§7.11: fail closed, never a silent faux fallback)",
+            )
+        payload: dict[str, Any] = {"provider": provider, "modelId": model_id}
+        if key_row is not None and key_row.get("base_url"):
+            payload["baseUrl"] = key_row["base_url"]
+        agent_post(container, "/config", payload)
         return
-    if selection["provider"] != "faux" and AGENT_EGRESS != "open":
+    if AGENT_EGRESS != "open":
         raise ManagerError(
             "egress_blocked",
-            f"provider '{selection['provider']}' is selected but AGENT_EGRESS is not open"
+            f"provider '{provider}' is selected but AGENT_EGRESS is not open"
             " (§7.11: fail closed, never a silent faux fallback)",
         )
-    payload: dict[str, Any] = {"provider": selection["provider"], "modelId": selection["model_id"]}
-    if key_row is not None:
-        payload["apiKey"] = decrypt_key(
-            user_id, selection["provider"], key_row["ciphertext"], key_row["nonce"]
+    if sidecar is None:
+        raise ManagerError("sidecar_unhealthy", "a keyed selection needs the sidecar pair")
+    if "keyVia" not in status:
+        # An image from before RFC 0013 ignores the viaSidecar field and would
+        # register a keyless provider: refuse instead (§7.5 discipline).
+        raise ManagerError(
+            "agent_image_old",
+            f"{container} runs an image without sidecar-mode /config; rebuild affido-agent and reprovision",
         )
-        if key_row["base_url"]:
-            payload["baseUrl"] = key_row["base_url"]
-    agent_post(container, "/config", payload)
+    want_upstream = desired_upstream(provider, key_row)
+    side_match = (
+        side_status.get("provider") == provider
+        and side_status.get("modelId") == model_id
+        and side_status.get("keyFingerprint") == want_fingerprint
+        and (want_upstream is None or side_status.get("upstream") == want_upstream)
+    )
+    agent_match = (
+        model.get("provider") == provider
+        and model.get("modelId") == model_id
+        and status.get("keyVia") == "sidecar"
+    )
+    if side_match and agent_match:
+        return
+    side_payload: dict[str, Any] = {
+        "provider": provider,
+        "modelId": model_id,
+        "apiKey": decrypt_key(user_id, provider, key_row["ciphertext"], key_row["nonce"]),
+    }
+    if key_row.get("base_url"):
+        side_payload["baseUrl"] = key_row["base_url"]
+    sidecar_post(sidecar, "/config", side_payload)
+    agent_payload: dict[str, Any] = {"provider": provider, "modelId": model_id, "viaSidecar": True}
+    if key_row.get("base_url"):
+        # Not a secret: the agent resolves its models' compat quirks from the
+        # real URL before the sidecar rewrite (RFC 0013 §4 A3).
+        agent_payload["baseUrl"] = key_row["base_url"]
+    agent_post(container, "/config", agent_payload)
     log.info(
-        "provider config delivered user=%s provider=%s fingerprint=%s",
-        user_id, selection["provider"], want_fingerprint,
+        "provider config delivered user=%s provider=%s fingerprint=%s via=sidecar",
+        user_id, provider, want_fingerprint,
     )
 
 
@@ -801,6 +890,16 @@ def guest_ips(net: str) -> dict[str, str]:
     return ips
 
 
+def hardening_args() -> list[str]:
+    """RFC 0013 §6.4 Phase 0, applied to every container this manager creates:
+    the no-ptrace seccomp deny list (P0.1) and RLIMIT_CORE=0 (P0.2). The
+    profile path is read client-side by the docker CLI from this image."""
+    return [
+        "--security-opt", f"seccomp={SECCOMP_PROFILE}",
+        "--ulimit", "core=0",
+    ]
+
+
 def create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
     name = container_name(user_id)
     args = [
@@ -811,6 +910,7 @@ def create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
         "--cpus", AGENT_CPUS,
         "--runtime", AGENT_RUNTIME,
         "--security-opt", "no-new-privileges",
+        *hardening_args(),
         "--workdir", "/workspace",
         "-v", f"{workspace_vol(user_id)}:/workspace",
         "-v", f"{data_vol(user_id)}:/data",
@@ -819,6 +919,9 @@ def create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
         "-e", "SESSION_DB=/data/session.sqlite",
         "-e", f"IDLE_MS={AGENT_IDLE_MS}",
         "-e", f"PORT={AGENT_PORT}",
+        # RFC 0013 §6.2: where the agent finds its sidecar. Inert until a
+        # viaSidecar /config delivery arrives; faux/keyless runs never dial it.
+        "-e", f"SIDECAR_URL=http://{sidecar_name(user_id)}:{SIDECAR_PORT}",
     ]
     if AGENT_CITATIONS_DEFAULT:
         # RFC 0006 §5.9: the mode of /prompt requests that omit the `citations`
@@ -832,6 +935,39 @@ def create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
         # is the only resolver a runsc sandbox has (see guest_ips).
         args += ["--dns", AGENT_DNS]
     args.append(AGENT_IMAGE)
+    return args
+
+
+def sidecar_create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
+    """RFC 0013 §6.3: the sidecar half of the pair. Same per-user --internal
+    network, no volumes (its whole state is one key in RAM), no published
+    ports (R6), gVisor runtime and Phase 0 hardening like the agent, own
+    reduced caps (R10). No env secrets: the key arrives over POST /config
+    from this manager and never appears in docker create (R3). The guest map
+    is baked like the agent's so the e2e fake upstream (a control-plane
+    guest) is resolvable under runsc, where Docker's embedded DNS is dead."""
+    args = [
+        "create", "--name", sidecar_name(user_id),
+        "--network", network_name(user_id),
+        "--label", "pi-sandbox-manager=1",
+        "--memory", SIDECAR_MEMORY,
+        "--cpus", SIDECAR_CPUS,
+        "--runtime", AGENT_RUNTIME,
+        "--security-opt", "no-new-privileges",
+        *hardening_args(),
+        "--workdir", "/app",
+        "-e", f"PORT={SIDECAR_PORT}",
+        "-e", f"PROVIDER_CATALOG={CATALOG_PATH_IN_IMAGE}",
+    ]
+    for name, ip in sorted((hosts or {}).items()):
+        args += ["--add-host", f"{name}:{ip}"]
+    if AGENT_DNS:
+        # Internet names (real provider upstreams) resolve only with
+        # AGENT_EGRESS=open; with egress off this fails fast, which is fine.
+        args += ["--dns", AGENT_DNS]
+    # The agent image has no ENTRYPOINT, so overriding CMD selects the second
+    # entrypoint of the same image (RFC 0013 §6.1: one image, two entrypoints).
+    args += [AGENT_IMAGE, "sh", "-c", "ulimit -c 0 && exec node /app/sidecar.ts"]
     return args
 
 
@@ -873,16 +1009,20 @@ def ensure_started(container: str) -> None:
         docker("start", container)
 
 
-# ── agent HTTP client (stdlib; /health never activates the agent) ───────────
-def agent_get(container: str, path: str, timeout: float = 3.0) -> dict[str, Any]:
-    url = f"http://{container}:{AGENT_PORT}{path}"
+# ── sandbox HTTP client (stdlib; /health never activates the agent) ───────
+
+def _container_get(container: str, port: int, path: str, timeout: float = 3.0) -> dict[str, Any]:
+    url = f"http://{container}:{port}{path}"
     with urllib.request.urlopen(url, timeout=timeout) as response:
         return json.loads(response.read().decode())
 
 
-def agent_post(container: str, path: str, payload: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
-    """POST JSON to the agent on its per-user network (RFC 0012 §5.4 delivery)."""
-    url = f"http://{container}:{AGENT_PORT}{path}"
+def _container_post(
+    container: str, port: int, path: str, payload: dict[str, Any], timeout: float = 15.0
+) -> dict[str, Any]:
+    """POST JSON to a sandbox container on its per-user network (RFC 0012
+    §5.4 delivery; RFC 0013 splits the payload between agent and sidecar)."""
+    url = f"http://{container}:{port}{path}"
     request = urllib.request.Request(
         url, data=json.dumps(payload).encode(), method="POST",
         headers={"content-type": "application/json"},
@@ -895,16 +1035,42 @@ def agent_post(container: str, path: str, payload: dict[str, Any], timeout: floa
         # fails with agent_image_old instead of routing users to a sandbox that
         # can never receive the desired provider.
         if exc.code == 404:
-            raise ManagerError("agent_image_old",
-                               f"{container} runs an image without {path}; rebuild affido-agent and reprovision")
-        raise ManagerError("delivery_failed", f"agent {path} answered {exc.code}")
+            raise ManagerError(
+                "agent_image_old",
+                f"{container} runs an image without {path}; rebuild affido-agent and reprovision",
+            )
+        raise ManagerError("delivery_failed", f"{container} {path} answered {exc.code}")
     except urllib.error.URLError as exc:
-        raise ManagerError("delivery_failed", f"agent {path} unreachable: {exc.reason}")
+        raise ManagerError("delivery_failed", f"{container} {path} unreachable: {exc.reason}")
+
+
+def agent_get(container: str, path: str, timeout: float = 3.0) -> dict[str, Any]:
+    return _container_get(container, AGENT_PORT, path, timeout)
+
+
+def agent_post(container: str, path: str, payload: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
+    return _container_post(container, AGENT_PORT, path, payload, timeout)
+
+
+def sidecar_get(container: str, path: str, timeout: float = 3.0) -> dict[str, Any]:
+    return _container_get(container, SIDECAR_PORT, path, timeout)
+
+
+def sidecar_post(container: str, path: str, payload: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
+    return _container_post(container, SIDECAR_PORT, path, payload, timeout)
 
 
 def agent_alive(container: str) -> bool:
     try:
         agent_get(container, "/health", timeout=2.0)
+        return True
+    except Exception:
+        return False
+
+
+def sidecar_alive(container: str) -> bool:
+    try:
+        sidecar_get(container, "/health", timeout=2.0)
         return True
     except Exception:
         return False
@@ -1024,6 +1190,39 @@ def wait_healthy(container: str) -> dict[str, Any]:
     raise TimeoutError(f"{container} was not healthy within {READY_TIMEOUT_S}s")
 
 
+def wait_healthy_sidecar(container: str) -> dict[str, Any]:
+    """RFC 0013 §8: a sidecar that never answers fails the resolve closed with
+    sidecar_unhealthy — same policy as egress_blocked, never a silent faux
+    fallback or a keyless delivery to the agent."""
+    deadline = time.time() + READY_TIMEOUT_S
+    while time.time() < deadline:
+        try:
+            return sidecar_get(container, "/health")
+        except Exception:
+            time.sleep(0.25)
+    raise ManagerError(
+        "sidecar_unhealthy",
+        f"sidecar {container} was not healthy within {READY_TIMEOUT_S}s"
+        " (rebuild affido-agent and reprovision if it crash-loops)",
+    )
+
+
+def container_ip(net: str, container: str) -> str | None:
+    """The IPv4 a container holds on one network (None when not connected)."""
+    cp = subprocess.run(
+        ["docker", "network", "inspect", "-f",
+         "{{range .Containers}}{{.Name}}={{.IPv4Address}} {{end}}", net],
+        capture_output=True, text=True,
+    )
+    if cp.returncode != 0:
+        return None
+    for pair in cp.stdout.split():
+        name, _, cidr = pair.partition("=")
+        if name == container:
+            return cidr.split("/", 1)[0]
+    return None
+
+
 def mark_running(user_id: str, container: str) -> None:
     container_id = docker("inspect", "-f", "{{.Id}}", container).strip()
     registry_set(
@@ -1056,10 +1255,31 @@ def dns_rewrite(container: str) -> None:
                         container, cp.stderr.strip())
 
 
+def start_pair(user_id: str, container: str, sidecar: str) -> None:
+    """Start both halves and make them healthy (RFC 0013 R7).
+
+    Re-runs the resolv.conf rewrite on every start: this daemon regenerates
+    /etc/resolv.conf for user-defined networks at each container start, and
+    under runsc the 127.0.0.11 it leaves behind is unreachable — without the
+    rewrite, a pair that comes back from L1 eviction cannot resolve internet
+    names (the sidecar's pinned upstreams first of all)."""
+    ensure_started(sidecar)
+    if AGENT_DNS:
+        dns_rewrite(sidecar)
+    wait_healthy_sidecar(sidecar)
+    ensure_started(container)
+    if AGENT_DNS:
+        dns_rewrite(container)
+    wait_healthy(container)
+    mark_running(user_id, container)
+
+
 def provision(user_id: str) -> None:
-    """Create the per-user network/volumes/container if absent, then start it."""
+    """Create the per-user network/volumes/agent+sidecar pair if absent, then
+    start both (RFC 0013 §6.3: lifecycle is a pair, R7)."""
     container = container_name(user_id)
-    if docker_running(container) is None:
+    sidecar = sidecar_name(user_id)
+    if docker_running(container) is None or docker_running(sidecar) is None:
         net = network_name(user_id)
         created_net = False
         if not network_exists(net):
@@ -1082,12 +1302,24 @@ def provision(user_id: str) -> None:
             docker("network", "connect", net, guest, check=False)
         docker("volume", "create", workspace_vol(user_id))
         docker("volume", "create", data_vol(user_id))
-        docker(*create_args(user_id, guest_ips(net)))
-    ensure_started(container)
-    if AGENT_DNS:
-        dns_rewrite(container)
-    wait_healthy(container)
-    mark_running(user_id, container)
+        guests = guest_ips(net)
+        sidecar_recreated = False
+        if docker_running(sidecar) is None:
+            docker(*sidecar_create_args(user_id, guests))
+            sidecar_recreated = True
+        if docker_running(container) is None or sidecar_recreated:
+            # The agent's route to the sidecar is a baked /etc/hosts entry
+            # (runsc cannot use Docker's embedded DNS), fixed at create time.
+            # A recreated sidecar may hold a new IP, so the pair is recreated
+            # together — durable state lives on volumes, nothing is lost (R7).
+            ensure_started(sidecar)
+            sidecar_ip = container_ip(net, sidecar)
+            if sidecar_ip is None:
+                raise RuntimeError(f"sidecar {sidecar} has no address on {net}")
+            if docker_running(container) is not None:
+                docker("rm", "-f", container, check=False)
+            docker(*create_args(user_id, {**guests, sidecar: sidecar_ip}))
+    start_pair(user_id, container, sidecar)
 
 
 # ── resolve: the only write path on the request hot path ────────────────────
@@ -1118,19 +1350,18 @@ def resolve(user_id: str) -> dict[str, Any]:
         row = wait_until_ready(user_id)
 
     container = row["container_name"]
+    sidecar = sidecar_name(user_id)
     ensure_guests(user_id)
-    if docker_running(container) is None:
-        provision(user_id)  # row exists but container is gone: repair, don't 503
-    elif row["status"] != "running" or not agent_alive(container):
-        ensure_started(container)
-        wait_healthy(container)
-        mark_running(user_id, container)
+    if docker_running(container) is None or docker_running(sidecar) is None:
+        provision(user_id)  # row exists but half the pair is gone: repair both, don't 503
+    elif row["status"] != "running" or not agent_alive(container) or not sidecar_alive(sidecar):
+        start_pair(user_id, container, sidecar)
 
-    # RFC 0012 §5.4: every activation reconciles the agent's runtime model
-    # against the OLTP desired state (delivery, rotation, faux fallback).
-    # Raises ManagerError (egress_blocked, kek_unavailable, agent_image_old)
-    # so resolve fails closed with that code.
-    reconcile_provider(user_id, container)
+    # RFC 0012 §5.4 / RFC 0013 §5: every activation reconciles the runtime
+    # pair against the OLTP desired state (delivery, rotation, faux fallback).
+    # Raises ManagerError (egress_blocked, kek_unavailable, agent_image_old,
+    # sidecar_unhealthy) so resolve fails closed with that code.
+    reconcile_provider(user_id, container, sidecar)
 
     touch(user_id)
     return {
@@ -1168,6 +1399,9 @@ def eviction_tick() -> None:
         if idle_for >= STOP_AFTER_S:
             log.info("stopping idle sandbox %s (idle %.0fs)", container, idle_for)
             docker("stop", "--time", "10", container, check=False)
+            # RFC 0013 R7: the pair evicts together — an idle user's sidecar
+            # holds no key in RAM either, and idle cost stays zero.
+            docker("stop", "--time", "5", sidecar_name(user_id), check=False)
             registry_set(user_id, "stopped")
 
 
@@ -1196,6 +1430,14 @@ def reconcile_tick() -> None:
             continue
         if status not in ("running", "idle_paused"):
             continue
+        sidecar = sidecar_name(user_id)
+        if docker_running(sidecar) is False:
+            # R7: the pair runs together. A stopped sidecar lost its key; the
+            # next resolve re-delivers it from desired state (§8). The restart
+            # also regenerates resolv.conf, so the rewrite must follow it.
+            docker("start", sidecar, check=False)
+            if AGENT_DNS:
+                dns_rewrite(sidecar)
         if agent_alive(container):
             _unhealthy[user_id] = 0
             continue
@@ -1371,7 +1613,7 @@ class Handler(BaseHTTPRequestHandler):
         if docker_running(container) is not True:
             return "sandbox_stopped"
         try:
-            reconcile_provider(user_id, container)
+            reconcile_provider(user_id, container, sidecar_name(user_id))
             return "delivered"
         except ManagerError as exc:
             return f"pending: {exc.code}"
@@ -1670,9 +1912,22 @@ class ManagerHTTPServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def warn_seccomp_profile() -> None:
+    """One loud line when the Phase 0 profile is missing from this image: every
+    provision would fail closed at docker create (the CLI reads the file
+    client-side), and this puts the diagnosis in the operator's first stop."""
+    if not os.path.exists(SECCOMP_PROFILE):
+        log.error(
+            "seccomp profile %s does not exist in this container: every provision"
+            " fails at docker create. Rebuild the sandbox-manager image.",
+            SECCOMP_PROFILE,
+        )
+
+
 def main() -> None:
     enforce_token_default()
     warn_unknown_runtime()
+    warn_seccomp_profile()
     migrate()
     start_loops()
     server = ManagerHTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)

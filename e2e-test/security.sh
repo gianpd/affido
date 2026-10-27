@@ -79,7 +79,34 @@ gateway="$(printf '%s' "${probe}" | field "d['gateway']")"
 	|| fail "sandbox reached a 0.0.0.0-bound host service on the gateway: ${probe}"
 [[ "$(printf '%s' "${probe}" | field "d['managerMetrics']['status']")" == "403" ]] \
 	|| fail "manager did not reject the sandbox peer: ${probe}"
-pass "no egress (gateway ${gateway}, internet, host services), manager 403, tenant ${VIC_C} unreachable"
+# RFC 0013 §9.2: the victim's key sidecar is one more target behind the same
+# per-user subnet wall; the probe reports its reachability separately.
+[[ "$(printf '%s' "${probe}" | field "d['victimSidecar']")" != "connect:ok" ]] \
+	|| fail "attacker sandbox reached the victim's sidecar: ${probe}"
+pass "no egress (gateway ${gateway}, internet, host services), manager 403, tenant ${VIC_C} and its sidecar unreachable"
+
+echo "== Phase 0 (RFC 0013 §6.4): no-ptrace enforcement and core-dump suppression =="
+# Behavior probes, asserted unconditionally — the guarantees must hold on ANY
+# host, not just ones with Yama=1 and a piping core_pattern. The /proc/$PPID/mem
+# open and the ulimit read ran inside the attacker sandbox in the probe above.
+ptrace_status="$(printf '%s' "${probe}" | field "d['ptrace']['status']")"
+ptrace_stderr="$(printf '%s' "${probe}" | field "d['ptrace']['stderr']")"
+[[ "${ptrace_status}" != "0" ]] \
+	|| fail "a tool child opened /proc/$PPID/mem (status ${ptrace_status}, ${ptrace_stderr})"
+[[ -n "${ptrace_stderr}" ]] \
+	|| fail "the /proc/$PPID/mem open failed without an error message (unexpected): ${probe}"
+core_limit="$(printf '%s' "${probe}" | field "d['coreLimit']")"
+[[ "${core_limit}" == "0" ]] \
+	|| fail "ulimit -c inside the sandbox is ${core_limit}, expected 0"
+# A self-SIGSEGV scratch process must leave no core file anywhere it could write.
+cores="$(docker exec "${ATK_C}" sh -c 'cd /tmp && node -e "process.kill(process.pid, 11)" >/dev/null 2>&1; ls core* 2>/dev/null | wc -l' | tr -d '\r')"
+[[ "${cores}" == "0" ]] || fail "a SIGSEGV crash left ${cores} core file(s) in the sandbox"
+# Belt and braces: P0.1/P0.2 are visible in docker inspect too.
+secopts="$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "${ATK_C}")"
+grep -q "seccomp" <<<"${secopts}" || fail "agent container has no seccomp security-opt: ${secopts}"
+ulimits="$(docker inspect -f '{{json .HostConfig.Ulimits}}' "${ATK_C}")"
+grep -q '"Name":"core"' <<<"${ulimits}" || fail "agent container has no core ulimit: ${ulimits}"
+pass "ptrace family denied (EPERM), ulimit -c 0, no core after SIGSEGV, seccomp+ulimit set"
 
 echo "== a refused pause left the victim running =="
 [[ "$(docker inspect -f '{{.State.Running}}' "${VIC_C}")" == "true" ]] \

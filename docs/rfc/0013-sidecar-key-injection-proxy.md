@@ -2,10 +2,10 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft |
+| Status | Implemented (M0–M2, 2026-10-27); M3 deferred |
 | Author | Affido maintainers |
 | Date | 2026-10-25 |
-| Target | `sandbox-manager/sandbox_manager.py`, `agent/model.ts`, `agent/agent.ts`, `agent/tools.ts`, `agent/Dockerfile`, `caddy/Caddyfile` (unchanged), `e2e-test/` |
+| Target | `sandbox-manager/sandbox_manager.py`, `agent/model.ts`, `agent/agent.ts`, `agent/tools.ts`, `agent/sidecar.ts`, `agent/Dockerfile`, `caddy/Caddyfile` (unchanged), `e2e-test/` |
 | Related | RFC 0012 (BYOK — this RFC amends its delivery half, §5.4), RFC 0003 (manager owns topology) |
 | Supersedes | none; tightens RFC 0012 R3 |
 
@@ -569,4 +569,53 @@ provider-policy feature, not a key-custody feature.
    two-target delivery in the same change (no contradicting docs left
    behind).
 3. **M3 (optional) — egress narrowing** (§12.1), only if content exfiltration
-   enters the threat model.
+   enters the threat model. **Deferred** at implementation time (2026-10-27):
+   the sidecar is in place, but `AGENT_EGRESS` semantics are unchanged
+   (phase 1).
+
+## 14. Implementation record (2026-10-27)
+
+M0–M2 shipped; every §11 verification item is in the gate (`./verify.sh`
+green, `agent/sidecar.test.ts` + `test_sandbox_manager.py` extended,
+`e2e-test/byok.sh` and `security.sh` carrying the R1/R3/R7/R9 and Phase 0
+assertions). Deviations and decisions taken while building, all within the
+RFC's intent:
+
+- **P0.2 without `process.setrlimit`.** Node 24 core has no setrlimit binding
+  (the §6.4 sketch assumed one). The enforced layer is the image entry chain
+  instead — `sh -c 'ulimit -c 0 && exec node …'` as the CMD of both
+  entrypoints, which covers standalone image runs too — plus `--ulimit
+  core=0` from `create_args`. `verify-sandbox.sh`/`security.sh` assert
+  `ulimit -c 0` and a coreless SIGSEGV from inside the container.
+- **A3 compat parity via the encoded real base.** pi-ai does not export
+  `detectCompat`, so the agent cannot snapshot the resolved compat at
+  registration. Instead of duplicating detection logic, the rewritten
+  `model.baseUrl` carries the real base percent-encoded in its path
+  (`SIDECAR_URL/<provider>/~/<encodeURIComponent(realBase)>`): pi-ai's
+  compat quirk and prompt-cache detection are substring tests on
+  `model.baseUrl`, and percent-encoding preserves those substrings verbatim
+  (verified for `openai-completions` incl. the OpenAI SDK join,
+  `openai-responses`, `anthropic-messages`, and the `new URL`-based
+  `mistral-conversations` join). The sidecar decodes the segment and treats a
+  mismatch against the pinned upstream as an R3 refusal — the embedded base
+  doubles as the pin check.
+- **Pair recreation instead of /etc/hosts editing.** Under runsc the agent
+  reaches the sidecar through a baked `--add-host` entry (embedded DNS is
+  dead). dockerd regenerates `/etc/hosts` on every start, so a runtime edit
+  would not survive eviction; a recreated sidecar (new IP) therefore recreates
+  the agent too. Durable state lives on volumes; nothing is lost.
+- **resolv.conf rewrite on every start.** The same daemon regenerates
+  `/etc/resolv.conf` at each container start, which leaves a restarted pair
+  without a working resolver under runsc (the regenerated `127.0.0.11` is
+  unreachable). `start_pair()` re-runs the rewrite on every start path;
+  `verify-sandbox.sh` asserts it after the L1 restart.
+- **Catalog `auth` field.** §6.1 step 3 decides the stamped header at
+  `/config` time from catalog data; the generator now emits `auth` (absent =
+  bearer) so a future native-Anthropic entry (§12.4) needs no sidecar change.
+  Every current catalog provider is bearer (OpenRouter/Fireworks
+  anthropic-messages wire included).
+- **`keyVia` on the agent.** `/status` reports `keyVia` and, in sidecar mode,
+  `keyFingerprint: null` — the manager's reconcile treats an agent status
+  without `keyVia` as `agent_image_old` (a pre-RFC-0013 image ignores the
+  `viaSidecar` field; resolve fails closed instead of registering a keyless
+  provider).

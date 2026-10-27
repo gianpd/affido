@@ -410,14 +410,17 @@ export class SwitchSessionTool extends HttpTool {
 	}
 }
 
-/** Apply a delivered provider config (RFC 0012 §5.4). The manager is the
- * only writer of desired state and calls this at resolve time; a user driving
- * their own sandbox's /config directly through /u/<id>/config (same
- * forward_auth wall) can only desync their own runtime until the next resolve
- * overwrites it. Activates the agent: the conversation reconfigure joins the
- * DurableHarness serialization chain, so an in-flight prompt finishes on the
- * old provider (§7.1) and a queued one runs on the new one. The key exists in
- * process memory only (R3). */
+/** Apply a delivered provider config (RFC 0012 §5.4, amended by RFC 0013
+ * §5: the key half goes to the sidecar, and this payload carries
+ * `viaSidecar` with no `apiKey`). The manager is the only writer of desired
+ * state and calls this at resolve time; a user driving their own sandbox's
+ * /config directly through /u/<id>/config (same forward_auth wall) can only
+ * desync their own runtime until the next resolve overwrites it. Activates
+ * the agent: the conversation reconfigure joins the DurableHarness
+ * serialization chain, so an in-flight prompt finishes on the old provider
+ * (§7.1) and a queued one runs on the new one. A delivered key exists in
+ * process memory only (R3); a viaSidecar delivery puts no key here at all
+ * (RFC 0013 R1). */
 export class ConfigTool extends HttpTool {
 	constructor() {
 		super("config", "POST", "/config");
@@ -445,8 +448,19 @@ export class ConfigTool extends HttpTool {
 				throw new HttpError(400, { error: "invalid_base_url", message: "baseUrl must be 1-2048 characters" });
 			baseUrl = body.baseUrl;
 		}
+		let viaSidecar: boolean | undefined;
+		if (body.viaSidecar !== undefined) {
+			if (typeof body.viaSidecar !== "boolean")
+				throw new HttpError(400, { error: "invalid_config", message: "viaSidecar must be a boolean" });
+			viaSidecar = body.viaSidecar;
+			// RFC 0013 R1: the key half of this selection lives in the sidecar;
+			// accepting an apiKey here would put the plaintext back into the
+			// attacked process, which is exactly what the sidecar removes.
+			if (viaSidecar && apiKey !== undefined)
+				throw new HttpError(400, { error: "invalid_api_key", message: "viaSidecar deliveries carry no apiKey (RFC 0013 R1)" });
+		}
 		try {
-			return await agent.configureModel({ provider, modelId, apiKey, baseUrl });
+			return await agent.configureModel({ provider, modelId, apiKey, baseUrl, viaSidecar });
 		} catch (error) {
 			// buildProvider throws plain Errors (unknown built-in, missing baseUrl);
 			// map them to 400 so delivery failures stay actionable.

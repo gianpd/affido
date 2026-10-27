@@ -89,8 +89,10 @@ To check everything, including the idle pause and a hard-stop resume:
 
 ```
 agent/             the sandboxed TypeScript agent (durable harness, tools,
-                   citation gate, traces, skills, artifacts)
-sandbox-manager/   Python service: sandbox registry, provisioning, eviction
+                   citation gate, traces, skills, artifacts) plus its
+                   key-injection sidecar entrypoint (sidecar.ts, RFC 0013)
+sandbox-manager/   Python service: sandbox registry, pair provisioning,
+                   eviction, BYOK key custody and delivery
 frontend/          SvelteKit web client (better-auth, documents, chat, traces)
 caddy/             the only published endpoint, per-user /u/<id>/* routes
 e2e-test/          bash suites driving the stack through Caddy only
@@ -212,11 +214,12 @@ and a prerequisite for BYOK with one (RFC 0012 §5.5) — routed egress comes
 back but the host wall stays. That requirement is enforced at two fail-closed
 gates — `PUT /providers/config` rejects a real provider with `egress_blocked`
 at setup (§5.5) and resolve raises it again before delivery (§7.11), never a
-silent faux fallback — and `open` means full internet egress for the sandbox,
-not provider-only egress. RFC 0013 M3 (egress narrowing, §12.1) will remove
-this coupling: a per-user sidecar container will hold the key and be the only
-tenant with NAT (pinned to the provider upstream), while the agent network
-stays `--internal`), `AGENT_RUNTIME` (`runsc` by default: agent sandboxes run
+silent faux fallback — and `open` means full internet egress for the sandbox
+pair in phase 1 of RFC 0013. RFC 0013 M3 (egress narrowing, §12.1) would
+remove this coupling — the sidecar already holds the key, so the agent
+network could stay `--internal` with NAT attached to the sidecar only — but
+that phase is deliberately not built: content exfiltration by a compromised
+agent is accepted today (the key cannot leak; workspace text can), `AGENT_RUNTIME` (`runsc` by default: agent sandboxes run
 under gVisor, a userspace kernel — model-generated code never executes
 host-kernel syscalls and `/proc`, `/sys` are synthetic, so tenants never share
 the host kernel; `runc` is the documented fallback for hosts without gVisor,
@@ -238,8 +241,9 @@ bind address of the `:18080` entry point, `127.0.0.1` by default; set
 `0.0.0.0` to expose the stack on the LAN).
 Per-user agents all run `affido-agent:latest` (the manager forwards no `*_MODEL`
 to `docker create`): the faux provider is the boot default, and the manager
-delivers the user's BYOK choice at runtime through `POST /config` (RFC 0012
-§5.4). The manager starts containers with `--workdir /workspace`;
+delivers the user's BYOK choice at runtime through the RFC 0013 delivery split
+(key half to the sidecar, keyless half to the agent's `POST /config`). The manager
+starts containers with `--workdir /workspace`;
 the image CMD is absolute (`node /app/server.ts`) so it runs from any workdir.
 
 ## How each operation is implemented
@@ -344,7 +348,7 @@ workspace filesystem, like `/ingest`, and never activate the agent.
 | Method | Path | Activates | Purpose |
 |---|---|---|---|
 | GET | `/health` | no | liveness, used by the Docker healthcheck |
-| GET | `/status` | no | `{ paused, conversationId, entries, inFlight }` (cached when paused) |
+| GET | `/status` | no | `{ paused, conversationId, entries, inFlight, model, keyVia }` (cached when paused); `keyVia` is `"sidecar"`, `"direct"` or null — where the current selection's key lives, never the key |
 | GET | `/session` | yes | reopen and report `{ conversationId, entries }` |
 | GET | `/inspect?conversation=1&limit=50` | yes | trace report: newest entries (summary + decision fields), live tasks and submissions, usage |
 | GET | `/inspect?report=citations` | yes | citation report (RFC 0006): per-run used/reported/exact and gate friction |
@@ -367,6 +371,7 @@ workspace filesystem, like `/ingest`, and never activate the agent.
 | GET | `/artifact?path=proposal.docx` | no | the file bytes as a download: attachment, static content type, 25 MiB cap, never a symlink |
 | DELETE | `/artifacts?path=proj` | no | remove a file or subtree under `artifacts/`; missing is not an error |
 | POST | `/prompt` | yes | `{ prompt, requestId?, citations?: "required" \| "off" }` -> `{ status, answer, evidence, citations[], artifacts[], submissionId, entries }` |
+| POST | `/config` | yes | the manager's runtime delivery (RFC 0012 §5.4 / RFC 0013 §5): `{provider, modelId, viaSidecar: true, baseUrl?}` — keyless, the key half went to the sidecar — or the direct `{provider, modelId, apiKey?, baseUrl?}`; serialized with prompts |
 | GET | `/corpus/citations?runId=...` | yes | one run's citations, re-verified against the stored text (survives restarts) |
 | POST | `/session/new` | yes | start a separate conversation (RFC 0008) -> `{ conversationId, entries }`; the previous one stays readable |
 | POST | `/reset` | yes | start a new context (`pi.reset`); older entries stay in storage |
@@ -462,20 +467,24 @@ default. The chat UI carries the per-question toggle; the report at
                   v
           +---------------+        docker create/start/stop
           | sandbox-      |-----------------------------+
-          | manager       |                             |
-          +-------+-------+                             |
-                  |                                     v
-             +---------+                    +----------------------+
-             |  oltp   |                    | u<user>-<hash>:8080  |
-             |registry |                    | one per user         |
-             +---------+                    | pi-net-<slug>        |
-                                            +----------------------+
+          | manager       |                             |   one pair per user (RFC 0013):
+          +-------+-------+                             v   u<slug>:8080          u<slug>-sidecar:8081
+             |   POST /config {provider, modelId,         |   agent — no key        key-injection sidecar
+          +---------+   viaSidecar: true}                |        ^                        |
+          |  oltp   |  key ciphertext (AES-GCM)          +--------+---- pi-net-<slug> ----+
+          |registry |  ---------------------------------------------|       pinned upstream (TLS)
+          +---------+                                                v
+                                                            provider (api.deepseek.com, ...)
 ```
 
 The control plane declares no agent `ports`, so the sole host mapping is Caddy's
 `18080:80`. Caddy dials each agent by container name on the per-user
-`pi-net-<slug>` network the manager created; the agent containers are not compose
-services, so `docker compose ps` lists only caddy, oltp and sandbox-manager.
+`pi-net-<slug>` network the manager created; the agent containers and their
+key sidecars (`u<slug>-sidecar:8081`, RFC 0013) are not compose services, so
+`docker compose ps` lists only caddy, oltp and sandbox-manager. Each per-user
+network hosts exactly one agent+sidecar pair; cross-tenant reachability
+(agent→agent, agent→sidecar, sidecar→sidecar) is blocked by the per-user
+subnet wall and proven by `e2e-test/security.sh`.
 
 ## Use a real model
 
@@ -488,16 +497,37 @@ The recording at the top of this file is one more transcript
 (`agent/citation-gate-demo.ts`): two questions, a tampered quote and an exact
 one.
 
-### BYOK (bring your own key, RFC 0012)
+### BYOK (bring your own key, RFC 0012 + RFC 0013)
 
 An authenticated user picks a provider from a curated catalog (or registers a
 custom OpenAI-compatible endpoint) and submits their own API key. The key is
 stored AES-256-GCM-encrypted in Postgres (the KEK is
 [secrets/llm_key_kek](secrets/llm_key_kek), mounted into the manager only),
-delivered to the running agent's memory at resolve time, and re-delivered after
-any restart — never written to the container environment, image, filesystem,
-URLs, or logs. Switching provider or rotating a key never recreates the
-container and never wipes a session.
+and re-delivered after any restart — never written to any container
+environment, image, filesystem, URLs, or logs. Switching provider or rotating
+a key never wipes a session.
+
+**RFC 0013 — the key never enters the agent process.** Each sandbox is a
+*pair*: the agent container plus a key-injection sidecar (same image, second
+entrypoint `node /app/sidecar.ts`, own 128m/0.25 caps, no volumes, created by
+the manager on the same per-user `--internal` network). At resolve time the
+manager delivers `{provider, modelId, apiKey, baseUrl?}` to the sidecar's
+`POST /config` — the only process that ever holds the plaintext — and a
+keyless `{provider, modelId, viaSidecar: true}` to the agent. The agent
+registers its models against `SIDECAR_URL` with a placeholder credential; the
+sidecar strips inbound auth headers, stamps the real `Authorization`, and
+forwards to an upstream **pinned at delivery time** (catalog hostname or the
+user-registered endpoint; any other host, redirect, or provider prefix is
+refused). An attacker who fully controls the agent process — prompt injection,
+tool escape — can *spend* the key (inherent: the agent must call the provider)
+but cannot *disclose* it: there is no plaintext in the agent container at all
+(`/status` reports `keyVia: "sidecar"` instead of a fingerprint), and
+tool-to-server memory reads are kernel-denied (Phase 0: a seccomp deny list
+for `ptrace`/`process_vm_readv`/`pidfd_getfd`/`kcmp` plus `--ulimit core=0`,
+applied to both containers of every pair). The pair shares one lifecycle:
+idle eviction, recreation and health cover agent+sidecar together, and a
+resolve never routes an agent to a dead sidecar (`sidecar_unhealthy`, fail
+closed).
 
 ```bash
 # once, in .env: the stack-level prerequisites
@@ -517,11 +547,12 @@ curl -X PUT -H 'Cookie: better-auth.session_token=<token>' \
 ```
 
 The manager answers with the masked view (selection plus key fingerprints, and
-never the key). The next request to `/u/<user_id>/...` resolves, delivers
-`POST /config` to the agent (`credentials.modify` -> `setProvider` ->
-`conversation.configure`, serialized with prompts), and the prompt is answered
-by the provider. A user's own sandbox can read only their own key from its own
-process memory; an idle-stopped sandbox holds no key material at all.
+never the key). The next request to `/u/<user_id>/...` resolves, delivers the
+key half to the sidecar and the keyless half to the agent
+(`setProvider` + `conversation.configure`, serialized with prompts), and the
+prompt is answered by the provider through the sidecar. A user's key exists
+in plaintext only in their own sidecar's RAM; an idle-stopped pair holds no
+key material at all.
 
 Production prerequisite (RFC 0012 §8.3): terminate TLS at Caddy (automatic
 HTTPS on a public site address, or `tls internal` for private deployments)
@@ -546,18 +577,26 @@ stack never uses it.
 ## Verify
 
 `./verify.sh` type-checks the agent (`npm run typecheck`, `tsc --noEmit` under
-`strict`), runs its unit tests and the manager's BYOK unit tests, builds
-`affido-agent:latest`, starts the control plane, then runs the e2e suite,
-`./verify-sandbox.sh`, the security containment negatives, and finally the
-BYOK chain against a fake OpenAI-compatible upstream (RFC 0012 §10: the
-default gate stays keyless; the BYOK phase re-creates the stack with egress
-open and a same-network fake provider, proves delivery, rotation,
-validation and the L0/L1/recreation durability, then restores the keyless
-default). It exits non-zero on the first failure. Before starting the stack
-the gate probes the Docker daemon for the configured `AGENT_RUNTIME`: when
-the host does not provide it (CI runners ship no gVisor) the gate takes the
-documented `AGENT_RUNTIME=runc` fallback and says so in the log, instead of
-failing every cold provision with 503 at `docker create`.
+`strict`), runs its unit tests (including the sidecar handler tests of RFC
+0013 §11: strip/stamp/pin, SSE pass-through, unpinned-host refusal, and the
+full pi-ai→sidecar→upstream chain against a local fake upstream) and the
+manager's BYOK unit tests (pair provisioning, the delivery split, reconcile
+against sidecar `/status`, `sidecar_unhealthy` fail-closed, Phase 0 args),
+builds `affido-agent:latest`, starts the control plane, then runs the e2e
+suite, `./verify-sandbox.sh`, the security containment negatives (now
+including the RFC 0013 Phase 0 probes — the `ptrace`-family denial asserted
+unconditionally inside every sandbox, `ulimit -c` 0, no core after a
+self-SIGSEGV — and the victim-sidecar isolation probe), and finally the BYOK
+chain against a fake OpenAI-compatible upstream through the sidecar (RFC 0012
+§10 + RFC 0013 §11: proves the delivery split, `keyVia: "sidecar"`, the
+pinned-upstream refusal of exfiltration attempts, RAM-only key custody in
+both containers, rotation, validation, L0/L1/recreation durability and pair
+recreation, then restores the keyless default). It exits non-zero on the
+first failure. Before starting the stack the gate probes the Docker daemon
+for the configured `AGENT_RUNTIME`: when the host does not provide it (CI
+runners ship no gVisor) the gate takes the documented `AGENT_RUNTIME=runc`
+fallback and says so in the log, instead of failing every cold provision with
+503 at `docker create`.
 
 `./e2e-test/run.sh` asserts that compose declares only the control plane, then
 runs these checks through Caddy only:
@@ -613,8 +652,9 @@ license; everything in this repository is Apache-2.0.
 ## Docs
 
 - [docs/rfc/](docs/rfc/) — design records: sandboxes (0002, 0003), citations
-  gate (0006), sessions (0008), skills and artifacts (0009), ingestion and
-  index registry (0014)
+  gate (0006), sessions (0008), skills and artifacts (0009), BYOK user-selected
+  providers (0012), key-injection sidecar (0013), ingestion and index registry
+  (0014)
 - [docs/security.md](docs/security.md) — threat model (draft)
 - [CONTRIBUTING.md](CONTRIBUTING.md) — the gate and the rules
 - [CHANGELOG.md](CHANGELOG.md)

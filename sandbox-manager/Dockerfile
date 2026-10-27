@@ -17,7 +17,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY sandbox_manager.py test_sandbox_manager.py ./
+COPY sandbox_manager.py test_sandbox_manager.py seccomp-no-ptrace.json ./
 
 ENV PYTHONUNBUFFERED=1 \
     LISTEN_ADDR=0.0.0.0 \
