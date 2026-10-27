@@ -167,6 +167,8 @@ AGENT_MEMORY    = os.getenv("AGENT_MEMORY", "512m")
 AGENT_CPUS      = os.getenv("AGENT_CPUS", "1.0")
 AGENT_SECRETS   = os.getenv("AGENT_SECRETS_DIR")  # host dir -> /run/secrets:ro
 AGENT_EGRESS    = os.getenv("AGENT_EGRESS", "off")  # off = sandbox networks get no NAT
+AGENT_RUNTIME   = os.getenv("AGENT_RUNTIME", "runsc")  # gVisor: agents never run host-kernel syscalls
+AGENT_DNS       = os.getenv("AGENT_DNS", "1.1.1.1")  # gVisor ignores Docker's 127.0.0.11 embedded DNS
 STOP_AFTER_S    = int(os.getenv("STOP_AFTER_S", "600"))
 LISTEN_ADDR     = os.getenv("LISTEN_ADDR", "0.0.0.0")
 LISTEN_PORT     = int(os.getenv("LISTEN_PORT", "8090"))
@@ -370,6 +372,7 @@ def create_args(user_id: str) -> list[str]:
         "--label", "pi-sandbox-manager=1",
         "--memory", AGENT_MEMORY,
         "--cpus", AGENT_CPUS,
+        "--runtime", AGENT_RUNTIME,
         "--security-opt", "no-new-privileges",
         "--workdir", "/workspace",
         "-v", f"{workspace_vol(user_id)}:/workspace",
@@ -379,6 +382,11 @@ def create_args(user_id: str) -> list[str]:
         "-e", "SESSION_DB=/data/session.sqlite",
         "-e", f"IDLE_MS={AGENT_IDLE_MS}",
         "-e", f"PORT={AGENT_PORT}",
+    ]
+    for name, ip in sorted((hosts or {}).items()):
+        args += ["--add-host", f"{name}:{ip}"]
+    if AGENT_DNS:
+        args += ["--dns", AGENT_DNS]
     ]
     if AGENT_SECRETS:
         # Docker secrets are files at /run/secrets; a host dir re-creates that
@@ -909,6 +917,7 @@ implementation:
 | GHSA-7r4p-vjf4-gxv4: `copy_headers` passes a client-supplied header through when the auth response omits it (Caddy 2.10.0–2.11.1) | Pin `caddy:>=2.11.2`; strip `X-Sandbox-Endpoint` at route entry (§8) — an injected value would be an SSRF dial into the Docker network |
 | The manager sits on networks agent containers (which run user code) can reach | Two independent walls: `X-Manager-Token` on every endpoint but `/healthz`, plus a peer-IP guard that 403s any address on a `pi-net-*` subnet that is not the manager/Caddy/web container (agent code cannot call the API even with a valid token); one bridge network per sandbox so agents cannot dial each other (§5 `network_name`) |
 | Sandbox NAT egress → exfiltration of workspace/corpus to the internet, or attacks on host-LAN services (incl. the published Postgres) from a prompt-injected agent | Per-user networks are created with `enable_ip_masquerade=false` (`AGENT_EGRESS=off`, the default): the sandbox talks to its subnet guests and nothing else; `AGENT_EGRESS=open` is the explicit opt-in for internet-reached model providers |
+| Agent containers share the host kernel → a kernel exploit in model-generated code crosses the tenant boundary and reaches the host | Every agent container is created `--runtime runsc` (gVisor, the default): syscalls are served by a userspace kernel, `/proc` and `/sys` are synthetic, so the guest never executes host-kernel syscalls; `AGENT_RUNTIME=runc` is the documented fallback for hosts without gVisor, at the cost of kernel sharing (control-plane containers always run `runc`). gVisor cost: netstack does not serve Docker's embedded DNS (the 127.0.0.11 DNAT lives in a netns netstack replaces), so container names are baked into `/etc/hosts` at create time (`--add-host` for the control-plane guests, refreshed on reprovision) and internet names go through `AGENT_DNS` (default `1.1.1.1`, unroutable and fail-fast while `AGENT_EGRESS=off`): passed as `--dns` and written first in the sandbox resolv.conf at provision time, because on user-defined networks Docker only uses `--dns` as an upstream of the embedded resolver |
 | Host-published Postgres with static `pi/pi` credentials = full tenant takeover (the `session` table holds every better-auth token) | Compose binds the host port to loopback only (`127.0.0.1:${OLTP_PORT:-15432}:5432`): the database is reachable from the host and the compose network, never from another machine |
 | Registry row whose container vanished → permanent 503 | `resolve()` reprovisions when `docker_running()` is `None` instead of raising; failed resolves mark the row `error` |
 | `docker` CLI version skew | Pin the CLI version in the image; the script only uses create/start/stop/restart/inspect/volume |
@@ -945,6 +954,8 @@ suffices, as in `verify.sh`).
    (gateway or internet) with `AGENT_EGRESS=off`; Postgres answers on
    `127.0.0.1` only.
 4. **M4 (optional) — L2 gVisor.** Reuse RFC 0002's `runsc` checkpoint/restore and
-   its network-endpoint caveat verbatim; feature-flagged off by default.
+   its network-endpoint caveat verbatim; feature-flagged off by default. Note:
+   `runsc` is the default *runtime* of every agent container (isolation decision,
+   §11); M4 remains about checkpoint/restore for eviction and is independent of it.
 5. **Regression gate.** `verify.sh` extended, not rewritten: the static `/a1`
    route may remain as a smoke test while the per-user path is added.

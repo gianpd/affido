@@ -216,7 +216,20 @@ silent faux fallback — and `open` means full internet egress for the sandbox,
 not provider-only egress. RFC 0013 M3 (egress narrowing, §12.1) will remove
 this coupling: a per-user sidecar container will hold the key and be the only
 tenant with NAT (pinned to the provider upstream), while the agent network
-stays `--internal`), `OLTP_PORT` (host port for
+stays `--internal`), `AGENT_RUNTIME` (`runsc` by default: agent sandboxes run
+under gVisor, a userspace kernel — model-generated code never executes
+host-kernel syscalls and `/proc`, `/sys` are synthetic, so tenants never share
+the host kernel; `runc` is the documented fallback for hosts without gVisor,
+weakening isolation back to a shared kernel — control-plane containers always
+run `runc`; takes effect on the next provision), `AGENT_DNS` (`1.1.1.1` by
+default, `--dns` for the sandbox plus a resolv.conf rewrite at provision
+time: Docker never writes `--dns` into resolv.conf on user-defined networks
+-- it becomes an upstream of the embedded resolver, which gVisor does not
+serve -- so the manager makes `AGENT_DNS` the first nameserver directly; this
+is the only path to internet names, i.e. real BYOK providers, and it is
+unroutable, fail-fast, while `AGENT_EGRESS=off`; container names never use
+DNS: the manager bakes the control-plane guests into the sandbox `/etc/hosts`
+at create time), `OLTP_PORT` (host port for
 Postgres, default 15432, bound to loopback only), `CADDY_BIND` (the published
 bind address of the `:18080` entry point, `127.0.0.1` by default; set
 `0.0.0.0` to expose the stack on the LAN).

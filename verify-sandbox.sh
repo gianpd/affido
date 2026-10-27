@@ -83,6 +83,27 @@ members="$(docker network inspect "pi-net-${CONTAINER#u}" -f '{{range .Container
 	|| fail "per-user network does not attach caddy and manager: ${members}"
 pass "caddy provisioned and proxied to ${CONTAINER} (data plane)"
 
+want_runtime="$(manager_env AGENT_RUNTIME || true)"
+want_runtime="${want_runtime:-runsc}"
+runtime="$(docker inspect -f '{{.HostConfig.Runtime}}' "${CONTAINER}")"
+[[ "${runtime}" == "${want_runtime}" ]] \
+	|| fail "${CONTAINER} runs on runtime '${runtime}', expected '${want_runtime}' (gVisor)"
+pass "sandbox runs under the configured runtime (${runtime})"
+
+net="pi-net-${CONTAINER#u}"
+want_ip="$(docker inspect -f "{{range \$k,\$v := .NetworkSettings.Networks}}{{if eq \$k \"${net}\"}}{{\$v.IPAddress}}{{end}}{{end}}" sandbox-manager)"
+resolved="$(docker exec "${CONTAINER}" node -e "require('dns').lookup('sandbox-manager',(e,a)=>console.log(e?'ERR '+e.code:a))" 2>/dev/null || true)"
+[[ "${resolved}" == "${want_ip}" ]] \
+	|| fail "sandbox resolves 'sandbox-manager' as '${resolved}', expected ${want_ip}"
+pass "sandbox resolves the control plane by name (/etc/hosts: gVisor has no embedded DNS)"
+
+want_dns="$(manager_env AGENT_DNS || true)"
+want_dns="${want_dns:-1.1.1.1}"
+first_ns="$(docker exec "${CONTAINER}" head -1 /etc/resolv.conf | awk '{print $2}')"
+[[ "${first_ns}" == "${want_dns}" ]] \
+	|| fail "first nameserver is '${first_ns}', expected ${want_dns}: without the rewrite a runsc sandbox cannot resolve internet names (real providers)"
+pass "resolver rewritten to ${first_ns} (Docker's --dns never reaches resolv.conf on user-defined networks)"
+
 echo "== agent state before sleeping =="
 answer="$(curl -fsS --max-time 120 -X POST -H "Cookie: ${COOKIE}" -H 'content-type: application/json' \
 	-d "{\"prompt\":\"list the files\",\"requestId\":\"verify-${USER_ID}\"}" "${BASE}/u/${USER_ID}/prompt")" \

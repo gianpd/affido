@@ -62,6 +62,8 @@ AGENT_CITATIONS_DEFAULT = os.getenv("AGENT_CITATIONS_DEFAULT", "")
 AGENT_EGRESS    = os.getenv("AGENT_EGRESS", "off")
 AGENT_MEMORY    = os.getenv("AGENT_MEMORY", "512m")
 AGENT_CPUS      = os.getenv("AGENT_CPUS", "1.0")
+AGENT_RUNTIME   = os.getenv("AGENT_RUNTIME", "runsc")  # gVisor: agents never run host-kernel syscalls
+AGENT_DNS       = os.getenv("AGENT_DNS", "1.1.1.1")  # gVisor ignores Docker's 127.0.0.11 embedded DNS
 # RFC 0012 BYOK: the manager owns no plaintext provider secrets anymore. Keys
 # arrive over HTTP, live encrypted in provider_key, and are delivered to the
 # running agent at resolve time. The legacy AGENT_SECRETS_DIR mount is gone
@@ -772,7 +774,33 @@ def docker_running(container: str) -> bool | None:
     return cp.stdout.strip() == "true"
 
 
-def create_args(user_id: str) -> list[str]:
+def guest_ips(net: str) -> dict[str, str]:
+    """Per-network IPs of the control-plane guests, for the sandbox's --add-host.
+
+    gVisor's netstack does not serve Docker's embedded DNS: 127.0.0.11 is an
+    iptables DNAT inside the container netns, which netstack ignores, so
+    container-name resolution is dead under runsc (ECONNREFUSED). The manager
+    knows the guests and connects them to every sandbox network, so it bakes
+    their names into /etc/hosts at create time. Stale after a guest is
+    recreated with a new IP (fine: production agents never dial the control
+    plane by name, the peer guard forbids it); a reprovision refreshes them.
+    """
+    cp = subprocess.run(
+        ["docker", "network", "inspect", "-f",
+         "{{range .Containers}}{{.Name}}={{.IPv4Address}} {{end}}", net],
+        capture_output=True, text=True,
+    )
+    if cp.returncode != 0:
+        return {}
+    ips: dict[str, str] = {}
+    for pair in cp.stdout.split():
+        name, _, cidr = pair.partition("=")
+        if name in control_plane_guests():
+            ips[name] = cidr.split("/", 1)[0]
+    return ips
+
+
+def create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
     name = container_name(user_id)
     args = [
         "create", "--name", name,
@@ -780,6 +808,7 @@ def create_args(user_id: str) -> list[str]:
         "--label", "pi-sandbox-manager=1",
         "--memory", AGENT_MEMORY,
         "--cpus", AGENT_CPUS,
+        "--runtime", AGENT_RUNTIME,
         "--security-opt", "no-new-privileges",
         "--workdir", "/workspace",
         "-v", f"{workspace_vol(user_id)}:/workspace",
@@ -794,6 +823,13 @@ def create_args(user_id: str) -> list[str]:
         # RFC 0006 §5.9: the mode of /prompt requests that omit the `citations`
         # field. Sandbox env is fixed at create; the per-request field always wins.
         args += ["-e", f"CITATIONS_DEFAULT={AGENT_CITATIONS_DEFAULT}"]
+    for name, ip in sorted((hosts or {}).items()):
+        args += ["--add-host", f"{name}:{ip}"]
+    if AGENT_DNS:
+        # With AGENT_EGRESS=off this is unroutable and name resolution fails
+        # fast, which is the intended fail-closed behavior; with egress open it
+        # is the only resolver a runsc sandbox has (see guest_ips).
+        args += ["--dns", AGENT_DNS]
     args.append(AGENT_IMAGE)
     return args
 
@@ -994,6 +1030,31 @@ def mark_running(user_id: str, container: str) -> None:
     )
 
 
+def dns_rewrite(container: str) -> None:
+    """Point the sandbox's resolver at AGENT_DNS first, Docker's embedded one
+    as fallback.
+
+    Two stacked gVisor facts: netstack does not serve 127.0.0.11 (it is an
+    iptables DNAT inside a netns that netstack replaces), and on user-defined
+    networks Docker never writes --dns into resolv.conf anyway -- it becomes an
+    upstream of the embedded resolver instead. So under runsc the container
+    has no working nameserver for internet names (real BYOK providers) until
+    this rewrite. Written from inside, once per container lifetime: the file
+    lives in the writable layer and survives stop/start. Non-fatal on failure:
+    DNS is availability, not a wall; AGENT_EGRESS=off sandboxes never resolve
+    anything legitimate either way.
+    """
+    cp = subprocess.run(
+        ["docker", "exec", "-u", "0", container, "sh", "-c",
+         'printf "nameserver %s\\nnameserver 127.0.0.11\\n" "$1" > /etc/resolv.conf',
+         "dns", AGENT_DNS],
+        capture_output=True, text=True,
+    )
+    if cp.returncode != 0:
+        logging.warning("resolv.conf rewrite failed for %s: %s",
+                        container, cp.stderr.strip())
+
+
 def provision(user_id: str) -> None:
     """Create the per-user network/volumes/container if absent, then start it."""
     container = container_name(user_id)
@@ -1020,8 +1081,10 @@ def provision(user_id: str) -> None:
             docker("network", "connect", net, guest, check=False)
         docker("volume", "create", workspace_vol(user_id))
         docker("volume", "create", data_vol(user_id))
-        docker(*create_args(user_id))
+        docker(*create_args(user_id, guest_ips(net)))
     ensure_started(container)
+    if AGENT_DNS:
+        dns_rewrite(container)
     wait_healthy(container)
     mark_running(user_id, container)
 

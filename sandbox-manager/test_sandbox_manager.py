@@ -291,5 +291,51 @@ class TokenDefaultGuardTest(unittest.TestCase):
         sm.enforce_token_default()  # must not raise
 
 
+class CreateArgsTest(unittest.TestCase):
+    """Agent containers are created --runtime runsc (gVisor): the isolation
+    boundary is the userspace kernel, not just namespaces. AGENT_RUNTIME is
+    the documented fallback for hosts without gVisor (RFC 0003 §11). Under
+    runsc, Docker's embedded DNS is unreachable, so the control-plane guests
+    are baked into /etc/hosts and AGENT_DNS covers internet names."""
+
+    def setUp(self) -> None:
+        self.saved = (sm.AGENT_RUNTIME, sm.AGENT_DNS)
+
+    def tearDown(self) -> None:
+        sm.AGENT_RUNTIME, sm.AGENT_DNS = self.saved
+
+    def test_runtime_flag_tracks_agent_runtime(self) -> None:
+        for value in ("runsc", "runc"):
+            sm.AGENT_RUNTIME = value
+            args = sm.create_args("user-runtime")
+            self.assertIn("--runtime", args)
+            self.assertEqual(args[args.index("--runtime") + 1], value)
+            self.assertEqual(args[-1], sm.AGENT_IMAGE)
+
+    def test_create_args_shape(self) -> None:
+        args = sm.create_args("user-runtime")
+        name = sm.container_name("user-runtime")
+        self.assertIn(name, args)
+        for flag in ("--network", "--memory", "--cpus", "--runtime",
+                     "--security-opt"):
+            self.assertIn(flag, args)
+        self.assertIn("no-new-privileges", args)
+
+    def test_guest_hosts_are_baked_sorted_before_the_image(self) -> None:
+        args = sm.create_args("user-runtime",
+                              hosts={"caddy": "10.0.0.9", "sandbox-manager": "10.0.0.2"})
+        flags = [args[i + 1] for i, f in enumerate(args) if f == "--add-host"]
+        self.assertEqual(flags, ["caddy:10.0.0.9", "sandbox-manager:10.0.0.2"])
+        self.assertLess(args.index("--add-host"), len(args) - 1)  # not after the image
+
+    def test_dns_flag_follows_agent_dns(self) -> None:
+        sm.AGENT_DNS = "9.9.9.9"
+        args = sm.create_args("user-runtime")
+        self.assertEqual(args[args.index("--dns") + 1], "9.9.9.9")
+        sm.AGENT_DNS = ""  # empty: keep Docker's resolv.conf (runc fallback)
+        args = sm.create_args("user-runtime")
+        self.assertNotIn("--dns", args)
+
+
 if __name__ == "__main__":
     unittest.main()

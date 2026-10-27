@@ -65,8 +65,11 @@ HOST_SVC_PID=$!
 sleep 0.5
 curl -fsS --max-time 2 "http://127.0.0.1:${HOST_SVC_PORT}/" >/dev/null \
 	|| fail "host probe listener did not start on ${HOST_SVC_PORT} (port busy?)"
-docker cp -q "${E2E_DIR}/security-probe.mjs" "${ATK_C}:/tmp/security-probe.mjs" >/dev/null
-probe="$(docker exec "${ATK_C}" node /tmp/security-probe.mjs "${VIC_C}" "${MANAGER_TOKEN}" "${HOST_SVC_PORT}")"
+# gVisor: docker cp into a running sandbox's rootfs is written on the host side
+# of the gofer and stays invisible to the sandbox until a restart. Writing the
+# probe from inside (exec stdin) lands in the sandbox's own view at once and
+# keeps argv; works under runc too.
+probe="$(docker exec -i "${ATK_C}" sh -c 'cat > /tmp/security-probe.mjs && exec node /tmp/security-probe.mjs "\$@"' probe "${VIC_C}" "${MANAGER_TOKEN}" "${HOST_SVC_PORT}" < "${E2E_DIR}/security-probe.mjs")"
 kill "${HOST_SVC_PID}" 2>/dev/null || true
 breach="$(printf '%s' "${probe}" | field "d['breach'].strip()")"
 [[ -z "${breach}" ]] || fail "containment breach: ${breach} (${probe})"
