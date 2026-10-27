@@ -294,66 +294,63 @@ class TokenDefaultGuardTest(unittest.TestCase):
         sm.enforce_token_default()  # must not raise
 
 
-class RuntimeHintTest(unittest.TestCase):
-    """warn_unknown_runtime puts a one-line cause and fix in the startup log
-    when the daemon lacks AGENT_RUNTIME (CI runners ship no gVisor); the
-    provision path still fails closed, this only makes the 503 diagnosable
-    from `docker logs` without waiting for a client to hit it."""
+class RunscEnforcementTest(unittest.TestCase):
+    """enforce_runsc_runtime fails closed at boot when the daemon cannot
+    prove the runsc runtime. gVisor is mandatory: the sidecar delivery is
+    cleartext HTTP on the per-user bridge, and under runc a compromised agent
+    (root, default caps) can ARP-spoof the sidecar and capture the key — a
+    boot warning would leave that one ARP poison away."""
 
     def setUp(self) -> None:
-        self.saved = (sm.AGENT_RUNTIME, sm.docker)
-        sm.AGENT_RUNTIME = "runsc"
+        self.saved = sm.docker
 
     def tearDown(self) -> None:
-        sm.AGENT_RUNTIME, sm.docker = self.saved
+        sm.docker = self.saved
 
-    def test_missing_runtime_logs_the_fallback_hint(self) -> None:
+    def test_missing_runsc_refuses_to_start(self) -> None:
         sm.docker = lambda *a, **k: "io.containerd.runc.v2 runc "
-        with self.assertLogs("sandbox-manager", level="ERROR") as captured:
-            sm.warn_unknown_runtime()
+        with self.assertLogs("sandbox-manager", level="CRITICAL") as captured:
+            with self.assertRaises(SystemExit):
+                sm.enforce_runsc_runtime()
         self.assertTrue(
-            any("AGENT_RUNTIME=runc" in line for line in captured.output),
+            any("mandatory" in line for line in captured.output),
             captured.output,
         )
 
-    def test_installed_runtime_is_silent(self) -> None:
+    def test_installed_runtime_starts_silently(self) -> None:
         sm.docker = lambda *a, **k: "runsc io.containerd.runc.v2 runc "
-        with self.assertNoLogs("sandbox-manager", level="ERROR"):
-            sm.warn_unknown_runtime()
+        with self.assertNoLogs("sandbox-manager", level="WARNING"):
+            sm.enforce_runsc_runtime()
 
-    def test_daemon_query_failure_does_not_break_startup(self) -> None:
+    def test_daemon_query_failure_refuses_to_start(self) -> None:
         def _boom(*a: str, **k: object) -> str:
             raise RuntimeError("docker info failed")
 
         sm.docker = _boom
-        with self.assertLogs("sandbox-manager", level="WARNING") as captured:
-            sm.warn_unknown_runtime()
-        self.assertTrue(
-            any("cannot list docker runtimes" in line for line in captured.output),
-            captured.output,
-        )
+        with self.assertLogs("sandbox-manager", level="CRITICAL"):
+            with self.assertRaises(SystemExit):
+                sm.enforce_runsc_runtime()
 
 
 class CreateArgsTest(unittest.TestCase):
     """Agent containers are created --runtime runsc (gVisor): the isolation
-    boundary is the userspace kernel, not just namespaces. AGENT_RUNTIME is
-    the documented fallback for hosts without gVisor (RFC 0003 §11). Under
-    runsc, Docker's embedded DNS is unreachable, so the control-plane guests
-    are baked into /etc/hosts and AGENT_DNS covers internet names."""
+    boundary is the userspace kernel, not just namespaces. runsc is a module
+    constant, not an env knob — gVisor is mandatory (the key delivery to the
+    sidecar is cleartext HTTP on the shared per-user bridge). Under runsc,
+    Docker's embedded DNS is unreachable, so the control-plane guests are
+    baked into /etc/hosts and AGENT_DNS covers internet names."""
 
     def setUp(self) -> None:
-        self.saved = (sm.AGENT_RUNTIME, sm.AGENT_DNS)
+        self.saved = sm.AGENT_DNS
 
     def tearDown(self) -> None:
-        sm.AGENT_RUNTIME, sm.AGENT_DNS = self.saved
+        sm.AGENT_DNS = self.saved
 
-    def test_runtime_flag_tracks_agent_runtime(self) -> None:
-        for value in ("runsc", "runc"):
-            sm.AGENT_RUNTIME = value
-            args = sm.create_args("user-runtime")
+    def test_runtime_is_pinned_runsc(self) -> None:
+        for args in (sm.create_args("user-runtime"), sm.sidecar_create_args("user-runtime")):
             self.assertIn("--runtime", args)
-            self.assertEqual(args[args.index("--runtime") + 1], value)
-            self.assertEqual(args[-1], sm.AGENT_IMAGE)
+            self.assertEqual(args[args.index("--runtime") + 1], "runsc")
+        self.assertEqual(sm.create_args("user-runtime")[-1], sm.AGENT_IMAGE)
 
     def test_create_args_shape(self) -> None:
         args = sm.create_args("user-runtime")
@@ -365,12 +362,16 @@ class CreateArgsTest(unittest.TestCase):
         self.assertIn("no-new-privileges", args)
 
     def test_phase0_hardening_is_applied(self) -> None:
-        # RFC 0013 §6.4: both the seccomp deny list (P0.1) and core=0 (P0.2)
-        # are manager-enforced on every created container, not host defaults.
+        # RFC 0013 §6.4: the seccomp deny list (P0.1), core=0 (P0.2) and
+        # cap-drop ALL (P0.3: no AF_PACKET, no ARP spoofing of the per-user
+        # bridge — under any runtime) are manager-enforced on every created
+        # container, not host defaults.
         for args in (sm.create_args("user-hard"), sm.sidecar_create_args("user-hard")):
             self.assertIn(f"seccomp={sm.SECCOMP_PROFILE}", args)
             i = args.index("--ulimit")
             self.assertEqual(args[i + 1], "core=0")
+            i = args.index("--cap-drop")
+            self.assertEqual(args[i + 1], "ALL")
 
     def test_create_args_bakes_the_sidecar_url(self) -> None:
         args = sm.create_args("user-sc")
@@ -388,7 +389,7 @@ class CreateArgsTest(unittest.TestCase):
         sm.AGENT_DNS = "9.9.9.9"
         args = sm.create_args("user-runtime")
         self.assertEqual(args[args.index("--dns") + 1], "9.9.9.9")
-        sm.AGENT_DNS = ""  # empty: keep Docker's resolv.conf (runc fallback)
+        sm.AGENT_DNS = ""  # empty: keep Docker's resolv.conf as-is
         args = sm.create_args("user-runtime")
         self.assertNotIn("--dns", args)
 

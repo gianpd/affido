@@ -68,7 +68,7 @@ curl -fsS --max-time 2 "http://127.0.0.1:${HOST_SVC_PORT}/" >/dev/null \
 # gVisor: docker cp into a running sandbox's rootfs is written on the host side
 # of the gofer and stays invisible to the sandbox until a restart. Writing the
 # probe from inside (exec stdin) lands in the sandbox's own view at once and
-# keeps argv; works under runc too.
+# keeps argv.
 probe="$(docker exec -i "${ATK_C}" sh -c 'cat > /tmp/security-probe.mjs && exec node /tmp/security-probe.mjs "\$@"' probe "${VIC_C}" "${MANAGER_TOKEN}" "${HOST_SVC_PORT}" < "${E2E_DIR}/security-probe.mjs")"
 kill "${HOST_SVC_PID}" 2>/dev/null || true
 breach="$(printf '%s' "${probe}" | field "d['breach'].strip()")"
@@ -106,7 +106,7 @@ secopts="$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "${ATK_C}")"
 grep -q "seccomp" <<<"${secopts}" || fail "agent container has no seccomp security-opt: ${secopts}"
 ulimits="$(docker inspect -f '{{json .HostConfig.Ulimits}}' "${ATK_C}")"
 grep -q '"Name":"core"' <<<"${ulimits}" || fail "agent container has no core ulimit: ${ulimits}"
-pass "ptrace family denied (EPERM), ulimit -c 0, no core after SIGSEGV, seccomp+ulimit set"
+pass "ptrace family denied (EPERM), ulimit -c 0, no core after SIGSEGV, CapEff all zeroes (cap-drop ALL), seccomp+ulimit set"
 
 echo "== a refused pause left the victim running =="
 [[ "$(docker inspect -f '{{.State.Running}}' "${VIC_C}")" == "true" ]] \

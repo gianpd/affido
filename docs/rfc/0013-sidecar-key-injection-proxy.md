@@ -36,7 +36,12 @@ attacker who fully controls the agent process — including the model and every
 tool call — can *use* the key (quota spend is inherent: the agent must call
 the provider) but cannot *disclose* it: there is no plaintext in the agent
 container to find, and the sidecar never sends the key anywhere except the
-pinned upstream over verified TLS.
+pinned upstream over verified TLS. The one cleartext hop — the manager's
+`POST /config` to the sidecar over the per-user bridge — is unspoofable only
+under gVisor: a root agent with `CAP_NET_RAW` under runc can open
+`AF_PACKET`, ARP-spoof the sidecar, and capture the delivery mid-flight.
+That is why runsc is mandatory and both halves drop every capability
+(§6.4 P0.3/P0.4).
 
 The threat boundary moves from **disclosure or abuse** to **abuse only**.
 
@@ -251,7 +256,11 @@ resource caps (R10), idle lifecycle owned by the manager (R7).
 HTTP surface (per-user network only):
 
 - `POST /config {provider, modelId, apiKey, baseUrl?}` — manager-only writer,
-  same contract as the agent's `/config` today, minus everything else. Stores
+  same contract as the agent's `/config` today, minus everything else. The
+  delivery hop is cleartext HTTP on the per-user bridge — acceptable only
+  because P0.4 makes runsc mandatory (netstack: no in-sandbox raw
+  sockets/ARP to spoof it) and P0.3 drops every capability; a TLS/peer-auth
+  retrofit stays §12 material unless the topology changes. Stores
   the key in a module-level variable (process memory, the sidecar's whole
   reason to exist), records the pinned upstream:
   - catalog provider → the catalog entry's `baseUrl` host (`provider-catalog.json`,
@@ -332,7 +341,7 @@ only, and returns provider output, not key material.
   opens when a real provider is selected). Phase 2 (§12) narrows egress to
   the sidecar only.
 
-### 6.4 Phase 0 — no-ptrace enforcement and core-dump suppression (sidecar-independent)
+### 6.4 Phase 0 — manager-enforced sandbox hardening (no-ptrace, core dumps, capabilities, mandatory runsc)
 
 Lands first and stays valuable with or without the sidecar: it makes the
 *current* RFC 0012 posture enforced by the manager instead of inherited from
@@ -369,6 +378,32 @@ host-operator trust domain, out of scope since RFC 0004.
 0)` early in `agent/server.ts` — the latter covers standalone image runs with
 no manager, which a Dockerfile cannot express. With RLIMIT_CORE=0 the kernel
 writes no core regardless of the host's `core_pattern`.
+
+**P0.3 — `--cap-drop ALL` on both halves.** Added after a review of the
+cleartext delivery hop: Docker's default capability set includes
+`CAP_NET_RAW`, which makes `socket(AF_PACKET, SOCK_RAW)` succeed under runc
+— measured on the agent image with the P0.1 profile: runc default → ok,
+runc + `--cap-drop NET_RAW` → EPERM, runsc → EPERM (the seccomp deny list
+only covers the ptrace family, `socket` stays allowed by design). A
+compromised agent can then ARP-spoof the sidecar on the per-user bridge,
+receive the manager's `POST /config`, read `apiKey`, and impersonate the
+sidecar's 200 (the fingerprint is derivable from the captured key). Nothing
+in either process needs a Linux capability — ports 8080/8081 are >1024,
+`/workspace` and `/data` are root-owned named volumes matched by uid, the
+healthcheck is a Node fetch, the sidecar does HTTP/TLS outbound only — so
+`hardening_args()` drops the whole set. The e2e containment probe asserts
+`CapEff` is all zeroes from inside the sandbox (runsc emulates the field
+faithfully, so zeroes there mean zeroes).
+
+**P0.4 — runsc mandatory.** `AGENT_RUNTIME` stops being an env knob and
+becomes the module constant `"runsc"`; `enforce_runsc_runtime()` fails
+closed at boot (same layer as the token check) when the daemon cannot prove
+the runtime, and `./verify.sh` fails its probe before starting the stack.
+P0.3 kills the *known* L2 vector under any runtime; runsc removes the
+*class*: netstack gives the sandbox no raw-socket/ARP surface at all, so the
+cleartext hop of §6.1 is unspoofable rather than merely guarded. The old
+`AGENT_RUNTIME=runc` documented fallback (RFC 0003 §11) is withdrawn — under
+it the R3 claim above is false.
 
 What Phase 0 deliberately does **not** do: it draws the boundary at "tool
 process ⇏ server process". It does not protect the key against compromise of

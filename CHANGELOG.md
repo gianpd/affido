@@ -6,17 +6,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Sandboxes: gVisor is now mandatory, not a default. `AGENT_RUNTIME` is no
+  longer an env knob (`sandbox_manager.py` pins `runsc` and
+  `enforce_runsc_runtime()` fails closed at boot when the daemon cannot
+  prove the runtime); `docker-compose.yml` and `.env.example` drop the
+  variable, and `./verify.sh` fails its runtime probe instead of taking the
+  interim `AGENT_RUNTIME=runc` CI fallback that this same unreleased cycle
+  had introduced. Deploying on a host without gVisor now requires installing
+  it (`runsc`) before the stack starts.
+
+### Security
+
+- Key delivery hop (2026-10 review, RFC 0013 §6.4 P0.3/P0.4): the manager
+  POSTs the provider key to the sidecar as cleartext HTTP over the per-user
+  bridge, and under runc a compromised agent — root, Docker default
+  capabilities — can open `AF_PACKET` (`CAP_NET_RAW`), ARP-spoof the
+  sidecar, capture `apiKey` mid-delivery, and impersonate the sidecar's
+  200 (the fingerprint is derivable from the captured key). Two layers
+  close it: `--cap-drop ALL` on agent and sidecar (nothing in either
+  process needs a Linux capability: ports >1024, root-owned volumes
+  matched by uid, Node-fetch healthcheck) and the mandatory runsc runtime
+  above (netstack has no raw-socket/ARP surface, so the hop is unspoofable
+  rather than guarded). `verify-sandbox.sh` asserts `CapDrop=[all]` on both
+  halves and the e2e containment probe asserts `CapEff` is all zeroes from
+  inside the sandbox.
+
 ### Fixed
 
-- CI (2026-10): `./verify.sh` no longer assumes the host has gVisor. GitHub
-  runners ship stock Docker, so after the runsc default landed every cold
-  provision in CI died with 503 at `docker create --runtime runsc`. The gate
-  now probes the daemon for the configured `AGENT_RUNTIME` before starting
-  the stack and takes the documented `AGENT_RUNTIME=runc` fallback (with a
-  warning line) when it is absent. The manager also logs a one-line cause
-  and fix at startup when its runtime is unknown to the daemon — the
-  provision path still fails closed, but `docker logs` diagnoses it without
-  a client hitting the 503 first.
+- `./verify.sh` restore phase: the final `docker compose up -d` did not pin
+  `AGENT_EGRESS=off`, so the BYOK phase's exported `AGENT_EGRESS=open` (or an
+  operator `.env` carrying `open`) leaked into the "restored" stack: the
+  gate ended with NAT egress still on, and any later standalone re-run of
+  `e2e-test/security.sh` failed with `internet_reachable`. The restore now
+  pins `AGENT_EGRESS=off` like the keyless phases already did.
 
 - Security (pentest W1, 2026-10): the manager no longer runs on the
   well-known compose default `MANAGER_TOKEN` (`dev-manager-token`). With it,

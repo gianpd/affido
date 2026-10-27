@@ -50,20 +50,16 @@ ensure_manager_token() {
 	fi
 }
 
-select_agent_runtime() {
-	# gVisor is not part of stock Docker: hosts without it (CI runners, plain
-	# installs) would fail every cold provision with 503 at
-	# `docker create --runtime runsc`. Take the documented AGENT_RUNTIME=runc
-	# fallback instead (RFC 0003 §11) — loudly, so the log shows the gate did
-	# not exercise gVisor. Exported: every compose up below must agree.
-	local want="${AGENT_RUNTIME:-runsc}"
+require_runsc() {
+	# gVisor is mandatory (the sidecar key delivery is cleartext HTTP on the
+	# per-user bridge; under runc a root agent with CAP_NET_RAW can ARP-spoof
+	# the sidecar and capture it). sandbox-manager itself fails closed at boot
+	# without runsc — this probe makes the gate fail earlier and louder.
 	if docker info --format '{{range $k, $v := .Runtimes}}{{$k}} {{end}}' 2>/dev/null \
-		| grep -qw "${want}"; then
-		export AGENT_RUNTIME="${want}"
-		pass "agent sandboxes run under ${want}"
+		| grep -qw runsc; then
+		pass "docker daemon serves the runsc runtime (gVisor, mandatory)"
 	else
-		export AGENT_RUNTIME=runc
-		printf 'warn docker daemon has no %s runtime: gate falls back to AGENT_RUNTIME=runc (gVisor isolation not exercised)\n' "${want}"
+		fail "docker daemon has no runsc runtime: gVisor is mandatory (install it; the manager will refuse to boot without it)"
 	fi
 }
 
@@ -108,7 +104,7 @@ pass "catalog manifest matches the bundle"
 echo "== build and start the control plane =="
 ensure_kek
 ensure_manager_token
-select_agent_runtime
+require_runsc
 # Start from a clean control plane: the BYOK phase below recreates the manager
 # twice more per run, and back-to-back runs on containerd-store daemons can
 # otherwise leave a manager container on a garbage-collected image digest.
@@ -157,7 +153,11 @@ AGENT_IMAGE=affido-agent:latest AGENT_EGRESS=open PROVIDER_DEV_HTTP=1 FAKE_UPSTR
 
 echo "== restore the default (keyless, egress-off) stack =="
 docker rm -f e2e-fake-upstream >/dev/null
-AGENT_IMAGE=affido-agent:latest "${COMPOSE[@]}" up -d >/dev/null
+# Pin AGENT_EGRESS=off like the keyless phases above: the BYOK phase exported
+# it open in this process, and an operator .env may carry open too — without
+# the pin the "restored" stack keeps NAT egress and the security negatives
+# (internet_reachable) fail on any later standalone re-run.
+AGENT_IMAGE=affido-agent:latest AGENT_EGRESS=off "${COMPOSE[@]}" up -d >/dev/null
 pass "stack restored: faux default, no fake upstream"
 
 echo

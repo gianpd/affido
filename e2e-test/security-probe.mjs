@@ -10,7 +10,7 @@ import dns from "node:dns";
 import os from "node:os";
 import { readFileSync } from "node:fs";
 
-const out = { gateway: null, gatewayPg: null, hostService: null, internet: null, managerMetrics: null, managerPause: null, victimDial: null, victimIp: null, victimSidecar: null, victimSidecarIp: null, ptrace: null, coreLimit: null };
+const out = { gateway: null, gatewayPg: null, hostService: null, internet: null, managerMetrics: null, managerPause: null, victimDial: null, victimIp: null, victimSidecar: null, victimSidecarIp: null, ptrace: null, coreLimit: null, capEff: null };
 
 // default-route gateway from /proc/net/route (hex, little-endian words).
 // --internal networks have no default route, so fall back to the subnet's own
@@ -88,15 +88,19 @@ if (victim) {
 }
 
 // 5. Phase 0 (RFC 0013 §6.4), from inside the sandbox: a tool child must not
-//    read the server process's memory, and cores must be off. The ptrace probe
-//    is a bash child of THIS node process opening /proc/$PPID/mem — the exact
-//    §2.1 step-5 gesture — and must fail (non-zero) under both runsc and runc.
+//    read the server process's memory, cores must be off, and no Linux
+//    capability may survive (P0.3 cap-drop ALL — CAP_NET_RAW would re-open
+//    AF_PACKET/ARP spoofing of the per-user bridge the key delivery uses;
+//    runsc emulates the Cap* fields faithfully, zeroes here mean zeroes).
 {
 	const { spawnSync } = await import("node:child_process");
 	const probe = spawnSync("bash", ["-c", "exec 3< /proc/$PPID/mem"]);
 	out.ptrace = { status: probe.status, stderr: String(probe.stderr).trim() };
 	const ulimitc = spawnSync("sh", ["-c", "ulimit -c"]);
 	out.coreLimit = String(ulimitc.stdout).trim();
+	try {
+		out.capEff = readFileSync("/proc/self/status", "utf8").match(/^CapEff:\s*([0-9a-f]+)/m)?.[1] ?? null;
+	} catch { /* leave null: reported, not asserted */ }
 }
 
 out.breach =
@@ -108,5 +112,6 @@ out.breach =
 	(out.victimDial === "connect:ok" ? "victim_agent_reachable " : "") +
 	(out.victimSidecar === "connect:ok" ? "victim_sidecar_reachable " : "") +
 	(out.ptrace.status === 0 ? "ptrace_opened_parent_mem " : "") +
+	(out.capEff !== null && out.capEff !== "0000000000000000" ? "capabilities_present " : "") +
 	(out.coreLimit !== "0" ? "core_dumps_enabled" : "");
 console.log(JSON.stringify(out));

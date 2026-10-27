@@ -83,12 +83,25 @@ members="$(docker network inspect "pi-net-${CONTAINER#u}" -f '{{range .Container
 	|| fail "per-user network does not attach caddy and manager: ${members}"
 pass "caddy provisioned and proxied to ${CONTAINER} (data plane)"
 
-want_runtime="$(manager_env AGENT_RUNTIME || true)"
-want_runtime="${want_runtime:-runsc}"
+# gVisor is mandatory (manager constant, not env): the key delivery to the
+# sidecar is cleartext HTTP on this per-user bridge, and only runsc makes the
+# bridge unspoofable from inside a sandbox.
+want_runtime="runsc"
 runtime="$(docker inspect -f '{{.HostConfig.Runtime}}' "${CONTAINER}")"
 [[ "${runtime}" == "${want_runtime}" ]] \
 	|| fail "${CONTAINER} runs on runtime '${runtime}', expected '${want_runtime}'"
-pass "sandbox runs under the configured runtime (${runtime})"
+pass "sandbox runs under the mandatory runtime (${runtime})"
+
+# RFC 0013 §6.4 P0.3: both halves of the pair drop every Linux capability —
+# ports are >1024, volumes are root-owned and matched by uid, so nothing
+# legitimate needs one, and CAP_NET_RAW would re-open AF_PACKET/ARP spoofing
+# of the bridge under any runtime.
+for c in "${CONTAINER}" "${CONTAINER}-sidecar"; do
+	caps="$(docker inspect -f '{{.HostConfig.CapDrop}}' "${c}")"
+	[[ "${caps,,}" == "[all]" ]] \
+		|| fail "${c} is not --cap-drop ALL: ${caps}"
+done
+pass "agent and sidecar run with no Linux capabilities (--cap-drop ALL)"
 
 net="pi-net-${CONTAINER#u}"
 want_ip="$(docker inspect -f "{{range \$k,\$v := .NetworkSettings.Networks}}{{if eq \$k \"${net}\"}}{{\$v.IPAddress}}{{end}}{{end}}" sandbox-manager)"

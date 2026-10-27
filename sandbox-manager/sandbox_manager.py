@@ -75,7 +75,8 @@ SIDECAR_CPUS    = os.getenv("SIDECAR_CPUS", "0.25")
 # it). Applied to BOTH agent and sidecar containers so the no-ptrace
 # boundary no longer rides on host Yama/seccomp defaults.
 SECCOMP_PROFILE = os.getenv("SECCOMP_PROFILE", "/app/seccomp-no-ptrace.json")
-AGENT_RUNTIME   = os.getenv("AGENT_RUNTIME", "runsc")  # gVisor: agents never run host-kernel syscalls
+# gVisor is mandatory, not a knob. 
+AGENT_RUNTIME = "runsc"
 AGENT_DNS       = os.getenv("AGENT_DNS", "1.1.1.1")  # gVisor ignores Docker's 127.0.0.11 embedded DNS
 # RFC 0012 BYOK: the manager owns no plaintext provider secrets anymore. Keys
 # arrive over HTTP, live encrypted in provider_key, and are delivered to the
@@ -784,14 +785,6 @@ def network_exists(name: str) -> bool:
 # `--internal` stops forwarding off the bridge, but the bridge gateway is a
 # host interface: packets addressed to it reach the host INPUT chain, where
 # any 0.0.0.0-bound host service answers (proven by e2e-test/security.sh).
-# The manager owns sandbox network creation, so it owns this wall too: one
-# iptables DROP rule per sandbox bridge, installed through a short-lived
-# host-network NET_ADMIN helper created via the docker socket it already
-# drives. Nothing legitimate dials host services from a sandbox (guests are
-# on-bridge, health checks are container-to-container, published ports are
-# loopback-bound), so the rule is unconditional and fail-closed: a network
-# whose wall cannot be installed is removed, and a resolve that cannot prove
-# the wall answers 503 instead of routing users to an open sandbox.
 HOSTWALL_COMMENT = "pi-sandbox-hostwall"
 
 
@@ -891,12 +884,18 @@ def guest_ips(net: str) -> dict[str, str]:
 
 
 def hardening_args() -> list[str]:
-    """RFC 0013 §6.4 Phase 0, applied to every container this manager creates:
-    the no-ptrace seccomp deny list (P0.1) and RLIMIT_CORE=0 (P0.2). The
-    profile path is read client-side by the docker CLI from this image."""
+    """RFC 0013 §6.4 Phase 0 (P0.1 seccomp, P0.2 core=0, P0.3 cap-drop ALL),
+    applied to every container this manager creates. The seccomp profile path
+    is read client-side by the docker CLI from this image. cap-drop ALL is
+    the runtime-independent layer that kills AF_PACKET/ARP spoofing of the
+    per-user bridge even if some future runtime hands raw sockets back:
+    neither process needs a Linux capability — ports 8080/8081 are >1024,
+    /workspace and /data are root-owned named volumes matched by uid, the
+    healthcheck is a Node fetch, and the sidecar does HTTP/TLS outbound only."""
     return [
         "--security-opt", f"seccomp={SECCOMP_PROFILE}",
         "--ulimit", "core=0",
+        "--cap-drop", "ALL",
     ]
 
 
@@ -1866,30 +1865,35 @@ def enforce_token_default() -> None:
         raise SystemExit(1)
 
 
-def warn_unknown_runtime() -> None:
-    """One-line cause and fix in the startup log when the host lacks
-    AGENT_RUNTIME.
+def enforce_runsc_runtime() -> None:
+    """Fail closed at boot unless the daemon serves the runsc runtime.
 
-    Not fatal: provision still fails closed (docker create refuses the
-    runtime), but that failure reaches clients as a 503 whose body is the
-    whole docker command line. This puts the diagnosis where the operator
-    looks first — `docker logs sandbox-manager` at boot (CI runners ship no
-    gVisor; AGENT_RUNTIME=runc is the documented fallback, RFC 0003 §11)."""
+    gVisor is a hard requirement (see AGENT_RUNTIME): the sidecar delivery is
+    cleartext HTTP on the per-user bridge, and under runc a compromised agent
+    (root, default caps, CAP_NET_RAW) can ARP-spoof the sidecar and capture
+    the key mid-delivery. A boot warning would leave the stack serving while
+    every keyed selection is one ARP poison away from disclosure, so the
+    manager refuses to start instead — same fail-closed layer as
+    enforce_token_default."""
     try:
         known = docker(
             "info", "--format", "{{range $k, $v := .Runtimes}}{{$k}} {{end}}"
         ).split()
     except (RuntimeError, subprocess.TimeoutExpired) as exc:
-        log.warning("cannot list docker runtimes: %s", exc)
-        return
+        log.fatal(
+            "cannot list docker runtimes (%s): cannot prove runsc is served; "
+            "refusing to start. Install gVisor and restart this manager.", exc,
+        )
+        raise SystemExit(1)
     if AGENT_RUNTIME not in known:
-        log.error(
-            "AGENT_RUNTIME '%s' is not known to the docker daemon (have: %s): "
-            "every cold provision will fail with 503. Install gVisor or set "
-            "AGENT_RUNTIME=runc (the documented fallback: agent sandboxes "
-            "share the host kernel again).",
+        log.fatal(
+            "the docker daemon has no '%s' runtime (have: %s): gVisor is "
+            "mandatory — the sidecar key delivery is cleartext HTTP on the "
+            "per-user bridge, and only runsc makes that bridge unspoofable "
+            "from inside a sandbox. Install runsc and restart this manager.",
             AGENT_RUNTIME, " ".join(sorted(known)) or "none",
         )
+        raise SystemExit(1)
 
 
 class ManagerHTTPServer(ThreadingHTTPServer):
@@ -1926,7 +1930,7 @@ def warn_seccomp_profile() -> None:
 
 def main() -> None:
     enforce_token_default()
-    warn_unknown_runtime()
+    enforce_runsc_runtime()
     warn_seccomp_profile()
     migrate()
     start_loops()

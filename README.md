@@ -219,15 +219,16 @@ pair in phase 1 of RFC 0013. RFC 0013 M3 (egress narrowing, §12.1) would
 remove this coupling — the sidecar already holds the key, so the agent
 network could stay `--internal` with NAT attached to the sidecar only — but
 that phase is deliberately not built: content exfiltration by a compromised
-agent is accepted today (the key cannot leak; workspace text can), `AGENT_RUNTIME` (`runsc` by default: agent sandboxes run
-under gVisor, a userspace kernel — model-generated code never executes
-host-kernel syscalls and `/proc`, `/sys` are synthetic, so tenants never share
-the host kernel; `runc` is the documented fallback for hosts without gVisor,
-weakening isolation back to a shared kernel — control-plane containers always
-run `runc`; takes effect on the next provision; `./verify.sh` probes the
-daemon for the configured runtime and falls back to `runc` with a warning
-when it is absent, so the gate stays runnable on hosts without gVisor such
-as CI runners), `AGENT_DNS` (`1.1.1.1` by
+agent is accepted today (the key cannot leak; workspace text can), the
+mandatory `runsc` runtime (gVisor, not an env knob: agent sandboxes always
+run under a userspace kernel — model-generated code never executes
+host-kernel syscalls, `/proc` and `/sys` are synthetic, and netstack leaves
+no raw-socket/ARP surface, so the cleartext key delivery to the key-injection
+sidecar over the per-user bridge cannot be ARP-spoofed from inside a sandbox;
+the manager refuses to boot without the runtime, and both halves of the pair
+run `--cap-drop ALL` — nothing in them needs a Linux capability, and
+`CAP_NET_RAW` would re-open that spoofing vector under runc; control-plane
+containers always run `runc`), `AGENT_DNS` (`1.1.1.1` by
 default, `--dns` for the sandbox plus a resolv.conf rewrite at provision
 time: Docker never writes `--dns` into resolv.conf on user-defined networks
 -- it becomes an upstream of the embedded resolver, which gVisor does not
@@ -593,10 +594,10 @@ pinned-upstream refusal of exfiltration attempts, RAM-only key custody in
 both containers, rotation, validation, L0/L1/recreation durability and pair
 recreation, then restores the keyless default). It exits non-zero on the
 first failure. Before starting the stack the gate probes the Docker daemon
-for the configured `AGENT_RUNTIME`: when the host does not provide it (CI
-runners ship no gVisor) the gate takes the documented `AGENT_RUNTIME=runc`
-fallback and says so in the log, instead of failing every cold provision with
-503 at `docker create`.
+for the `runsc` runtime and fails fast when the host does not provide it:
+gVisor is mandatory (the manager itself refuses to boot without it), because
+under runc a compromised agent could ARP-spoof the sidecar and capture the
+cleartext key delivery.
 
 `./e2e-test/run.sh` asserts that compose declares only the control plane, then
 runs these checks through Caddy only:
