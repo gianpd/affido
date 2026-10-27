@@ -2,7 +2,9 @@
 // DurableHarness, the same registry `ContainerAgent` builds, and the scripted
 // faux model from model.ts driving grep -> read -> annotate -> answer_publish.
 // Asserts the envelope field by field, the idempotent replay, the plain exit,
-// the trace-only report, and re-verification across a harness restart.
+// the trace-only report, and re-verification across a harness restart; the
+// strict exits of §7 (answer_plain both ways, corpus budget, yield bounce)
+// drive their own scripted models at the end of this file.
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -12,6 +14,17 @@ import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import type { EntryId } from "@earendil-works/pi-durable";
+import type { AssistantMessage, JsonObject, Message } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai/models";
+import {
+	fauxAssistantMessage,
+	fauxProvider,
+	fauxText,
+	fauxToolCall,
+	type FauxResponseFactory,
+} from "@earendil-works/pi-ai/providers/faux";
+import { MAX_CORPUS_CALLS } from "./citation-tools.ts";
 import { ContainerAgent, createAgentRegistry } from "./agent.ts";
 import { DurableHarness } from "./harness.ts";
 import { createModel } from "./model.ts";
@@ -242,4 +255,217 @@ test("evidence tampered between runs stops being evidence: the next build drops 
 	const verified = (await reopened.agent.citations("req-gate-5")) as RunCitations;
 	assert.equal(verified.citations[0]?.status, "not_found", "a mutated document is no longer evidence");
 	await reopened.agent.close();
+});
+
+// ── The strict exits of RFC 0006 §7 that no test covered: answer_plain both
+// ways, the corpus-call budget, and the plain-text yield bounce. Each of the
+// last three drives its own scripted faux model, so the shared transcript in
+// model.ts stays untouched; the tools, gate and hooks are the shipped ones. ──
+
+/** The newest toolResult of any tool, as the scripts see it. */
+const lastToolResult = (messages: readonly Message[]): { name: string; text: string; isError: boolean } | undefined => {
+	const last = messages.at(-1);
+	if (last === undefined || last.role !== "toolResult" || !Array.isArray(last.content)) return undefined;
+	return {
+		name: last.toolName,
+		text: last.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
+		isError: last.isError === true,
+	};
+};
+
+/** The newest toolResult of `name`, wherever it sits in the transcript. */
+const lastResultOf = (messages: readonly Message[], name: string): { text: string; isError: boolean } | undefined => {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (message === undefined || message.role !== "toolResult" || message.toolName !== name || !Array.isArray(message.content)) continue;
+		return {
+			text: message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
+			isError: message.isError === true,
+		};
+	}
+	return undefined;
+};
+
+/** The arguments of the newest assistant call of `name` (mirrors model.ts). */
+const lastToolArgs = (messages: readonly Message[], name: string): Record<string, unknown> | undefined => {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (message === undefined || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+		for (const part of [...message.content].reverse()) {
+			if (part.type === "toolCall" && part.name === name) return part.arguments as Record<string, unknown>;
+		}
+	}
+	return undefined;
+};
+
+let callSeq = 0;
+const call = (name: string, args: JsonObject): AssistantMessage =>
+	fauxAssistantMessage([fauxToolCall(name, args, { id: `${name}-${callSeq++}` })], { stopReason: "toolUse" });
+
+/** A faux bundle whose every model call runs `script`, plus the provider state
+ * (callCount) so a test can assert how many times the model was asked. */
+const scriptedBundle = (script: FauxResponseFactory) => {
+	const credentials = new InMemoryCredentialStore();
+	const models = createModels({ credentials });
+	const faux = fauxProvider();
+	faux.setResponses(Array.from({ length: 1_000 }, () => script));
+	models.setProvider(faux.provider);
+	return { bundle: { models, credentials, model: { provider: "faux", modelId: "faux-1" } }, state: faux.state };
+};
+
+const stagedFixture = async (prefix: string, bundle: Awaited<ReturnType<typeof createModel>>) => {
+	const workspace = await mkdtemp(join(tmpdir(), prefix));
+	const sessionDb = join(workspace, "session.sqlite");
+	await new IngestPipeline(workspace).stage({
+		bytes: new TextEncoder().encode(CONTRACT),
+		target: { kind: "document", docId: "doc_42", filename: "contratto.md", title: "Contratto di manutenzione" },
+	});
+	const { agent } = await buildAgent(workspace, sessionDb, bundle);
+	await agent.seedWorkspace();
+	return agent;
+};
+
+test("a strict run with no corpus evidence exits through answer_plain with an empty ledger", async () => {
+	// No document staged: the fixture must not go through stagedFixture, which
+	// always stages the CONTRACT.
+	const workspace = await mkdtemp(join(tmpdir(), "citation-plain-"));
+	const sessionDb = join(workspace, "session.sqlite");
+	const { agent } = await buildAgent(workspace, sessionDb, await createModel());
+	await agent.seedWorkspace();
+
+	// The shared script's grep misses (not_found) and it takes the honest plain
+	// exit instead of citing nothing.
+	const result = (await agent.prompt("When does the maintenance contract renew?", "req-plain-1", "required")) as PromptResult;
+	assert.equal(result.status, "done");
+	assert.equal(result.evidence, "plain");
+	assert.equal(result.evidenceReason, null);
+	assert.deepEqual(result.citations, []);
+	assert.equal(result.answer, "UNANSWERED: the corpus does not contain the renewal date.");
+
+	const report = (await agent.inspect({ limit: 50, report: "citations" })) as CitationsTraceReport;
+	const run = report.runs.find((candidate) => candidate.runId === "req-plain-1");
+	assert.notEqual(run, undefined);
+	assert.equal(run?.plain, true);
+	assert.equal(run?.published, false);
+	assert.equal(run?.corpusCalls, 1); // the one grep that missed
+	await agent.close();
+});
+
+const PLAIN_DODGE = "The maintenance contract renews tacitly on 1 March 2027.";
+
+/** grep -> read -> annotate, then the dodge answer_plain the exit rule refuses. */
+const dodgeScript: FauxResponseFactory = (transcript) => {
+	const tool = lastToolResult(transcript.messages);
+	if (tool === undefined) return call("corpus_grep", { pattern: "rinnova" });
+	if (tool.name === "corpus_grep" && !tool.isError) {
+		const hit = (JSON.parse(tool.text) as { hits: { docId: string; text: string }[] }).hits[0];
+		if (hit !== undefined) return call("corpus_read", { docId: hit.docId, needle: hit.text });
+	}
+	if (tool.name === "corpus_read" && !tool.isError) {
+		const args = lastToolArgs(transcript.messages, "corpus_read");
+		if (typeof args?.docId === "string" && typeof args?.needle === "string") {
+			return call("corpus_annotate", { docId: args.docId, docVersion: 1, kind: "quote", citation: { text: args.needle } });
+		}
+	}
+	if (tool.name === "corpus_annotate" && !tool.isError) {
+		// Evidence exists; the model tries the plain exit anyway (R8's dodge).
+		return call("answer_plain", { markdown: PLAIN_DODGE });
+	}
+	if (tool.name === "answer_plain" && tool.isError) {
+		// Refused with citations_unused: the only way out is the gate itself.
+		const annotate = lastResultOf(transcript.messages, "corpus_annotate");
+		const citationId = annotate === undefined ? "" : (JSON.parse(annotate.text) as { citationId: string }).citationId;
+		return call("answer_publish", {
+			markdown: `## Renewal\n\n${PLAIN_DODGE} [${citationId}].\n`,
+			citationIds: [citationId],
+		});
+	}
+	return fauxAssistantMessage([fauxText("The script reached an unexpected state.")]);
+};
+
+test("answer_plain after a verified annotation is refused with citations_unused", async () => {
+	const { bundle } = scriptedBundle(dodgeScript);
+	const agent = await stagedFixture("citation-dodge-", bundle);
+
+	const result = (await agent.prompt("When does the maintenance contract renew?", "req-dodge-1", "required")) as PromptResult;
+	assert.equal(result.status, "done");
+	assert.equal(result.evidence, "cited");
+	const token = result.citations[0]?.citationId ?? "";
+	assert.notEqual(token, "");
+	assert.ok(result.answer?.includes(`[${token}]`));
+
+	const report = (await agent.inspect({ limit: 50, report: "citations" })) as CitationsTraceReport;
+	const run = report.runs.find((candidate) => candidate.runId === "req-dodge-1");
+	assert.notEqual(run, undefined);
+	assert.equal(run?.published, true);
+	assert.equal(run?.publishRejected.citations_unused, 1);
+	assert.equal(run?.used.length, 1);
+	assert.equal(run?.exact, true);
+	await agent.close();
+});
+
+/** Burns the corpus budget: one grep per turn until the 49th is refused. */
+const budgetScript: FauxResponseFactory = (transcript) => {
+	const tool = lastToolResult(transcript.messages);
+	if (tool !== undefined && tool.isError && tool.text.includes("turn_budget_exhausted")) {
+		return call("answer_plain", { markdown: "UNANSWERED: the corpus-call budget was spent before the renewal date was found." });
+	}
+	return call("corpus_grep", { pattern: "rinnova" });
+};
+
+test("the 49th corpus call is refused with turn_budget_exhausted and the run ends visibly", async () => {
+	const { bundle } = scriptedBundle(budgetScript);
+	const agent = await stagedFixture("citation-budget-", bundle);
+
+	const result = (await agent.prompt("When does the maintenance contract renew?", "req-budget-1", "required")) as PromptResult;
+	assert.equal(result.status, "done");
+	assert.equal(result.evidence, "plain", "budget exhaustion is a visible exit, never a silent hang");
+	assert.ok(result.answer?.startsWith("UNANSWERED: the corpus-call budget"));
+
+	const report = (await agent.inspect({ limit: 200, report: "citations" })) as CitationsTraceReport;
+	const run = report.runs.find((candidate) => candidate.runId === "req-budget-1");
+	assert.notEqual(run, undefined);
+	assert.equal(run?.corpusCalls, MAX_CORPUS_CALLS + 1); // 48 served, the 49th counted and refused
+
+	// The refusal itself is in the trace: exactly one refused grep, 48 served.
+	const trace = (await agent.inspect({ limit: 200 })) as TraceReport;
+	const greps = trace.entries.items.filter((entry) => entry.role === "toolResult" && entry.toolName === "corpus_grep");
+	assert.equal(greps.length, MAX_CORPUS_CALLS + 1);
+	const refused = greps.filter((entry) => entry.isError === true);
+	assert.equal(refused.length, 1);
+	const detail = await agent.inspectEntry(refused[0]?.id as EntryId);
+	const text = JSON.stringify(detail.messages);
+	assert.match(text, /turn_budget_exhausted/);
+	assert.match(text, /budget of 48/);
+	await agent.close();
+});
+
+const PROSE = "The maintenance contract renews tacitly on 1 March 2027, answered from memory.";
+
+/** Never calls a tool: every model call yields bare prose. */
+const proseScript: FauxResponseFactory = () => fauxAssistantMessage([fauxText(PROSE)]);
+
+test("a bare-text strict answer is bounced twice, then ends evidence none with no_gate_exit", async () => {
+	const { bundle, state } = scriptedBundle(proseScript);
+	const agent = await stagedFixture("citation-prose-", bundle);
+
+	const result = (await agent.prompt(
+		"When does the maintenance contract renew? Answer from memory.",
+		"req-prose-1",
+		"required",
+	)) as PromptResult;
+	assert.equal(result.status, "done");
+	assert.equal(result.answer, PROSE);
+	assert.equal(result.evidence, "none");
+	assert.equal(result.evidenceReason, "no_gate_exit");
+	assert.deepEqual(result.citations, []);
+	assert.equal(state.callCount, 3, "one yield plus two bounces; the third yield is let through");
+
+	const report = (await agent.inspect({ limit: 50, report: "citations" })) as CitationsTraceReport;
+	const run = report.runs.find((candidate) => candidate.runId === "req-prose-1");
+	assert.notEqual(run, undefined);
+	assert.equal(run?.published, false);
+	assert.equal(run?.plain, false);
+	assert.equal(run?.corpusCalls, 0);
+	await agent.close();
 });

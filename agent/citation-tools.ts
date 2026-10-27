@@ -8,6 +8,7 @@ import { normalize } from "node:path";
 import { defineExtension, defineTool, hook, section } from "@earendil-works/pi-durable";
 import { GenerationTask, ToolTask } from "@earendil-works/pi-durable";
 import type { Extension, ToolExecutionApi, ToolExecutionResult } from "@earendil-works/pi-durable";
+import type { Message } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import {
 	DEFAULT_GREP_LIMIT,
@@ -351,21 +352,43 @@ const strictSection = () =>
 		);
 	});
 
-/** Bounce plain-text final answers in a strict run back to the gate (§5.5). */
-const strictYieldHook = () =>
+/** Bounce plain-text final answers in a strict run back to the gate (§5.5).
+ * Each bounce hands the run to a successor generation task whose memos start
+ * empty, so the counter cannot live in one memo across yields.
+ * `beforeRequest` of every generation sees the whole model context — the
+ * bounce continuations included — and records how many came before; `onYield`
+ * reads that count (same task, so the memo is shared) and lets the next prose
+ * answer end the run instead of bouncing forever. */
+const strictBounceHooks = () => [
+	hook(GenerationTask, {
+		async beforeRequest(request, api, context) {
+			const run = await readCurrentRun(api, api.conversationId, context);
+			if (run === null || !run.strict) return undefined;
+			let seen = 0;
+			for (const message of request.messages) {
+				if (message.role !== "user") continue;
+				const text =
+						typeof message.content === "string"
+							? message.content
+							: message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+				if (text.includes(BOUNCE_MESSAGE)) seen += 1;
+			}
+			await api.memo("citations.bounces.seen", seen, context);
+			return undefined;
+		},
+	}),
 	hook(GenerationTask, {
 		async onYield(_answer, api, context) {
 			const run = await readCurrentRun(api, api.conversationId, context);
 			if (run === null || !run.strict) return undefined;
 			const state = await readRun(api, api.conversationId, run.runId, context);
 			if (state === undefined || state.published !== null || state.plain !== null) return undefined;
-			const previous = await api.memo<number>("citations.bounces", context);
-			const bounces = (typeof previous === "number" ? previous : 0) + 1;
-			await api.memo("citations.bounces", bounces, context);
-			if (bounces > MAX_YIELD_BOUNCES) return undefined; // let it end; the envelope reports evidence "none"
+			const seen = (await api.memo<number>("citations.bounces.seen", context)) ?? 0;
+			if (seen >= MAX_YIELD_BOUNCES) return undefined; // let it end; the envelope reports evidence "none"
 			return { continue: BOUNCE_MESSAGE };
 		},
-	});
+	}),
+];
 
 /** The extension `ContainerAgent` installs beside CodingTools. */
 export const citationExtension = (deps: CitationToolDeps): Extension =>
@@ -373,5 +396,5 @@ export const citationExtension = (deps: CitationToolDeps): Extension =>
 		name: "citations",
 		sections: [strictSection()],
 		tools: [grepTool(deps), readTool(deps), annotateTool(deps), publishTool(deps), plainTool(deps)],
-		hooks: [strictYieldHook(), toolGate(deps)],
+		hooks: [...strictBounceHooks(), toolGate(deps)],
 	});
