@@ -73,11 +73,15 @@ export const workspacePath = (workspace: string, path: string): string => {
 	return resolved;
 };
 
-/** Bounds of one client-chosen path (PRD 0003 §6), shared by every workspace
- * tree the client writes or reads path-by-path: uploads, skills, artifacts. */
+/** Bounds of one client-chosen path relative to a tree root, shared by every
+ * workspace tree the client writes or reads path-by-path: uploads, skills,
+ * artifacts. Segments and totals are counted in UTF-8 bytes and aligned with
+ * the filesystem (NAME_MAX 255, PATH_MAX 4096 minus the workspace prefix):
+ * real-world uploads (e.g. Italian procurement documents) carry basenames well
+ * over 100 bytes, so the cap must be the OS limit, not a shorter guess. */
 const SEGMENTS_MAX = 10;
-const SEGMENT_LENGTH_MAX = 64;
-const PATH_LENGTH_MAX = 240;
+const SEGMENT_LENGTH_MAX = 255;
+const PATH_LENGTH_MAX = 1024;
 /** Separators and wildcards that a path component must never carry. */
 const FORBIDDEN_CHARS = /[\u0000-\u001f\\:*?"<>|]/;
 
@@ -88,10 +92,10 @@ const FORBIDDEN_CHARS = /[\u0000-\u001f\\:*?"<>|]/;
  * path: only a tree listing of the root accepts it.
  */
 export const safeTreePath = (value: string): string => {
-	if (value === "" || value.length > PATH_LENGTH_MAX) {
+	if (value === "" || Buffer.byteLength(value, "utf8") > PATH_LENGTH_MAX) {
 		throw new HttpError(400, {
 			error: "invalid_tree_path",
-			message: `path must be 1-${PATH_LENGTH_MAX} characters, relative to the tree root`,
+			message: `path must be 1-${PATH_LENGTH_MAX} UTF-8 bytes, relative to the tree root`,
 		});
 	}
 	if (FORBIDDEN_CHARS.test(value)) {
@@ -105,10 +109,15 @@ export const safeTreePath = (value: string): string => {
 		throw new HttpError(400, { error: "invalid_tree_path", message: `path must be at most ${SEGMENTS_MAX} segments deep` });
 	}
 	for (const segment of segments) {
-		if (segment === "" || segment === "." || segment === ".." || segment.length > SEGMENT_LENGTH_MAX) {
+		if (
+			segment === "" ||
+			segment === "." ||
+			segment === ".." ||
+			Buffer.byteLength(segment, "utf8") > SEGMENT_LENGTH_MAX
+		) {
 			throw new HttpError(400, {
 				error: "invalid_tree_path",
-				message: `every segment must be 1-${SEGMENT_LENGTH_MAX} characters and not "." or ".."`,
+				message: `every segment must be 1-${SEGMENT_LENGTH_MAX} UTF-8 bytes and not "." or ".."`,
 			});
 		}
 	}

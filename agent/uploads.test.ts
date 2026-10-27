@@ -21,6 +21,11 @@ test("safeTreePath accepts nested trees and rejects anything path-like", () => {
 	// Unicode and punctuation are legal filenames; only the dangerous shapes are not.
 	assert.equal(safeTreePath("Relazione finale (2).docx"), "Relazione finale (2).docx");
 	assert.equal(safeTreePath("skïlls/nést/dfaçil.md"), "skïlls/nést/dfaçil.md");
+	// Real procurement basenames run past 100 bytes; the cap is the filesystem's
+	// NAME_MAX, not a shorter guess.
+	const longTender =
+		"DD_3683_2026 - Allegato N° 16.0 - DD-3683-2026-All_16-POD_ES_RG01_RELAZIONE_GENERALE_DI_PROGETTO_V02.pdf.pdf";
+	assert.equal(safeTreePath(`REGGIOCALABRIA/${longTender}`), `REGGIOCALABRIA/${longTender}`);
 	for (const bad of [
 		"",
 		"/abs/path",
@@ -34,8 +39,10 @@ test("safeTreePath accepts nested trees and rejects anything path-like", () => {
 		"a:b",
 		"a*b?",
 		"a\nb",
-		`${"x".repeat(241)}`,
-		`x/${"y".repeat(65)}`,
+		`${"x".repeat(1025)}`,
+		`x/${"y".repeat(256)}`,
+		// 255-byte NAME_MAX is counted in UTF-8 bytes, not characters.
+		"à".repeat(128),
 		Array.from({ length: 11 }, () => "a").join("/"),
 	]) {
 		assert.throws(() => safeTreePath(bad), HttpError, `expected ${JSON.stringify(bad)} to be rejected`);
