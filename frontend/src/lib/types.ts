@@ -136,6 +136,9 @@ export type PromptResult = {
 	evidenceReason: string | null;
 	citations: Citation[];
 	citationsMode: 'required' | 'free';
+	/** RFC 0016 §7: the user authorised web search for this run (absent on
+	 * pre-RFC images, where web is not available at all). */
+	webMode?: 'allowed' | 'off';
 	runId: string | null;
 	/** Files this run created or changed under `artifacts/` (RFC 0009 R7). */
 	artifacts: ArtifactView[];
@@ -148,6 +151,9 @@ export type SandboxStatus = {
 	/** sha256(key)[:12] of the delivered BYOK key, or null; the only key-derived
 	 * value the sandbox reports (RFC 0012 §5.4). */
 	keyFingerprint?: string | null;
+	/** RFC 0016 §7: the manager's control token landed in this process. A
+	 * boolean, never the token itself. */
+	webControl?: boolean;
 	workspace?: string;
 	conversationId: number | null;
 	entries: number;

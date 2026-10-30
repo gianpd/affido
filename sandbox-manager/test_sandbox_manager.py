@@ -378,6 +378,14 @@ class CreateArgsTest(unittest.TestCase):
         env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
         self.assertIn(f"SIDECAR_URL=http://{sm.sidecar_name('user-sc')}:{sm.SIDECAR_PORT}", env)
 
+    def test_create_args_bakes_the_websearch_url(self) -> None:
+        # RFC 0016 §5: the web tools resolve the node through this env; the
+        # hostname is a baked /etc/hosts entry added at create time.
+        args = sm.create_args("user-ws")
+        env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+        self.assertIn(
+            f"WEBSEARCH_URL=http://{sm.websearch_name('user-ws')}:{sm.WEBSEARCH_PORT}", env)
+
     def test_guest_hosts_are_baked_sorted_before_the_image(self) -> None:
         args = sm.create_args("user-runtime",
                               hosts={"caddy": "10.0.0.9", "sandbox-manager": "10.0.0.2"})
@@ -557,6 +565,164 @@ class WaitHealthySidecarTest(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "sidecar_unhealthy")
         finally:
             sm.READY_TIMEOUT_S, sm.sidecar_get = saved
+
+
+class WebsearchCreateArgsTest(unittest.TestCase):
+    """RFC 0016 §4: the per-user web-search node — same network as the sandbox,
+    no volumes, no published ports, own reduced caps, Phase 0 hardening, and the
+    two callers it is allowed to answer (its own subnet) plus the baked search
+    service hosts it dials."""
+
+    def test_websearch_create_args_shape(self) -> None:
+        user = "user-web"
+        args = sm.websearch_create_args(
+            user, hosts={"searxng": "10.0.0.8"}, peers=["10.42.0.0/16"])
+        self.assertEqual(args[0], "create")
+        self.assertIn(sm.websearch_name(user), args)
+        self.assertIn(sm.network_name(user), args)
+        # Own reduced caps, never the agent's.
+        self.assertEqual(args[args.index("--memory") + 1], sm.WEBSEARCH_MEMORY)
+        self.assertEqual(args[args.index("--cpus") + 1], sm.WEBSEARCH_CPUS)
+        self.assertNotEqual(sm.WEBSEARCH_MEMORY, sm.AGENT_MEMORY)
+        # No writable volume, no published port: a fetched page has nowhere to go.
+        self.assertNotIn("-v", args)
+        self.assertNotIn("-p", args)
+        env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+        self.assertIn(f"PORT={sm.WEBSEARCH_PORT}", env)
+        self.assertIn("WEBSEARCH_PEERS=10.42.0.0/16", env)
+        self.assertIn(f"SEARXNG_URL={sm.SEARXNG_URL}", env)
+        self.assertIn(f"CAMOFOX_URL={sm.CAMOFOX_URL}", env)
+        self.assertIn(f"WEBSEARCH_USER={sm.slug(user)}", env)
+        for entry in env:
+            for forbidden in ("WORKSPACE", "SESSION_DB", "AGENT_NAME", "IDLE_MS",
+                              "SIDECAR_URL", "WEBSEARCH_URL"):
+                self.assertFalse(entry.startswith(forbidden + "="), entry)
+        # Phase 0 hardening and gVisor, like every container this manager creates.
+        self.assertIn(f"seccomp={sm.SECCOMP_PROFILE}", args)
+        self.assertEqual(args[args.index("--ulimit") + 1], "core=0")
+        self.assertEqual(args[args.index("--cap-drop") + 1], "ALL")
+        self.assertEqual(args[args.index("--runtime") + 1], "runsc")
+        # The search services are baked hosts (no embedded DNS under runsc) and
+        # no internet resolver is configured.
+        flags = [args[i + 1] for i, f in enumerate(args) if f == "--add-host"]
+        self.assertEqual(flags, ["searxng:10.0.0.8"])
+        self.assertNotIn("--dns", args)
+        # Same image, third entrypoint: the image and its command come last.
+        self.assertEqual(args[-4], sm.AGENT_IMAGE)
+        self.assertIn("node /app/websearch.ts", args[-1])
+
+    def test_camofox_key_is_optional_and_never_a_volume(self) -> None:
+        saved = sm.CAMOFOX_API_KEY
+        try:
+            sm.CAMOFOX_API_KEY = ""
+            self.assertNotIn("CAMOFOX_API_KEY",
+                             " ".join(sm.websearch_create_args("u-web-key")))
+            sm.CAMOFOX_API_KEY = "shared-key"
+            args = sm.websearch_create_args("u-web-key")
+            env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+            self.assertIn("CAMOFOX_API_KEY=shared-key", env)
+            self.assertNotIn("-v", args)
+        finally:
+            sm.CAMOFOX_API_KEY = saved
+
+
+class WebsearchNetworkTest(unittest.TestCase):
+    """RFC 0016 §4: websearch-in is internal (no egress in the node), the
+    operator's services own websearch-out. An existing non-internal
+    websearch-in fails closed instead of weakening the containment claim."""
+
+    def setUp(self) -> None:
+        self.saved = {name: getattr(sm, name) for name in
+                      ("docker", "network_exists", "invalidate_peer_cache")}
+        self.created: list[tuple] = []
+
+    def tearDown(self) -> None:
+        for name, value in self.saved.items():
+            setattr(sm, name, value)
+
+    def fake_docker(self, *args: str, **kwargs: object) -> str:
+        if "inspect" in args:
+            return "true"
+        self.created.append(args)
+        return ""
+
+    def test_creates_internal_in_and_bridge_out(self) -> None:
+        sm.docker = self.fake_docker
+        sm.network_exists = lambda name: False
+        sm.invalidate_peer_cache = lambda: None
+        sm.ensure_websearch_networks()
+        by_name = {args[-1]: args for args in self.created}
+        self.assertIn(sm.WEBSEARCH_IN, by_name)
+        self.assertIn("--internal", by_name[sm.WEBSEARCH_IN])
+        self.assertNotIn("--internal", by_name[sm.WEBSEARCH_OUT])
+
+    def test_existing_networks_are_not_recreated(self) -> None:
+        sm.docker = self.fake_docker
+        sm.network_exists = lambda name: True
+        sm.ensure_websearch_networks()
+        self.assertEqual(self.created, [])
+
+    def test_non_internal_websearch_in_fails_closed(self) -> None:
+        sm.network_exists = lambda name: True
+        sm.docker = lambda *args, **kwargs: "false"
+        with self.assertRaises(RuntimeError):
+            sm.ensure_websearch_networks()
+
+
+class WebsearchHealthTest(unittest.TestCase):
+    def test_unreachable_node_times_out(self) -> None:
+        saved = (sm.READY_TIMEOUT_S, sm.websearch_get)
+        sm.READY_TIMEOUT_S = 0.2
+        sm.websearch_get = lambda c, p, timeout=3.0: (_ for _ in ()).throw(ConnectionError("dead"))
+        try:
+            with self.assertRaises(TimeoutError):
+                sm.wait_healthy_websearch("web-c")
+        finally:
+            sm.READY_TIMEOUT_S, sm.websearch_get = saved
+
+
+class WebsearchAuthorisationTest(unittest.TestCase):
+    """RFC 0016 §7: the per-user control token that makes a run registration
+    unforgeable by a bash child, derived from MANAGER_TOKEN and delivered to
+    both the node and the agent on every resolve."""
+
+    def setUp(self) -> None:
+        self.saved = (sm.MANAGER_TOKEN, sm.websearch_post, sm.agent_post)
+        sm.MANAGER_TOKEN = "manager-secret-for-tests"
+
+    def tearDown(self) -> None:
+        sm.MANAGER_TOKEN, sm.websearch_post, sm.agent_post = self.saved
+
+    def test_control_token_is_stable_per_user_and_distinct_across_users(self) -> None:
+        first = sm.websearch_control_token("user-a")
+        self.assertEqual(len(first), 64)
+        self.assertTrue(all(c in "0123456789abcdef" for c in first))
+        self.assertEqual(first, sm.websearch_control_token("user-a"))
+        self.assertNotEqual(first, sm.websearch_control_token("user-b"))
+
+    def test_delivery_posts_the_same_token_to_node_and_agent(self) -> None:
+        node_posts: list = []
+        agent_posts: list = []
+        sm.websearch_post = lambda c, p, payload, timeout=5.0: node_posts.append((p, payload))
+        sm.agent_post = lambda c, p, payload, timeout=15.0: agent_posts.append((p, payload))
+        sm.deliver_websearch_control("user-a", "node-a", "agent-a")
+        self.assertEqual(node_posts[0][0], "/control")
+        self.assertEqual(agent_posts[0][0], "/webconfig")
+        self.assertEqual(
+            node_posts[0][1]["token"], agent_posts[0][1]["controlToken"])
+
+    def test_missing_manager_token_fails_closed(self) -> None:
+        sm.MANAGER_TOKEN = None
+        with self.assertRaises(sm.ManagerError) as ctx:
+            sm.websearch_control_token("user-a")
+        self.assertEqual(ctx.exception.code, "token_unavailable")
+
+    def test_delivery_is_fail_soft_when_the_node_is_down(self) -> None:
+        sm.websearch_post = lambda *args, **kwargs: (_ for _ in ()).throw(
+            sm.ManagerError("delivery_failed", "node down"))
+        sm.agent_post = lambda *args, **kwargs: None
+        # No raise: chat and uploads must keep working without the node.
+        sm.deliver_websearch_control("user-a", "node-a", "agent-a")
 
 
 if __name__ == "__main__":

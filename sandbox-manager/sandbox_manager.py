@@ -69,6 +69,23 @@ AGENT_CPUS      = os.getenv("AGENT_CPUS", "1.0")
 SIDECAR_PORT    = int(os.getenv("SIDECAR_PORT", "8081"))
 SIDECAR_MEMORY  = os.getenv("SIDECAR_MEMORY", "128m")
 SIDECAR_CPUS    = os.getenv("SIDECAR_CPUS", "0.25")
+# RFC 0016: the per-user web-search node. One more container in the pair, on the
+# per-user internal network and on the shared search network. No volumes, no
+# user code, no egress: SearXNG and Camofox are its only outbound peers.
+WEBSEARCH_PORT   = int(os.getenv("WEBSEARCH_PORT", "8082"))
+WEBSEARCH_MEMORY = os.getenv("WEBSEARCH_MEMORY", "192m")
+WEBSEARCH_CPUS   = os.getenv("WEBSEARCH_CPUS", "0.5")
+# Operator-supplied search infrastructure. websearch-in is the internal network
+# shared by every per-user node and the search services; websearch-out is the
+# plain bridge where the services get their egress. The node is never attached
+# to websearch-out.
+WEBSEARCH_IN     = os.getenv("WEBSEARCH_IN", "websearch-in")
+WEBSEARCH_OUT    = os.getenv("WEBSEARCH_OUT", "websearch-out")
+SEARXNG_URL      = os.getenv("SEARXNG_URL", "http://searxng:8080")
+CAMOFOX_URL      = os.getenv("CAMOFOX_URL", "http://camofox-browser:9377")
+# Shared operator secret for Camofox's /evaluate. It never enters a sandbox:
+# only the node container receives it, and no tool echoes it.
+CAMOFOX_API_KEY  = os.getenv("CAMOFOX_API_KEY", "")
 # RFC 0013 §6.4 P0.1: explicit seccomp profile (deny-list, EPERM) for the
 # ptrace_may_access-gated syscall family, shipped in this image and read
 # client-side by the docker CLI (the daemon never touches the host fs for
@@ -150,6 +167,12 @@ def sidecar_name(user_id: str) -> str:
     return container_name(user_id) + "-sidecar"
 
 
+def websearch_name(user_id: str) -> str:
+    """RFC 0016 §4: the per-user web-search node. Dual-homed on the user's
+    network and the shared search network; created beside the pair."""
+    return container_name(user_id) + "-websearch"
+
+
 def network_name(user_id: str) -> str:
     """One bridge network per user: agents cannot reach each other's :8080."""
     return "pi-net-" + slug(user_id)
@@ -172,6 +195,84 @@ def network_create_args() -> list[str]:
     if AGENT_EGRESS != "open":
         args += ["--internal", "--opt", "com.docker.network.bridge.enable_ip_masquerade=false"]
     return args
+
+
+def network_subnets(net: str) -> list[str]:
+    """The CIDRs of one network, for the node's peer guard."""
+    cp = subprocess.run(
+        ["docker", "network", "inspect", "-f",
+         "{{range .IPAM.Config}}{{.Subnet}} {{end}}", net],
+        capture_output=True, text=True,
+    )
+    return cp.stdout.split() if cp.returncode == 0 else []
+
+
+def ensure_websearch_networks() -> None:
+    """RFC 0016 §4: the two operator networks, created when absent.
+
+    `websearch-in` is `--internal` and carries no NAT: the node's only peers are
+    the search services, which own the egress. `websearch-out` is a plain bridge
+    where SearXNG and Camofox reach the internet. An existing `websearch-in`
+    that is not internal would silently give the node egress, so it fails
+    closed here instead of weakening the node's containment claim.
+    """
+    if not network_exists(WEBSEARCH_IN):
+        docker(
+            "network", "create", "--internal",
+            "--opt", "com.docker.network.bridge.enable_ip_masquerade=false",
+            "--label", "pi-affido-websearch=1", WEBSEARCH_IN,
+        )
+        invalidate_peer_cache()
+    internal = docker("network", "inspect", "-f", "{{.Internal}}", WEBSEARCH_IN).strip()
+    if internal != "true":
+        raise RuntimeError(
+            f"{WEBSEARCH_IN} exists but is not --internal: the web-search node"
+            " would gain internet egress (RFC 0016). Recreate it --internal."
+        )
+    if not network_exists(WEBSEARCH_OUT):
+        # Plain bridge: this is where the operator's search services get NAT.
+        docker("network", "create", "--label", "pi-affido-websearch=1", WEBSEARCH_OUT)
+        invalidate_peer_cache()
+
+
+def websearch_service_hosts() -> dict[str, str]:
+    """The baked /etc/hosts entries for SearXNG and Camofox.
+
+    gVisor's netstack ignores Docker's embedded DNS, so the node cannot resolve
+    service names at runtime. Both URLs normally point at containers on
+    WEBSEARCH_IN; a hostname with no matching container is simply omitted and
+    the node reports the upstream as unavailable at call time.
+    """
+    wanted = set()
+    for value in (SEARXNG_URL, CAMOFOX_URL):
+        host = urllib.parse.urlsplit(value).hostname
+        if not host:
+            continue
+        try:
+            ipaddress.ip_address(host)
+            continue  # already an address: nothing to bake
+        except ValueError:
+            pass
+        wanted.add(host)
+    if not wanted or not network_exists(WEBSEARCH_IN):
+        return {}
+    cp = subprocess.run(
+        ["docker", "network", "inspect", WEBSEARCH_IN, "-f", "{{json .Containers}}"],
+        capture_output=True, text=True,
+    )
+    if cp.returncode != 0:
+        return {}
+    try:
+        containers = json.loads(cp.stdout or "{}")
+    except json.JSONDecodeError:
+        return {}
+    hosts: dict[str, str] = {}
+    for info in (containers or {}).values():
+        name = info.get("Name")
+        address = (info.get("IPv4Address") or "").split("/", 1)[0]
+        if name in wanted and address:
+            hosts[name] = address
+    return hosts
 
 
 def workspace_vol(user_id: str) -> str:
@@ -921,6 +1022,8 @@ def create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
         # RFC 0013 §6.2: where the agent finds its sidecar. Inert until a
         # viaSidecar /config delivery arrives; faux/keyless runs never dial it.
         "-e", f"SIDECAR_URL=http://{sidecar_name(user_id)}:{SIDECAR_PORT}",
+        # RFC 0016: the node the web tools dial. Inert for faux/keyless chat.
+        "-e", f"WEBSEARCH_URL=http://{websearch_name(user_id)}:{WEBSEARCH_PORT}",
     ]
     if AGENT_CITATIONS_DEFAULT:
         # RFC 0006 §5.9: the mode of /prompt requests that omit the `citations`
@@ -967,6 +1070,53 @@ def sidecar_create_args(user_id: str, hosts: dict[str, str] | None = None) -> li
     # The agent image has no ENTRYPOINT, so overriding CMD selects the second
     # entrypoint of the same image (RFC 0013 §6.1: one image, two entrypoints).
     args += [AGENT_IMAGE, "sh", "-c", "ulimit -c 0 && exec node /app/sidecar.ts"]
+    return args
+
+
+def websearch_create_args(
+    user_id: str,
+    hosts: dict[str, str] | None = None,
+    peers: list[str] | None = None,
+) -> list[str]:
+    """RFC 0016 §4: the web-search node of one user's sandbox.
+
+    Same per-user --internal network as the agent (the only edge into it), plus
+    the shared search network attached by provision() after create. No volumes:
+    a fetched page has nowhere to be written. No published ports. gVisor and
+    the Phase 0 hardening apply like every other container this manager
+    creates. `WEBSEARCH_PEERS` is the per-user subnet: the node refuses peers
+    outside it, so another tenant's node on websearch-in is not a caller.
+
+    SearXNG and Camofox are resolved through baked /etc/hosts entries, not
+    Docker's embedded DNS (dead under runsc). The operator's hostnames must
+    match the containers on WEBSEARCH_IN; a missing entry makes the node fail
+    its upstream call, never the sandbox.
+
+    The Camofox key is a shared operator secret, not a tenant credential: it
+    travels in the node's env and never reaches the sandbox (no tool echoes it).
+    """
+    args = [
+        "create", "--name", websearch_name(user_id),
+        "--network", network_name(user_id),
+        "--label", "pi-sandbox-manager=1",
+        "--memory", WEBSEARCH_MEMORY,
+        "--cpus", WEBSEARCH_CPUS,
+        "--runtime", AGENT_RUNTIME,
+        "--security-opt", "no-new-privileges",
+        *hardening_args(),
+        "--workdir", "/app",
+        "-e", f"PORT={WEBSEARCH_PORT}",
+        "-e", "WEBSEARCH_PEERS=" + ",".join(peers or []),
+        "-e", f"SEARXNG_URL={SEARXNG_URL}",
+        "-e", f"CAMOFOX_URL={CAMOFOX_URL}",
+        "-e", f"WEBSEARCH_USER={slug(user_id)}",
+    ]
+    if CAMOFOX_API_KEY:
+        args += ["-e", f"CAMOFOX_API_KEY={CAMOFOX_API_KEY}"]
+    for name, ip in sorted((hosts or {}).items()):
+        args += ["--add-host", f"{name}:{ip}"]
+    # Same image, third entrypoint: no internet DNS is configured on purpose.
+    args += [AGENT_IMAGE, "sh", "-c", "ulimit -c 0 && exec node /app/websearch.ts"]
     return args
 
 
@@ -1059,6 +1209,14 @@ def sidecar_post(container: str, path: str, payload: dict[str, Any], timeout: fl
     return _container_post(container, SIDECAR_PORT, path, payload, timeout)
 
 
+def websearch_get(container: str, path: str, timeout: float = 3.0) -> dict[str, Any]:
+    return _container_get(container, WEBSEARCH_PORT, path, timeout)
+
+
+def websearch_post(container: str, path: str, payload: dict[str, Any], timeout: float = 5.0) -> dict[str, Any]:
+    return _container_post(container, WEBSEARCH_PORT, path, payload, timeout)
+
+
 def agent_alive(container: str) -> bool:
     try:
         agent_get(container, "/health", timeout=2.0)
@@ -1070,6 +1228,14 @@ def agent_alive(container: str) -> bool:
 def sidecar_alive(container: str) -> bool:
     try:
         sidecar_get(container, "/health", timeout=2.0)
+        return True
+    except Exception:
+        return False
+
+
+def websearch_alive(container: str) -> bool:
+    try:
+        websearch_get(container, "/health", timeout=2.0)
         return True
     except Exception:
         return False
@@ -1206,6 +1372,22 @@ def wait_healthy_sidecar(container: str) -> dict[str, Any]:
     )
 
 
+def wait_healthy_websearch(container: str) -> dict[str, Any]:
+    """The node's liveness. Unlike the sidecar this is not on the model path:
+    a node that never answers is logged and the sandbox still serves chat, with
+    the web tools reporting `websearch_unavailable` at call time. The deadline
+    is shorter than the sidecar's on purpose: a broken optional node must not
+    hold a cold provision for the full READY_TIMEOUT_S."""
+    timeout = min(READY_TIMEOUT_S, 10)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            return websearch_get(container, "/health")
+        except Exception:
+            time.sleep(0.25)
+    raise TimeoutError(f"{container} was not healthy within {timeout}s")
+
+
 def container_ip(net: str, container: str) -> str | None:
     """The IPv4 a container holds on one network (None when not connected)."""
     cp = subprocess.run(
@@ -1255,13 +1437,25 @@ def dns_rewrite(container: str) -> None:
 
 
 def start_pair(user_id: str, container: str, sidecar: str) -> None:
-    """Start both halves and make them healthy (RFC 0013 R7).
+    """Start the agent, its key sidecar and the web-search node (RFC 0013 R7,
+    RFC 0016 §4).
 
     Re-runs the resolv.conf rewrite on every start: this daemon regenerates
     /etc/resolv.conf for user-defined networks at each container start, and
     under runsc the 127.0.0.11 it leaves behind is unreachable — without the
     rewrite, a pair that comes back from L1 eviction cannot resolve internet
-    names (the sidecar's pinned upstreams first of all)."""
+    names (the sidecar's pinned upstreams first of all).
+
+    The node has no internet names to resolve (its two upstreams are baked
+    /etc/hosts entries) and its health is deliberately not fatal: chat still
+    works while the search stack is down, and the web tools answer a named
+    `websearch_unavailable` instead of failing the whole resolve."""
+    websearch = websearch_name(user_id)
+    try:
+        ensure_started(websearch)
+        wait_healthy_websearch(websearch)
+    except Exception as exc:
+        log.warning("web-search node %s is unavailable: %s", websearch, exc)
     ensure_started(sidecar)
     if AGENT_DNS:
         dns_rewrite(sidecar)
@@ -1274,11 +1468,16 @@ def start_pair(user_id: str, container: str, sidecar: str) -> None:
 
 
 def provision(user_id: str) -> None:
-    """Create the per-user network/volumes/agent+sidecar pair if absent, then
-    start both (RFC 0013 §6.3: lifecycle is a pair, R7)."""
+    """Create the per-user network/volumes/agent+sidecar pair and the web-search
+    node if absent, then start the group (RFC 0013 §6.3, RFC 0016 §4)."""
     container = container_name(user_id)
     sidecar = sidecar_name(user_id)
-    if docker_running(container) is None or docker_running(sidecar) is None:
+    websearch = websearch_name(user_id)
+    if (
+        docker_running(container) is None
+        or docker_running(sidecar) is None
+        or docker_running(websearch) is None
+    ):
         net = network_name(user_id)
         created_net = False
         if not network_exists(net):
@@ -1301,24 +1500,85 @@ def provision(user_id: str) -> None:
             docker("network", "connect", net, guest, check=False)
         docker("volume", "create", workspace_vol(user_id))
         docker("volume", "create", data_vol(user_id))
-        guests = guest_ips(net)
+        # RFC 0016: the shared search networks exist even when the operator's
+        # SearXNG/Camofox are not attached yet; the node then fails its upstream
+        # call with a named error instead of taking the sandbox down.
+        ensure_websearch_networks()
+        hosts = guest_ips(net)
         sidecar_recreated = False
         if docker_running(sidecar) is None:
-            docker(*sidecar_create_args(user_id, guests))
+            docker(*sidecar_create_args(user_id, hosts))
             sidecar_recreated = True
-        if docker_running(container) is None or sidecar_recreated:
-            # The agent's route to the sidecar is a baked /etc/hosts entry
-            # (runsc cannot use Docker's embedded DNS), fixed at create time.
-            # A recreated sidecar may hold a new IP, so the pair is recreated
-            # together — durable state lives on volumes, nothing is lost (R7).
+        websearch_recreated = False
+        if docker_running(websearch) is None or created_net:
+            # A new per-user network has a new subnet, and the node's peer guard
+            # is baked at create time: recreate it rather than leave it refusing
+            # every caller.
+            if docker_running(websearch) is not None:
+                docker("rm", "-f", websearch, check=False)
+            docker(*websearch_create_args(
+                user_id,
+                websearch_service_hosts(),
+                network_subnets(net),
+            ))
+            websearch_recreated = True
+        # (Re-)attach the shared search network. Idempotent; a manager restart
+        # or a rebuilt websearch-in can leave the node detached.
+        docker("network", "connect", WEBSEARCH_IN, websearch, check=False)
+        if (
+            docker_running(container) is None
+            or sidecar_recreated
+            or websearch_recreated
+        ):
+            # The agent's routes to the sidecar and the node are baked /etc/hosts
+            # entries (runsc cannot use Docker's embedded DNS), fixed at create
+            # time. A recreated container may hold a new IP, so the agent is
+            # recreated with it — durable state lives on volumes, nothing is
+            # lost (R7).
             ensure_started(sidecar)
+            ensure_started(websearch)
             sidecar_ip = container_ip(net, sidecar)
+            websearch_ip = container_ip(net, websearch)
             if sidecar_ip is None:
                 raise RuntimeError(f"sidecar {sidecar} has no address on {net}")
+            if websearch_ip is None:
+                raise RuntimeError(f"web-search node {websearch} has no address on {net}")
             if docker_running(container) is not None:
                 docker("rm", "-f", container, check=False)
-            docker(*create_args(user_id, {**guests, sidecar: sidecar_ip}))
+            docker(*create_args(user_id, {**hosts, sidecar: sidecar_ip, websearch: websearch_ip}))
     start_pair(user_id, container, sidecar)
+
+
+# ── RFC 0016 §7: per-run web authorisation ──────────────────────────────────
+
+def websearch_control_token(user_id: str) -> str:
+    """The node's control token for one user, derived from MANAGER_TOKEN.
+
+    The node accepts a run registration only with this token, and only the
+    trusted admission path in the agent holds it (delivered over /webconfig,
+    kept in process memory, never in env or disk). A bash child of the sandbox
+    cannot read it, so it cannot register a run and cannot search even though
+    it shares the agent's network address. Deriving it from the manager secret
+    keeps it stable across manager restarts; changing MANAGER_TOKEN requires
+    reprovisioning the node (it refuses a different token).
+    """
+    if not MANAGER_TOKEN:
+        raise ManagerError("token_unavailable", "MANAGER_TOKEN is required for web-search authorisation")
+    return hmac.new(
+        MANAGER_TOKEN.encode(), b"websearch:" + user_id.encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def deliver_websearch_control(user_id: str, websearch: str, container: str) -> None:
+    """Deliver the node's control token to the node and to the agent, every
+    resolve. Fail-soft: a dead node only costs the web tools, never chat or
+    uploads (the tools answer websearch_unavailable)."""
+    token = websearch_control_token(user_id)
+    try:
+        websearch_post(websearch, "/control", {"token": token}, timeout=2.0)
+        agent_post(container, "/webconfig", {"controlToken": token}, timeout=2.0)
+    except Exception as exc:  # noqa: BLE001 - fail-soft by design, never chat
+        log.debug("web-search control delivery failed for %s: %s", user_id, exc)
 
 
 # ── resolve: the only write path on the request hot path ────────────────────
@@ -1350,10 +1610,23 @@ def resolve(user_id: str) -> dict[str, Any]:
 
     container = row["container_name"]
     sidecar = sidecar_name(user_id)
+    websearch = websearch_name(user_id)
     ensure_guests(user_id)
-    if docker_running(container) is None or docker_running(sidecar) is None:
-        provision(user_id)  # row exists but half the pair is gone: repair both, don't 503
-    elif row["status"] != "running" or not agent_alive(container) or not sidecar_alive(sidecar):
+    if (
+        docker_running(container) is None
+        or docker_running(sidecar) is None
+        or docker_running(websearch) is None
+    ):
+        provision(user_id)  # row exists but part of the group is gone: repair all, don't 503
+    elif (
+        row["status"] != "running"
+        or not agent_alive(container)
+        or not sidecar_alive(sidecar)
+    ):
+        # The node's own health is not part of this decision: it is optional
+        # (chat and uploads do not need it) and a crash-looping node must not
+        # add its health deadline to every request. reconcile_tick restarts it
+        # off the hot path; its tools report websearch_unavailable meanwhile.
         start_pair(user_id, container, sidecar)
 
     # RFC 0012 §5.4 / RFC 0013 §5: every activation reconciles the runtime
@@ -1361,6 +1634,9 @@ def resolve(user_id: str) -> dict[str, Any]:
     # Raises ManagerError (egress_blocked, kek_unavailable, agent_image_old,
     # sidecar_unhealthy) so resolve fails closed with that code.
     reconcile_provider(user_id, container, sidecar)
+    # RFC 0016 §7: the node and the agent must agree on the control token before
+    # the prompt body reaches the agent; resolve runs first on every request.
+    deliver_websearch_control(user_id, websearch, container)
 
     touch(user_id)
     return {
@@ -1398,9 +1674,11 @@ def eviction_tick() -> None:
         if idle_for >= STOP_AFTER_S:
             log.info("stopping idle sandbox %s (idle %.0fs)", container, idle_for)
             docker("stop", "--time", "10", container, check=False)
-            # RFC 0013 R7: the pair evicts together — an idle user's sidecar
-            # holds no key in RAM either, and idle cost stays zero.
+            # RFC 0013 R7 / RFC 0016 §4: the group evicts together — an idle
+            # user's sidecar holds no key in RAM, the node holds no run tables,
+            # and idle cost stays zero.
             docker("stop", "--time", "5", sidecar_name(user_id), check=False)
+            docker("stop", "--time", "5", websearch_name(user_id), check=False)
             registry_set(user_id, "stopped")
 
 
@@ -1437,6 +1715,17 @@ def reconcile_tick() -> None:
             docker("start", sidecar, check=False)
             if AGENT_DNS:
                 dns_rewrite(sidecar)
+        websearch = websearch_name(user_id)
+        if docker_running(websearch) is False:
+            # RFC 0016: the node keeps no durable state, so a restart is all it
+            # needs. A node that is gone entirely is repaired by resolve, which
+            # then recreates the agent too (its baked IP changed).
+            docker("start", websearch, check=False)
+        elif docker_running(websearch) is True and not websearch_alive(websearch):
+            # Running but not answering: restart it here, never on resolve's
+            # hot path (the node is optional; tool calls fail soft meanwhile).
+            log.warning("restarting unresponsive web-search node %s", websearch)
+            docker("restart", websearch, check=False)
         if agent_alive(container):
             _unhealthy[user_id] = 0
             continue
@@ -1933,6 +2222,13 @@ def main() -> None:
     enforce_runsc_runtime()
     warn_seccomp_profile()
     migrate()
+    try:
+        ensure_websearch_networks()
+    except Exception as exc:
+        # The node's containment claim depends on websearch-in being internal;
+        # a non-internal one must stop the boot, not silently weaken it.
+        log.error("web-search networks are unusable: %s", exc)
+        raise
     start_loops()
     server = ManagerHTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)
     log.info(

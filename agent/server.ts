@@ -58,6 +58,7 @@ import {
 	SwitchSessionTool,
 	UploadFileTool,
 	VerifySkillTool,
+	WebConfigTool,
 } from "./tools.ts";
 import type { CitationMode, Log } from "./types.ts";
 
@@ -131,6 +132,7 @@ const tools: HttpTool[] = [
 	new DeleteArtifactsTool(WORKSPACE),
 	new PromptTool(),
 	new ConfigTool(),
+	new WebConfigTool(),
 	new NewSessionTool(),
 	new SwitchSessionTool(),
 	new ResetTool(),

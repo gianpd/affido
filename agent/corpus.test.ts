@@ -77,7 +77,7 @@ test("IngestRawTool answers with the staged hash, byte count, and admission", as
 	const bytes = new TextEncoder().encode("il contratto si rinnova a marzo");
 	const req = Readable.from([bytes]) as unknown as IncomingMessage;
 	let noted = 0;
-	const agent = { noteCorpusChange: () => { noted += 1; } } as unknown as AgentApi;
+	const agent = { noteCorpusChange: () => { noted += 1; }, webTainted: async () => false } as unknown as AgentApi;
 	const url = new URL("http://sandbox/ingest?docId=doc7&filename=contratto.txt");
 
 	const out = (await tool.handle({ req, url, agent })) as Record<string, unknown>;

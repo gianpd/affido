@@ -22,8 +22,9 @@ RUN rm -rf /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
 
 COPY server.ts types.ts harness.ts model.ts tools.ts agent.ts http.ts trace.ts corpus.ts sidecar.ts \
-     uploads.ts skills.ts artifacts.ts citation-store.ts workspace-store.ts citation-run.ts \
-     citation-tools.ts citation-report.ts citation-gate-demo.ts ingest.ts scripts/gen-provider-catalog.mjs ./
+     websearch.ts web-tools.ts uploads.ts skills.ts artifacts.ts citation-store.ts workspace-store.ts \
+     citation-run.ts citation-tools.ts citation-report.ts citation-gate-demo.ts ingest.ts \
+     scripts/gen-provider-catalog.mjs ./
 
 # RFC 0012 §5.1: the BYOK catalog is generated from pi-ai's static catalogs at
 # build time (same pinned version as the factories in model.ts). The manager

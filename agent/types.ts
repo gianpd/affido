@@ -70,6 +70,10 @@ export type DurableHarnessOptions = {
 /** How strictly a `/prompt` submission answers (RFC 0006 §5.9). */
 export type CitationMode = "required" | "off";
 
+/** RFC 0016 §7: whether the user authorised web search for one submission.
+ * Default `"off"`; the model can never set it. */
+export type WebMode = "allowed" | "off";
+
 /** One citation of a reply, as the envelope reports it (R6). */
 export type CitationView = {
 	readonly citationId: string;
@@ -103,6 +107,8 @@ export type PromptResult = {
 	readonly citations: readonly CitationView[];
 	/** The mode this submission ran under. */
 	readonly citationsMode: "required" | "free";
+	/** The web authorisation of this submission, as the user chose it. */
+	readonly webMode: WebMode;
 	readonly runId: string | null;
 	/** Files this run created or changed under `artifacts/` (RFC 0009 R7),
 	 * server-built like `evidence`: re-derived from disk at response time. */
@@ -127,11 +133,19 @@ export interface AgentApi {
 	readFile(path: string): Promise<unknown>;
 	inspect(query: TraceQuery): Promise<TraceReport | CitationsTraceReport>;
 	inspectEntry(id: EntryId): Promise<TraceEntryDetail>;
-	prompt(prompt: string, requestId: string | undefined, citations: CitationMode | undefined): Promise<PromptResult>;
+	prompt(
+		prompt: string,
+		requestId: string | undefined,
+		citations: CitationMode | undefined,
+		web?: WebMode,
+	): Promise<PromptResult>;
 	/** One run's citations, re-verified (R11). */
 	citations(runId: string): Promise<RunCitations>;
 	/** The corpus changed (ingest/delete); drop the store's lazy index. */
 	noteCorpusChange(): void;
+	/** RFC 0016 §6: whether this conversation ever read web content. `true`
+	 * blocks ingest/upload/skill installation for that conversation. */
+	webTainted(): Promise<boolean>;
 	/** Start a separate conversation and make it the active one; nothing of the old one is deleted. */
 	newSession(): Promise<unknown>;
 	/** Make an existing conversation the active one (RFC 0008); unknown ids are rejected. */
@@ -139,6 +153,9 @@ export interface AgentApi {
 	/** Apply a delivered provider config (RFC 0012 §5.4): credential upsert,
 	 * provider upsert, conversation reconfigure — serialized with prompts. */
 	configureModel(config: ProviderConfig): Promise<unknown>;
+	/** RFC 0016 §7: the manager delivers the node's control token, in memory
+	 * only. Without it no run can be registered for web. */
+	configureWeb(controlToken: string): Promise<unknown>;
 	reset(): Promise<unknown>;
 	pause(): Promise<unknown>;
 }

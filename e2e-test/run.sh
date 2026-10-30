@@ -12,9 +12,10 @@ services="$("${COMPOSE[@]}" config --services)"
 for service in caddy oltp sandbox-manager; do
 	grep -qx "${service}" <<<"${services}" || fail "compose is missing ${service}"
 done
-# RFC 0013 R5: the sidecar is created by create_args beside the agent; a
-# compose sidecar service would put the key-holder on the compose network.
-if grep -qE '^(agent|sidecar)' <<<"${services}"; then fail "compose still declares agent or sidecar services"; fi
+# RFC 0013 R5 / RFC 0016: the sidecar and the web-search node are created by
+# create_args beside the agent; a compose service for either would put them on
+# the compose network and out of the manager's topology.
+if grep -qE '^(agent|sidecar|websearch)' <<<"${services}"; then fail "compose still declares agent, sidecar or websearch services"; fi
 pass "compose declares only caddy, oltp, sandbox-manager"
 
 docker image inspect affido-agent:latest >/dev/null 2>&1 \

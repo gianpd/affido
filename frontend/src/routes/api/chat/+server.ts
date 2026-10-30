@@ -18,6 +18,9 @@ type ChatBody = {
 	messageId?: string;
 	/** RFC 0006 §5.9: the Strict citations toggle of the composer, verbatim. */
 	citations?: 'required' | 'off';
+	/** RFC 0016 §7: the Web toggle of the composer. Absent means off; only
+	 * `"allowed"` authorises the sandbox's web tools for this submission. */
+	web?: 'allowed' | 'off';
 	/** The client's view of the active conversation (RFC 0008), used to persist
 	 * the question even when the sandbox never answers. */
 	conversationId?: number | null;
@@ -69,6 +72,8 @@ export const POST: RequestHandler = async (event) => {
 		return Response.json({ error: 'invalid JSON body' }, { status: 400 });
 	}
 	const citationsMode = body.citations === 'required' ? 'required' : 'off';
+	// Fail closed: anything but the explicit value is "off".
+	const webMode = body.web === 'allowed' ? 'allowed' : 'off';
 	const sentConversationId =
 		typeof body.conversationId === 'number' &&
 		Number.isSafeInteger(body.conversationId) &&
@@ -86,10 +91,13 @@ export const POST: RequestHandler = async (event) => {
 	if (userMessage.id) {
 		// The toggle state travels with the user message, so history shows which
 		// questions were asked under strict citations.
-		userParts =
-			citationsMode === 'required'
-				? [...userMessage.parts, { type: 'data-strict' as const, data: { citations: true } }]
-				: userMessage.parts;
+		userParts = [
+			...userMessage.parts,
+			...(citationsMode === 'required'
+				? [{ type: 'data-strict' as const, data: { citations: true } }]
+				: []),
+			...(webMode === 'allowed' ? [{ type: 'data-web' as const, data: { web: true } }] : [])
+		];
 	}
 
 	const assistantId = crypto.randomUUID();
@@ -145,7 +153,8 @@ export const POST: RequestHandler = async (event) => {
 					event,
 					prompt,
 					userMessage.id ?? body.messageId,
-					citationsMode
+					citationsMode,
+					webMode
 				);
 			} catch (error) {
 				stopWaking();

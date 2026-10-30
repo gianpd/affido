@@ -16,7 +16,7 @@ import { listArtifactTree, readArtifact, removeArtifactPath } from "./artifacts.
 import type { CitationMode } from "./types.ts";
 import { InvalidTraceQueryError, parseTraceQuery, UnknownConversationError, UnknownEntryError } from "./trace.ts";
 import type { TraceQuery } from "./trace.ts";
-import type { ToolRequest } from "./types.ts";
+import type { AgentApi, ToolRequest, WebMode } from "./types.ts";
 
 export class HttpTool {
 	readonly name: string;
@@ -38,6 +38,22 @@ export class HttpTool {
 		throw new Error(`Tool ${this.name} does not implement handle()`);
 	}
 }
+
+/** RFC 0016 §6: once a conversation has read web content, the paths that turn
+ * model belief into persistence are closed for it. `write`/`edit` into
+ * `corpus/**` is already refused in every run (RFC 0014 §5.7.1); this helper
+ * covers the HTTP routes a bash child could reach directly: ingest, uploads and
+ * skill installation. Reading and artifacts/ stay open. */
+const requireNoWebTaint = async (agent: AgentApi): Promise<void> => {
+	if (await agent.webTainted()) {
+		throw new HttpError(409, {
+			error: "web_tainted",
+			message:
+				"this conversation has read web content; ingest, uploads and skill installation are blocked " +
+				"for it (RFC 0016 §6). Start a new conversation to stage new material.",
+		});
+	}
+};
 
 /** Liveness, used by the Docker healthcheck; never activates. */
 export class HealthTool extends HttpTool {
@@ -140,7 +156,8 @@ export class ReadFileTool extends HttpTool {
 }
 
 /** Create (or confirm) a directory of the user-driven uploads tree (PRD 0003).
- * Like `/ingest`, this is plain filesystem work: it never activates the agent. */
+ * Like `/ingest`, this is plain filesystem work; it activates the agent only to
+ * read the RFC 0016 taint document when the process cache is cold. */
 export class CreateUploadDirTool extends HttpTool {
 	readonly #workspace: string;
 
@@ -149,7 +166,8 @@ export class CreateUploadDirTool extends HttpTool {
 		this.#workspace = workspace;
 	}
 
-	async handle({ req }: ToolRequest): Promise<unknown> {
+	async handle({ req, agent }: ToolRequest): Promise<unknown> {
+		await requireNoWebTaint(agent);
 		const body = await readBody(req);
 		return createUploadDir({ workspace: this.#workspace, path: typeof body.path === "string" ? body.path : "" });
 	}
@@ -159,7 +177,8 @@ export class CreateUploadDirTool extends HttpTool {
  * `corpus/uploads/` (PRD 0003): `?path=md-to-docx/references/style-guide.md` in
  * the query, raw bytes as the body. An HTTP adapter over `IngestPipeline`
  * (RFC 0014 R1): parse, stage, `noteCorpusChange`, return the pipeline's
- * `Staged` object verbatim. Never activates the agent. */
+ * `Staged` object verbatim. Refused once the conversation read web content
+ * (RFC 0016 §6); otherwise it activates the agent only on a cold taint cache. */
 export class UploadFileTool extends HttpTool {
 	readonly #pipeline: IngestPipeline;
 
@@ -169,6 +188,7 @@ export class UploadFileTool extends HttpTool {
 	}
 
 	async handle({ req, url, agent }: ToolRequest): Promise<unknown> {
+		await requireNoWebTaint(agent);
 		const bytes = await readRawBody(req, MAX_UPLOAD_BYTES);
 		if (bytes.length === 0) throw new HttpError(400, { error: "empty_body", message: "the upload is empty" });
 		const staged = await this.#pipeline.stage({ bytes, target: { kind: "tree-path", path: url.searchParams.get("path") ?? "" } });
@@ -212,7 +232,9 @@ export class DeleteUploadTool extends HttpTool {
 
 /** Write one marketplace bundle file under `skills/<name>/<path>` (RFC 0009
  * D2): `?skill=md-to-docx&path=SKILL.md` in the query, raw bytes as the body.
- * Idempotent by path; plain filesystem work, never activates the agent. */
+ * Idempotent by path; refused once the conversation read web content
+ * (RFC 0016 §6: skill installation is the highest-value persistence target of
+ * an injected page). */
 export class SkillsFileTool extends HttpTool {
 	readonly #workspace: string;
 
@@ -221,7 +243,8 @@ export class SkillsFileTool extends HttpTool {
 		this.#workspace = workspace;
 	}
 
-	async handle({ req, url }: ToolRequest): Promise<unknown> {
+	async handle({ req, url, agent }: ToolRequest): Promise<unknown> {
+		await requireNoWebTaint(agent);
 		const bytes = await readRawBody(req, MAX_UPLOAD_BYTES);
 		if (bytes.length === 0) throw new HttpError(400, { error: "empty_body", message: "the skill file is empty" });
 		return installSkillFile({
@@ -356,7 +379,14 @@ export class PromptTool extends HttpTool {
 			}
 			citations = body.citations;
 		}
-		return agent.prompt(prompt, requestId, citations);
+		let web: WebMode | undefined;
+		if (body.web !== undefined) {
+			if (body.web !== "allowed" && body.web !== "off") {
+				throw new HttpError(400, { error: "invalid_web", message: 'web must be "allowed" or "off"' });
+			}
+			web = body.web;
+		}
+		return agent.prompt(prompt, requestId, citations, web);
 	}
 }
 
@@ -471,6 +501,28 @@ export class ConfigTool extends HttpTool {
 	}
 }
 
+/** RFC 0016 §7: the manager delivers the node's control token on every resolve.
+ * In-memory only, never echoed, and never activates the agent: a run
+ * registration without it is refused by the node, and the model cannot mint
+ * one from a bash child. */
+export class WebConfigTool extends HttpTool {
+	constructor() {
+		super("webconfig", "POST", "/webconfig");
+	}
+
+	async handle({ req, agent }: ToolRequest): Promise<unknown> {
+		const body = await readBody(req);
+		const controlToken = body.controlToken;
+		if (typeof controlToken !== "string" || controlToken.length < 32 || controlToken.length > 128) {
+			throw new HttpError(400, {
+				error: "invalid_control_token",
+				message: "controlToken must be 32-128 characters",
+			});
+		}
+		return agent.configureWeb(controlToken);
+	}
+}
+
 /** Start a new context in the same conversation (a `pi.reset` entry). */
 export class ResetTool extends HttpTool {
 	constructor() {
@@ -499,9 +551,10 @@ export class PauseTool extends HttpTool {
  * verbatim — `searchable`/`indexing` are the ingest-time admission, the same
  * decision the citation index reads from the registry forever after.
  *
- * This tool does not touch the conversation, so an upload cannot defeat the
- * idle pause. The workspace owns the bytes; the web app never names a corpus
- * path itself. */
+ * Refused once the conversation read web content (RFC 0016 §6: staging an
+ * injected page into the corpus would make it greppable and citable). It
+ * activates the agent only to read that taint document on a cold cache; a
+ * healthy conversation still cannot defeat the idle pause with an upload. */
 export class IngestRawTool extends HttpTool {
 	readonly #pipeline: IngestPipeline;
 
@@ -511,6 +564,7 @@ export class IngestRawTool extends HttpTool {
 	}
 
 	async handle({ req, url, agent }: ToolRequest): Promise<unknown> {
+		await requireNoWebTaint(agent);
 		const docId = safeDocId(url.searchParams.get("docId") ?? "");
 		const filename = url.searchParams.get("filename") ?? "";
 		const title = url.searchParams.get("title") ?? "";

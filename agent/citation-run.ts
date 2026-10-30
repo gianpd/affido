@@ -57,17 +57,32 @@ export const CitationRunDocs = defineDocFamily<CitationRunState, RunSeed>({
 	initial: (seed) => emptyRun(seed.runId, seed.strict, seed.prompt),
 });
 
-/** The run the current submission placed; tools and hooks read this pointer. */
-export const CurrentRunDoc = defineDoc<{ runId: string | null; strict: boolean }>({
+/** The run the current submission placed; tools and hooks read this pointer.
+ * RFC 0016 §7 adds the per-run web authorisation: `web` is the user's choice,
+ * `webToken` is the node's registration token (null when web was not requested
+ * or the node was unavailable). Neither is ever writable by the model. */
+export const CurrentRunDoc = defineDoc<{
+	runId: string | null;
+	strict: boolean;
+	web: boolean;
+	webToken: string | null;
+}>({
 	scope: "conversation",
 	history: "latest",
 	fork: "current",
 	kind: "citations.current",
 	version: 1,
-	initial: () => ({ runId: null, strict: false }),
+	initial: () => ({ runId: null, strict: false, web: false, webToken: null }),
 });
 
-export type CurrentRun = { readonly runId: string; readonly strict: boolean };
+export type CurrentRun = {
+	readonly runId: string;
+	readonly strict: boolean;
+	/** The user allowed web for this run. */
+	readonly web: boolean;
+	/** The node's per-run token; null means web is not usable in this run. */
+	readonly webToken: string | null;
+};
 
 /** Committed document reads with the full snapshot overloads (as `Session` declares them). */
 export type DocReader = Pick<Session, "snapshot">;
@@ -80,7 +95,8 @@ export const readCurrentRun = async (
 ): Promise<CurrentRun | null> => {
 	const pointer = await reader.snapshot(CurrentRunDoc, conversationId, context);
 	if (pointer === undefined || pointer.runId === null) return null;
-	return { runId: pointer.runId, strict: pointer.strict };
+	// Documents stored before RFC 0016 have neither field: absent means "web off".
+	return { runId: pointer.runId, strict: pointer.strict, web: pointer.web === true, webToken: pointer.webToken ?? null };
 };
 
 /** One run's state as stored, or `undefined` when the run id never existed. */
@@ -115,18 +131,23 @@ export const mutateRun = async (
 /** Place the pointer at admission time. Called by `prompt()` before `submit()`.
  * Returns the run's effective artifact baseline: the one just taken when the
  * run is fresh, the stored one on an idempotent replay. */
+export type WebRunGrant = { readonly web: boolean; readonly webToken: string | null };
+
 export const placeCurrentRun = async (
 	conversation: Conversation,
 	runId: string,
 	strict: boolean,
 	prompt: string,
 	artifactBaseline: ArtifactBaseline,
+	web: WebRunGrant,
 	context: Context,
 ): Promise<ArtifactBaseline> =>
 	conversation.commit(async (tx) => {
 		const pointer = await tx.doc(CurrentRunDoc, conversation.id);
 		pointer.runId = runId;
 		pointer.strict = strict;
+		pointer.web = web.web;
+		pointer.webToken = web.webToken;
 		const run = await tx.doc(CitationRunDocs, conversation.id, runId, { runId, strict, prompt });
 		// A replayed requestId (idempotent submit) must not reset the run: only a
 		// doc that never accumulated anything takes the prompt. The artifact

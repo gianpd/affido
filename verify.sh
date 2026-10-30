@@ -63,6 +63,16 @@ require_runsc() {
 	fi
 }
 
+# RFC 0016: the web-search node dials SearXNG and Camofox. The gate runs an
+# e2e-only fake stack (one container, both listeners) on the internal
+# `websearch-in` network, so the whole chain is exercised without the operator's
+# services or the open internet. Both URLs use the container name: the manager
+# bakes it into each node's /etc/hosts.
+export SEARXNG_URL="http://e2e-fake-search:8080"
+export CAMOFOX_URL="http://e2e-fake-search:9377"
+export CAMOFOX_API_KEY="e2e-camofox-key"
+export WEBSEARCH_IN="${WEBSEARCH_IN:-websearch-in}"
+
 echo "== typecheck: server.ts must pass tsc --noEmit =="
 (
 	cd agent
@@ -101,6 +111,20 @@ echo "== marketplace bundle: manifest hashes are fresh (RFC 0009 R1) =="
 node marketplace/manifest.mjs --check >/dev/null || fail "marketplace manifest is stale: run node marketplace/manifest.mjs"
 pass "catalog manifest matches the bundle"
 
+echo "== web search (RFC 0016): internal network + fake search stack =="
+if ! docker network inspect "${WEBSEARCH_IN}" >/dev/null 2>&1; then
+	docker network create --internal \
+		--opt com.docker.network.bridge.enable_ip_masquerade=false \
+		--label pi-affido-websearch=1 "${WEBSEARCH_IN}" >/dev/null
+fi
+[[ "$(docker network inspect -f '{{.Internal}}' "${WEBSEARCH_IN}")" == "true" ]] \
+	|| fail "${WEBSEARCH_IN} must be --internal: the web-search node has no egress"
+docker build -q -t affido-e2e-fake-search ./e2e-test/fake-search >/dev/null || fail "fake search stack build failed"
+docker rm -f e2e-fake-search >/dev/null 2>&1 || true
+docker run -d --name e2e-fake-search --network "${WEBSEARCH_IN}" --restart unless-stopped \
+	affido-e2e-fake-search >/dev/null || fail "fake search stack did not start"
+pass "websearch-in (internal) and the e2e fake SearXNG/Camofox are up"
+
 echo "== build and start the control plane =="
 ensure_kek
 ensure_manager_token
@@ -128,6 +152,9 @@ pass "KEK round-trip, AAD swap, baseUrl rules (python3 -m unittest)"
 echo "== RFC 0003: happy path + parallel responses =="
 ./e2e-test/run.sh
 
+echo "== RFC 0016: web-search node, tool contract, taint gate =="
+./e2e-test/websearch.sh
+
 echo "== RFC 0012 M1/M4: /providers API in the default (egress-off) stack =="
 ./e2e-test/providers.sh
 
@@ -153,12 +180,20 @@ AGENT_IMAGE=affido-agent:latest AGENT_EGRESS=open PROVIDER_DEV_HTTP=1 FAKE_UPSTR
 
 echo "== restore the default (keyless, egress-off) stack =="
 docker rm -f e2e-fake-upstream >/dev/null
+# The fake search stack is e2e-only; the network stays (a manager-owned
+# network, harmless when no services are attached).
+docker rm -f e2e-fake-search >/dev/null 2>&1 || true
 # Pin AGENT_EGRESS=off like the keyless phases above: the BYOK phase exported
 # it open in this process, and an operator .env may carry open too — without
 # the pin the "restored" stack keeps NAT egress and the security negatives
-# (internet_reachable) fail on any later standalone re-run.
-AGENT_IMAGE=affido-agent:latest AGENT_EGRESS=off "${COMPOSE[@]}" up -d >/dev/null
-pass "stack restored: faux default, no fake upstream"
+# (internet_reachable) fail on any later standalone re-run. Drop the e2e search
+# URLs too, so the restored manager points at the operator's services (or the
+# defaults) rather than at the fake stack that was just removed.
+(
+	unset SEARXNG_URL CAMOFOX_URL CAMOFOX_API_KEY
+	AGENT_IMAGE=affido-agent:latest AGENT_EGRESS=off "${COMPOSE[@]}" up -d >/dev/null
+)
+pass "stack restored: faux default, no fake upstream, operator search URLs"
 
 echo
 echo "ALL CHECKS PASSED"

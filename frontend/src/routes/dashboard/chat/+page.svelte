@@ -14,6 +14,7 @@
 	import MessagesSquare from '@lucide/svelte/icons/messages-square';
 	import Plus from '@lucide/svelte/icons/plus';
 	import ShieldCheck from '@lucide/svelte/icons/shield-check';
+	import Globe from '@lucide/svelte/icons/globe';
 	import Download from '@lucide/svelte/icons/download';
 	import Markdown from '#lib/components/markdown.svelte';
 	import Citations from '#lib/components/citations.svelte';
@@ -40,6 +41,8 @@
 
 	let input = $state('');
 	let strictCitations = $state(false);
+	// RFC 0016 §7: web is opt-in for each message, never a standing capability.
+	let webAllowed = $state(false);
 	let formEl = $state<HTMLFormElement>();
 	let scroller = $state<HTMLDivElement>();
 	let resetting = $state(false);
@@ -95,6 +98,7 @@
 				{
 					body: {
 						citations: strictCitations ? 'required' : 'off',
+						web: webAllowed ? 'allowed' : 'off',
 						conversationId: activeConversationId
 					}
 				}
@@ -231,6 +235,12 @@
 			(part) =>
 				part.type === 'data-strict' &&
 				(part as { data?: { citations?: boolean } }).data?.citations === true
+		);
+
+	const wasWebAllowed = (message: UIMessage): boolean =>
+		message.parts.some(
+			(part) =>
+				part.type === 'data-web' && (part as { data?: { web?: boolean } }).data?.web === true
 		);
 
 	// Keep the viewport pinned to the newest message while the stream grows.
@@ -409,12 +419,20 @@
 					{#each chat.messages as message (message.id)}
 						{#if message.role === 'user'}
 							<div class="flex flex-col items-end gap-1">
-								{#if wasStrict(message)}
-									<Badge variant="outline" class="gap-1 font-normal text-muted-foreground">
-										<ShieldCheck class="size-3" />
-										Strict citations
-									</Badge>
-								{/if}
+								<div class="flex flex-wrap items-center justify-end gap-1">
+									{#if wasStrict(message)}
+										<Badge variant="outline" class="gap-1 font-normal text-muted-foreground">
+											<ShieldCheck class="size-3" />
+											Strict citations
+										</Badge>
+									{/if}
+									{#if wasWebAllowed(message)}
+										<Badge variant="outline" class="gap-1 font-normal text-muted-foreground">
+											<Globe class="size-3" />
+											Web
+										</Badge>
+									{/if}
+								</div>
 								<div
 									class="max-w-[85%] rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap"
 								>
@@ -545,13 +563,28 @@
 				</InputGroup.Root>
 			</form>
 			<div class="mt-2 flex items-center justify-between gap-3 px-1">
-				<label
-					class="flex cursor-pointer items-center gap-2 text-[11px] text-muted-foreground select-none"
-					title="Every non-heading line of the answer must carry a server-verified citation; the sandbox enforces it"
-				>
-					<Switch bind:checked={strictCitations} size="sm" aria-label="Strict citations mode" />
-					<span class={strictCitations ? 'font-medium text-foreground' : ''}>Strict citations</span>
-				</label>
+				<div class="flex items-center gap-4">
+					<label
+						class="flex cursor-pointer items-center gap-2 text-[11px] text-muted-foreground select-none"
+						title="Every non-heading line of the answer must carry a server-verified citation; the sandbox enforces it"
+					>
+						<Switch bind:checked={strictCitations} size="sm" aria-label="Strict citations mode" />
+						<span class={strictCitations ? 'font-medium text-foreground' : ''}
+							>Strict citations</span
+						>
+					</label>
+					<label
+						class="flex cursor-pointer items-center gap-2 text-[11px] text-muted-foreground select-none"
+						title="Allow web_search and web_read for this message only; off by default so a page cannot trigger a search"
+					>
+						<Switch
+							bind:checked={webAllowed}
+							size="sm"
+							aria-label="Allow web search for this message"
+						/>
+						<span class={webAllowed ? 'font-medium text-foreground' : ''}>Web</span>
+					</label>
+				</div>
 				<span class="text-[11px] text-muted-foreground"
 					>Enter to send · Shift+Enter for a new line</span
 				>

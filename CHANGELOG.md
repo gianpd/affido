@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Web search as an isolated node (RFC 0016). Each sandbox now gets a third
+  container, `u<slug>-websearch`, created by the manager beside the agent and
+  its key sidecar. It owns no writable volume, runs no user code, and has no
+  internet egress: it is dual-homed on the per-user internal network and on
+  the shared `websearch-in`, and only the operator's SearXNG and Camofox (on
+  `websearch-out`) reach the open web. The model gets two tools,
+  `web_search {query, lang?, max?}` and `web_read {sourceId}`; the node resolves
+  opaque per-run source ids, so the model can never name a URL, and it enforces
+  four searches per run, eight results, one read per result and 6000 characters
+  per read. Web is off by default and authorised per run: the composer's Web
+  toggle sends `web: "allowed"` on `/prompt`, the trusted admission path
+  registers the run with the node using a manager-delivered control token, and
+  the node refuses unregistered runs, `web: false` runs, and calls without the
+  per-run token. A bash child cannot register a run, so a prompt-injected model
+  cannot start a search the user did not allow. The first successful read taints
+  the conversation in a durable `web.taint` document that is never cleared:
+  `/ingest`, `/uploads/*` and `/skills/file` then answer `409 web_tainted` for
+  it, while `artifacts/` and reading stay open. `./verify.sh` runs the node
+  against an e2e-only fake SearXNG/Camofox and asserts the authorisation
+  refusal, the contract, the taint durability across a restart, and the
+  cross-tenant containment.
+
 ### Changed
 
 - Sandboxes: gVisor is now mandatory, not a default. `AGENT_RUNTIME` is no

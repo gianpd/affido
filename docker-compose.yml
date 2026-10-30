@@ -49,7 +49,14 @@
 				"AGENT_EGRESS": "${AGENT_EGRESS:-off}",
 				"AGENT_DNS": "${AGENT_DNS:-1.1.1.1}",
 				"PROVIDER_DEV_HTTP": "${PROVIDER_DEV_HTTP:-}",
-				"FAKE_UPSTREAM_CONTAINER": "${FAKE_UPSTREAM_CONTAINER:-}"
+				"FAKE_UPSTREAM_CONTAINER": "${FAKE_UPSTREAM_CONTAINER:-}",
+				"WEBSEARCH_IN": "${WEBSEARCH_IN:-websearch-in}",
+				"WEBSEARCH_OUT": "${WEBSEARCH_OUT:-websearch-out}",
+				"SEARXNG_URL": "${SEARXNG_URL:-http://searxng:8080}",
+				"CAMOFOX_URL": "${CAMOFOX_URL:-http://camofox-browser:9377}",
+				"CAMOFOX_API_KEY": "${CAMOFOX_API_KEY:-}",
+				"WEBSEARCH_MEMORY": "${WEBSEARCH_MEMORY:-192m}",
+				"WEBSEARCH_CPUS": "${WEBSEARCH_CPUS:-0.5}"
 			},
 			"volumes": [
 				"/var/run/docker.sock:/var/run/docker.sock",

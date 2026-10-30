@@ -290,6 +290,10 @@ cmd_reset() {
 	nets="$(docker network ls -q --filter label=pi-sandbox-manager=1 || true)"
 	# shellcheck disable=SC2086
 	[[ -n "${nets}" ]] && run docker network rm ${nets} >/dev/null
+	# RFC 0016: the shared search networks are infrastructure, not user state.
+	nets="$(docker network ls -q --filter label=pi-affido-websearch=1 || true)"
+	# shellcheck disable=SC2086
+	[[ -n "${nets}" ]] && run docker network rm ${nets} >/dev/null 2>&1 || true
 	vols="$(docker volume ls -q | grep -E '^pi-(ws|data)-' || true)"
 	# shellcheck disable=SC2086
 	[[ -n "${vols}" ]] && run docker volume rm -f ${vols} >/dev/null
@@ -317,6 +321,10 @@ Where each value comes from, and where it lands.
   EVICT_TICK_S       manager eviction/reconcile tick
   AGENT_IDLE_MS      in-process idle pause threshold inside the agent
   OLTP_PORT          host port for the control-plane Postgres
+  SEARXNG_URL        search stack, reached by the per-user web-search node
+  CAMOFOX_URL        page reader, reached by the per-user web-search node
+  CAMOFOX_API_KEY    shared operator secret for Camofox /evaluate: passed to
+                     the node container only, never to a sandbox (RFC 0016)
   WEB_CONTAINER      optional compose container joined to every sandbox network
   AGENT_EGRESS       off (default) or open; BYOK with a real provider needs open
   THINKING_LEVEL     reasoning effort forwarded to the agent at create time

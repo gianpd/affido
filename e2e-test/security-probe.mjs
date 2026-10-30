@@ -10,7 +10,7 @@ import dns from "node:dns";
 import os from "node:os";
 import { readFileSync } from "node:fs";
 
-const out = { gateway: null, gatewayPg: null, hostService: null, internet: null, managerMetrics: null, managerPause: null, victimDial: null, victimIp: null, victimSidecar: null, victimSidecarIp: null, ptrace: null, coreLimit: null, capEff: null };
+const out = { gateway: null, gatewayPg: null, hostService: null, internet: null, managerMetrics: null, managerPause: null, victimDial: null, victimIp: null, victimSidecar: null, victimSidecarIp: null, victimWebsearch: null, victimWebsearchIp: null, ptrace: null, coreLimit: null, capEff: null };
 
 // default-route gateway from /proc/net/route (hex, little-endian words).
 // --internal networks have no default route, so fall back to the subnet's own
@@ -85,6 +85,12 @@ if (victim) {
 	out.victimSidecarIp = await new Promise((resolve) => dns.lookup(victimSidecar, { family: 4 }, (e, a) => resolve(e ? `dns:${e.code}` : a)));
 	if (!String(out.victimSidecarIp).startsWith("dns:")) out.victimSidecar = await tcp(out.victimSidecarIp, 8081, 3000);
 	else out.victimSidecar = out.victimSidecarIp;
+	// RFC 0016: the victim's web-search node is one more target on the same
+	// per-user subnet wall.
+	const victimWebsearch = `${victim}-websearch`;
+	out.victimWebsearchIp = await new Promise((resolve) => dns.lookup(victimWebsearch, { family: 4 }, (e, a) => resolve(e ? `dns:${e.code}` : a)));
+	if (!String(out.victimWebsearchIp).startsWith("dns:")) out.victimWebsearch = await tcp(out.victimWebsearchIp, 8082, 3000);
+	else out.victimWebsearch = out.victimWebsearchIp;
 }
 
 // 5. Phase 0 (RFC 0013 §6.4), from inside the sandbox: a tool child must not
@@ -111,6 +117,7 @@ out.breach =
 	(out.managerPause.status === 200 ? "manager_pausable " : "") +
 	(out.victimDial === "connect:ok" ? "victim_agent_reachable " : "") +
 	(out.victimSidecar === "connect:ok" ? "victim_sidecar_reachable " : "") +
+	(out.victimWebsearch === "connect:ok" ? "victim_websearch_reachable " : "") +
 	(out.ptrace.status === 0 ? "ptrace_opened_parent_mem " : "") +
 	(out.capEff !== null && out.capEff !== "0000000000000000" ? "capabilities_present " : "") +
 	(out.coreLimit !== "0" ? "core_dumps_enabled" : "");

@@ -196,6 +196,26 @@ const lastToolResult = (messages: readonly Message[]): { name: string; text: str
 	};
 };
 
+/** The newest result of one tool anywhere in the transcript. A prompt-section
+ * change (such as the RFC 0016 taint flip) inserts a system entry after the
+ * tool result, so `lastToolResult` alone cannot find it. */
+const lastToolResultNamed = (messages: readonly Message[], name: string): { name: string; text: string; isError: boolean } | undefined => {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (message === undefined) continue;
+		// Only the current submission: a later prompt must not re-read a result
+		// that belongs to an earlier one.
+		if (message.role === "user") return undefined;
+		if (message.role !== "toolResult" || message.toolName !== name || !Array.isArray(message.content)) continue;
+		return {
+			name,
+			text: message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
+			isError: message.isError,
+		};
+	}
+	return undefined;
+};
+
 /** The newest assistant call of `name`, for scripted follow-ups that need its arguments. */
 const lastToolArgs = (messages: readonly Message[], name: string): Record<string, unknown> | undefined => {
 	for (let index = messages.length - 1; index >= 0; index--) {
@@ -255,6 +275,36 @@ const scripted: FauxResponseFactory = (transcript) => {
 			[fauxToolCall("answer_plain", { markdown: "UNANSWERED: the request could not be met with corpus evidence." }, { id: callId("plain") })],
 			{ stopReason: "toolUse" },
 		);
+	}
+	// RFC 0016 dance: a prompt mentioning "search the web" drives
+	// web_search -> web_read against the sandbox's search node, then a text
+	// answer that carries the fetched page. The taint section flips after the
+	// read and inserts a system entry, so the branches key on the named tool
+	// results in the transcript, not on "the last message" (which is then the
+	// system entry, not a toolResult). The e2e asserts the taint gate afterwards
+	// by attempting an upload through Caddy.
+	if (/search the web/i.test(userText)) {
+		const read = lastToolResultNamed(transcript.messages, "web_read");
+		if (read !== undefined && !read.isError) {
+			return fauxAssistantMessage([fauxText(`Read the page: ${read.text}`)]);
+		}
+		const search = lastToolResultNamed(transcript.messages, "web_search");
+		if (search !== undefined && !search.isError) {
+			const parsed = JSON.parse(search.text) as { sourceId?: string }[];
+			const sourceId = parsed[0]?.sourceId;
+			if (typeof sourceId === "string") {
+				return fauxAssistantMessage([fauxToolCall("web_read", { sourceId }, { id: callId("web-read") })], {
+					stopReason: "toolUse",
+				});
+			}
+			return fauxAssistantMessage([fauxText("The search returned no results.")]);
+		}
+		if (search !== undefined && search.isError) {
+			return fauxAssistantMessage([fauxText(`The web tools failed: ${search.text}`)]);
+		}
+		return fauxAssistantMessage([fauxToolCall("web_search", { query: "affido e2e search" }, { id: callId("web-search") })], {
+			stopReason: "toolUse",
+		});
 	}
 	// The skill hint is server-built, so these branches key on its exact shape.
 	if (userText.includes("[skill hint]") && userText.includes("is not installed")) {

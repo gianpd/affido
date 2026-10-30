@@ -18,6 +18,9 @@ field() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)"; }
 # Query the sandbox registry via the oltp service.
 sql() { "${COMPOSE[@]}" exec -T oltp psql -U pi -d pi -v ON_ERROR_STOP=1 -tA "$@"; }
 
+# Read one manager environment variable, for the values the e2e must agree on.
+manager_env() { "${COMPOSE[@]}" exec -T sandbox-manager printenv "$1" | tr -d '\r'; }
+
 # The Web Client (better-auth) is not part of this repo, so seed the session row
 # the manager validates the cookie against. Caddy, the manager, Postgres and the
 # sandbox agents are the real components.

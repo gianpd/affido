@@ -89,10 +89,12 @@ To check everything, including the idle pause and a hard-stop resume:
 
 ```
 agent/             the sandboxed TypeScript agent (durable harness, tools,
-                   citation gate, traces, skills, artifacts) plus its
-                   key-injection sidecar entrypoint (sidecar.ts, RFC 0013)
-sandbox-manager/   Python service: sandbox registry, pair provisioning,
-                   eviction, BYOK key custody and delivery
+                   citation gate, traces, skills, artifacts) plus two more
+                   entrypoints of the same image: the key-injection sidecar
+                   (sidecar.ts, RFC 0013) and the web-search node
+                   (websearch.ts, RFC 0016)
+sandbox-manager/   Python service: sandbox registry, group provisioning,
+                   eviction, BYOK key custody and delivery, web-search topology
 frontend/          SvelteKit web client (better-auth, documents, chat, traces)
 caddy/             the only published endpoint, per-user /u/<id>/* routes
 e2e-test/          bash suites driving the stack through Caddy only
@@ -349,7 +351,7 @@ workspace filesystem, like `/ingest`, and never activate the agent.
 | Method | Path | Activates | Purpose |
 |---|---|---|---|
 | GET | `/health` | no | liveness, used by the Docker healthcheck |
-| GET | `/status` | no | `{ paused, conversationId, entries, inFlight, model, keyVia }` (cached when paused); `keyVia` is `"sidecar"`, `"direct"` or null — where the current selection's key lives, never the key |
+| GET | `/status` | no | `{ paused, conversationId, entries, inFlight, model, keyVia, webControl }` (cached when paused); `keyVia` is `"sidecar"`, `"direct"` or null — where the current selection's key lives, never the key; `webControl` is the boolean that the manager's control token landed |
 | GET | `/session` | yes | reopen and report `{ conversationId, entries }` |
 | GET | `/inspect?conversation=1&limit=50` | yes | trace report: newest entries (summary + decision fields), live tasks and submissions, usage |
 | GET | `/inspect?report=citations` | yes | citation report (RFC 0006): per-run used/reported/exact and gate friction |
@@ -371,8 +373,9 @@ workspace filesystem, like `/ingest`, and never activate the agent.
 | GET | `/artifacts?path=` | no | recursive tree of the artifacts root or of one subtree (symlinks skipped) |
 | GET | `/artifact?path=proposal.docx` | no | the file bytes as a download: attachment, static content type, 25 MiB cap, never a symlink |
 | DELETE | `/artifacts?path=proj` | no | remove a file or subtree under `artifacts/`; missing is not an error |
-| POST | `/prompt` | yes | `{ prompt, requestId?, citations?: "required" \| "off" }` -> `{ status, answer, evidence, citations[], artifacts[], submissionId, entries }` |
+| POST | `/prompt` | yes | `{ prompt, requestId?, citations?: "required" \| "off", web?: "allowed" \| "off" }` -> `{ status, answer, evidence, citations[], artifacts[], webMode, submissionId, entries }`; `web` defaults to `"off"` |
 | POST | `/config` | yes | the manager's runtime delivery (RFC 0012 §5.4 / RFC 0013 §5): `{provider, modelId, viaSidecar: true, baseUrl?}` — keyless, the key half went to the sidecar — or the direct `{provider, modelId, apiKey?, baseUrl?}`; serialized with prompts |
+| POST | `/webconfig` | no | the manager's RFC 0016 §7 delivery: `{controlToken}`; stored in memory, never echoed, never on disk. It is what lets a `web: "allowed"` run register with the node |
 | GET | `/corpus/citations?runId=...` | yes | one run's citations, re-verified against the stored text (survives restarts) |
 | POST | `/session/new` | yes | start a separate conversation (RFC 0008) -> `{ conversationId, entries }`; the previous one stays readable |
 | POST | `/reset` | yes | start a new context (`pi.reset`); older entries stay in storage |
@@ -395,6 +398,11 @@ longer hash to its registry entry stops being evidence until re-ingested.
 The sandbox validates each path (`safeTreePath`: relative, no `..`, bounded
 depth) and prefixes `corpus/uploads/` itself, so a crafted request cannot
 write outside the workspace.
+
+Once the conversation has read web content (RFC 0016 §6), `/ingest`,
+`/uploads/*` and `/skills/file` answer `409 web_tainted`: a fetched page cannot
+be laundered into the searchable corpus or into a skill that outlives the run.
+`/session/new` starts a clean conversation, which lifts the block for it.
 
 ## Skills and artifacts (RFC 0009)
 
@@ -456,6 +464,83 @@ Requests without the field keep today's free-form answer;
 default. The chat UI carries the per-question toggle; the report at
 `/inspect?report=citations` measures exactness from the trace alone.
 
+## Web search (RFC 0016)
+
+Model calls stay in the sandbox; the open web does not. Each sandbox gets a
+third container, `u<slug>-websearch`, on the same per-user network. It owns no
+writable volume, runs no user code, and has no route to the internet: it talks
+to operator-supplied SearXNG (search) and Camofox (page reads) on a shared
+internal network, and those two services are the only containers with egress.
+
+Two tools are installed beside the coding and citation tools:
+
+| Tool | Returns | Bounds |
+|---|---|---|
+| `web_search {query, lang?, max?}` | `[{sourceId, title, domain, snippet}]` | query <= 256 chars, 4 searches per run, 8 results |
+| `web_read {sourceId}` | `{untrusted: true, url, title, text, sha256}` | opaque ids issued to this run, one read per result, 6000 chars |
+
+Web is **off by default**. The user enables it per message with the Web toggle
+next to Strict citations; the chat route sends `web: "allowed"` on `/prompt`,
+and the sandbox records that grant in the run. Without it both tools answer
+`web_not_authorized` and never touch the node. The grant is not a model choice:
+it is written by the trusted admission path, one run at a time.
+
+The model never names a URL: `web_read` has no URL argument, and the node
+resolves `sourceId` from the run's own table (`no_url_in_arguments`,
+`unknown_source`, `already_read`, `budget_exhausted` are the named refusals).
+Result URLs whose host is a private, loopback or link-local literal are dropped
+before the model sees them, so a poisoned result cannot point the browser at the
+host's bridge or the cloud metadata endpoint.
+The first successful read marks the conversation tainted in a durable document
+that is never cleared, so the block survives pause, restart and compaction.
+`write`/`edit` into `corpus/**` is already refused in every run; the taint adds
+the HTTP persistence paths (`/ingest`, `/uploads/*`, `/skills/file`).
+
+The node is created by the manager, never by compose, and the manager bakes its
+address into the agent's `/etc/hosts` (gVisor has no embedded DNS). Search
+service hostnames must match the containers attached to `WEBSEARCH_IN`; the
+manager bakes their IPs into the node the same way. Without them the tools
+answer `search_unavailable` and the rest of the sandbox is unaffected.
+
+The per-run grant is enforced at the node, not only at the tool:
+
+1. The manager derives a per-user control token from `MANAGER_TOKEN` and
+   delivers it on every resolve (`POST /control` to the node, `POST /webconfig`
+   to the agent). Both keep it in memory.
+2. On `/prompt` with `web: "allowed"`, the agent's trusted admission code
+   registers the run with the node using that token and stores the returned
+   per-run token in the run pointer.
+3. `web_search`/`web_read` send the per-run token; the node refuses any run it
+   did not register, any run registered with `web: false`, and any call without
+   the matching token.
+
+A bash child of the sandbox shares the network address but not the agent's
+memory: it cannot read the control token, so it cannot register a run, and a
+forged run id or token answers `web_not_authorized`. Runs expire after an hour;
+a `web: "off"` prompt has no token at all.
+
+```bash
+# ./verify.sh runs an e2e-only fake stack: one container, SearXNG on :8080 and
+# Camofox on :9377, attached to websearch-in.
+docker network create --internal websearch-in          # if missing
+docker network connect websearch-in searxng            # operator services
+docker network connect websearch-in camofox-browser
+```
+
+The node bakes those addresses at create time: after attaching the services,
+recreate the node (`./dev.sh reload`) so a node created earlier picks them up.
+When SearXNG's default engine set is suspended (CAPTCHA, rate limits), the node
+retries one engine at a time (`bing`, `duckduckgo`, `brave`, `mojeek`,
+`wikipedia`, `yandex`) instead of reporting an empty result list. SearXNG's own
+per-engine timeout must cover the container's DNS latency: the stock 3s expires
+before the first engine answers when Docker's resolver has an unreachable
+upstream first, and every engine then reports `timeout`.
+
+`.env` names the topology and the services (`WEBSEARCH_IN`, `WEBSEARCH_OUT`,
+`SEARXNG_URL`, `CAMOFOX_URL`, `CAMOFOX_API_KEY`, `WEBSEARCH_MEMORY`,
+`WEBSEARCH_CPUS`). `CAMOFOX_API_KEY` is a shared operator secret, passed to the
+node only; it never enters a sandbox and no tool echoes it.
+
 ## Architecture
 
 ```
@@ -468,24 +553,30 @@ default. The chat UI carries the per-question toggle; the report at
                   v
           +---------------+        docker create/start/stop
           | sandbox-      |-----------------------------+
-          | manager       |                             |   one pair per user (RFC 0013):
-          +-------+-------+                             v   u<slug>:8080          u<slug>-sidecar:8081
-             |   POST /config {provider, modelId,         |   agent — no key        key-injection sidecar
-          +---------+   viaSidecar: true}                |        ^                        |
-          |  oltp   |  key ciphertext (AES-GCM)          +--------+---- pi-net-<slug> ----+
-          |registry |  ---------------------------------------------|       pinned upstream (TLS)
+          | manager       |                             |   one group per user:
+          +-------+-------+                             v   u<slug>:8080            u<slug>-sidecar:8081
+             |   POST /config {provider, modelId,         |   agent — no key          key-injection sidecar
+          +---------+   viaSidecar: true}                |        ^                          |
+          |  oltp   |  key ciphertext (AES-GCM)          +--------+---- pi-net-<slug> ------+
+          |registry |  ---------------------------------------------|         pinned upstream (TLS)
           +---------+                                                v
                                                             provider (api.deepseek.com, ...)
+
+   u<slug>-websearch:8082  — no volumes, no egress
+        |                 |
+        +-- websearch-in -+-- SearXNG + Camofox -- websearch-out --> internet
+              (internal)                                    (bridge)
 ```
 
 The control plane declares no agent `ports`, so the sole host mapping is Caddy's
 `18080:80`. Caddy dials each agent by container name on the per-user
-`pi-net-<slug>` network the manager created; the agent containers and their
-key sidecars (`u<slug>-sidecar:8081`, RFC 0013) are not compose services, so
+`pi-net-<slug>` network the manager created; the agent containers, their key
+sidecars (`u<slug>-sidecar:8081`, RFC 0013) and the web-search nodes
+(`u<slug>-websearch:8082`, RFC 0016) are not compose services, so
 `docker compose ps` lists only caddy, oltp and sandbox-manager. Each per-user
-network hosts exactly one agent+sidecar pair; cross-tenant reachability
-(agent→agent, agent→sidecar, sidecar→sidecar) is blocked by the per-user
-subnet wall and proven by `e2e-test/security.sh`.
+network hosts exactly one such group; cross-tenant reachability (agent→agent,
+agent→sidecar, agent→node, node→node) is blocked by the per-user subnet wall,
+the node's source-subnet guard, and proven by `e2e-test/security.sh`.
 
 ## Use a real model
 
@@ -584,10 +675,16 @@ full pi-ai→sidecar→upstream chain against a local fake upstream) and the
 manager's BYOK unit tests (pair provisioning, the delivery split, reconcile
 against sidecar `/status`, `sidecar_unhealthy` fail-closed, Phase 0 args),
 builds `affido-agent:latest`, starts the control plane, then runs the e2e
-suite, `./verify-sandbox.sh`, the security containment negatives (now
+suite (including `websearch.sh`: the node's tool contract through the manager,
+the per-run Web authorisation — a run without it is refused with
+`web_not_authorized`, a forged control token cannot register — the agent's
+search→read dance against an e2e-only fake SearXNG/Camofox, and the taint
+gate's durability across a restart), `./verify-sandbox.sh`, the security
+containment negatives (now
 including the RFC 0013 Phase 0 probes — the `ptrace`-family denial asserted
 unconditionally inside every sandbox, `ulimit -c` 0, no core after a
-self-SIGSEGV — and the victim-sidecar isolation probe), and finally the BYOK
+self-SIGSEGV — and the victim-sidecar and victim-websearch isolation probes),
+and finally the BYOK
 chain against a fake OpenAI-compatible upstream through the sidecar (RFC 0012
 §10 + RFC 0013 §11: proves the delivery split, `keyVia: "sidecar"`, the
 pinned-upstream refusal of exfiltration attempts, RAM-only key custody in

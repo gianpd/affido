@@ -15,11 +15,12 @@ import { placeCurrentRun, type CitationRunState } from "./citation-run.ts";
 import { WorkspaceCitationStore } from "./workspace-store.ts";
 import { DurableHarness, type HarnessLifecycle } from "./harness.ts";
 import { HttpError, textOf, workspacePath } from "./http.ts";
+import { readWebTaintTx, webToolsExtension, websearchUrl } from "./web-tools.ts";
 import { buildSkillHint, renderSkillsSection } from "./skills.ts";
 import { describeArtifacts, snapshotArtifacts } from "./artifacts.ts";
 import { TraceReader, type TraceEntryDetail, type TraceQuery, type TraceReport, type TraceSource } from "./trace.ts";
 import type { CitationsTraceReport } from "./citation-report.ts";
-import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, PromptResult, ProviderConfig, RunCitations } from "./types.ts";
+import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, PromptResult, ProviderConfig, RunCitations, WebMode } from "./types.ts";
 import { configureProvider } from "./model.ts";
 import { IngestPipeline } from "./ingest.ts";
 
@@ -32,7 +33,7 @@ import { IngestPipeline } from "./ingest.ts";
  * model reaches for pdftotext or Python, neither of which exists here. */
 export const containerSection = (name: string, workspace: string): string =>
 	`You run inside container ${name}. Your workspace is ${workspace}: it is the working directory of every command you run, and it survives pause and restart.\n` +
-	"Your tools are read, write, edit, and bash. Use bash to list and search the workspace, and read to open a file.\n" +
+	"Your core tools are read, write, edit, and bash. Use bash to list and search the workspace, and read to open a file.\n" +
 	"The runtime is Node with a closed toolbox. Two libraries are preinstalled and every Node script you run can require() them from any working directory through NODE_PATH: " +
 	'docx (Word document generation) and unpdf (PDF text extraction). To read a PDF, run a Node script that loads its bytes and calls unpdf\'s getDocumentProxy and extractText; ' +
 	"that extracts the embedded text only, so a scanned image PDF yields none. There is no pdftotext, no Python, no LibreOffice, and no npm/npx/corepack: " +
@@ -43,10 +44,14 @@ export const createAgentRegistry = (options: {
 	readonly name: string;
 	readonly workspace: string;
 	readonly store: WorkspaceCitationStore;
+	readonly onWebTaint?: () => void;
 }) => {
 	const registry = createRegistry();
 	registry.install(CodingTools);
 	registry.install(citationExtension({ store: options.store, workspace: options.workspace }));
+	// RFC 0016 §5: web_search and web_read over the isolated search node; the
+	// extension also owns the conversation-scoped taint gate (§6).
+	registry.install(webToolsExtension({ onTaint: options.onWebTaint }));
 	registry.install(
 		defineExtension({
 			name: "container",
@@ -82,6 +87,15 @@ export class ContainerAgent implements AgentApi {
 	 * secret-file key in memory), or null (faux / keyless). Reported by
 	 * /status instead of a fingerprint the agent can no longer compute. */
 	#keyVia: "sidecar" | "direct" | null = null;
+	/** RFC 0016 §6: whether this conversation ever read web content. Derived
+	 * from the durable `web.taint` document, which is never cleared, so the
+	 * cache is monotonic: a `true` is permanent, a `false` only means "not
+	 * observed yet" and forces a read on the next check. */
+	#webTouched = false;
+	/** RFC 0016 §7: the node's control token, delivered by the manager at
+	 * resolve time. In-memory only; it is what makes a run registration
+	 * unforgeable by a bash child of the sandbox. */
+	#webControl: string | null = null;
 
 	constructor({ name, workspace, sessionDb, idleMs, models, credentials, model, thinkingLevel, citationsDefault, context, log, harness }: AgentOptions) {
 		this.#name = name;
@@ -100,7 +114,14 @@ export class ContainerAgent implements AgentApi {
 		const pipeline = new IngestPipeline(workspace);
 		this.#store = new WorkspaceCitationStore(this.#apiEnv, context, () => pipeline.bootstrap((message) => this.#log(message)));
 
-		const registry = createAgentRegistry({ name, workspace, store: this.#store });
+		const registry = createAgentRegistry({
+			name,
+			workspace,
+			store: this.#store,
+			onWebTaint: () => {
+				this.#webTouched = true;
+			},
+		});
 
 		// The lifecycle is a port: the caller may inject one (tests substitute a fake);
 		// the default is the durable implementation assembled from the same options.
@@ -138,6 +159,9 @@ export class ContainerAgent implements AgentApi {
 			model: this.#model,
 			keyFingerprint: this.#keyFingerprint,
 			keyVia: this.#keyVia,
+			// RFC 0016 §7: whether the manager delivered the web control token.
+			// A boolean, never the token.
+			webControl: this.#webControl !== null,
 			workspace: this.#workspace,
 			sessionDb: this.#sessionDb,
 			conversationId: this.#harness.conversationId,
@@ -155,10 +179,17 @@ export class ContainerAgent implements AgentApi {
 		this.#log("seeded workspace");
 	}
 
-	async prompt(prompt: string, requestId: string | undefined, citations: CitationMode | undefined): Promise<PromptResult> {
+	async prompt(
+		prompt: string,
+		requestId: string | undefined,
+		citations: CitationMode | undefined,
+		web: WebMode = "off",
+	): Promise<PromptResult> {
 		// §5.9: the mode is a property of the question. The request field wins;
 		// `CITATIONS_DEFAULT=required` covers requests that omit it. Explicit "off" beats the default.
 		const strict = citations === "required" || (citations === undefined && this.#citationsDefault === "required");
+		// RFC 0016 §7: web is opt-in per submission, never a standing capability.
+		const webAllowed = web === "allowed";
 		const runId = requestId ?? `run-${crypto.randomUUID()}`;
 		// RFC 0009 D4: a leading `/name` becomes a server-built hint inside the
 		// stored content — durable, visible in the trace, never model-invented.
@@ -171,7 +202,19 @@ export class ContainerAgent implements AgentApi {
 			// The artifact baseline of §5.7 travels with it, so a replay re-derives
 			// the same artifact list instead of diffing against a fresh snapshot.
 			const baseline = Object.fromEntries(await snapshotArtifacts({ workspace: this.#workspace }));
-			const artifactBaseline = await placeCurrentRun(conversation, runId, strict, prompt, baseline, this.#context);
+			// Register the run with the search node before the model can act. The
+			// node only accepts the registration with the manager-delivered
+			// control token, and returns the per-run token the tools must send.
+			const webToken = webAllowed ? await this.#registerWebRun(runId) : null;
+			const artifactBaseline = await placeCurrentRun(
+				conversation,
+				runId,
+				strict,
+				prompt,
+				baseline,
+				{ web: webAllowed, webToken },
+				this.#context,
+			);
 			const draft: SubmissionDraft = strict
 				? { type: "input", content, requestId: runId, entry: { kind: "citations.strict", data: { requestId: runId } } }
 				: requestId === undefined
@@ -212,10 +255,45 @@ export class ContainerAgent implements AgentApi {
 				evidenceReason: envelope.evidenceReason,
 				citations: envelope.citations,
 				citationsMode: strict ? "required" : "free",
+				webMode: webAllowed ? "allowed" : "off",
 				runId,
 				artifacts,
 			};
 		});
+	}
+
+	/** Register one run with the node, using the manager-delivered control
+	 * token. Returns the per-run token, or null when web is unavailable; the
+	 * prompt still runs, and the web tools answer a named error. */
+	async #registerWebRun(runId: string): Promise<string | null> {
+		const base = websearchUrl();
+		if (this.#webControl === null || base === "") {
+			this.#log("web run not registered: no control token (manager delivery or WEBSEARCH_URL missing)");
+			return null;
+		}
+		try {
+			const response = await fetch(`${base}/runs`, {
+				method: "POST",
+				headers: { "content-type": "application/json", "x-control-token": this.#webControl, "x-run-id": runId },
+				body: JSON.stringify({ web: true }),
+				redirect: "error",
+				signal: AbortSignal.timeout(5_000),
+			});
+			if (!response.ok) {
+				this.#log(`web run registration refused: ${response.status}`);
+				return null;
+			}
+			const body = (await response.json()) as { runToken?: unknown };
+			if (typeof body.runToken !== "string" || body.runToken === "") {
+				this.#log("web run registration returned no token");
+				return null;
+			}
+			return body.runToken;
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			this.#log(`web run registration failed: ${reason}`);
+			return null;
+		}
 	}
 
 	/** The server-built evidence fields of the reply (§5.5): the model never writes them. */
@@ -318,6 +396,20 @@ export class ContainerAgent implements AgentApi {
 		this.#store.invalidate();
 	}
 
+	/** RFC 0016 §6: has this conversation read web content? The durable taint
+	 * document is the source of truth; the cache only avoids opening storage on
+	 * every ingest/upload/skills call. A fresh process reads it once, which is
+	 * why those routes now activate the agent when the cache is cold. */
+	async webTainted(): Promise<boolean> {
+		if (this.#webTouched) return true;
+		const touched = await this.#harness.activate(async (conversation) => {
+			const taint = await conversation.commit((tx) => readWebTaintTx(tx, conversation.id), this.#context);
+			return taint.touched;
+		});
+		this.#webTouched = touched;
+		return touched;
+	}
+
 	async listDir(path: string) {
 		return this.#harness.activate(async () => {
 			const result = await this.#apiEnv.listDir(workspacePath(this.#workspace, path), this.#context);
@@ -351,6 +443,7 @@ export class ContainerAgent implements AgentApi {
 
 	/** Start a separate conversation and make it the active one; the previous stays fully readable. */
 	async newSession() {
+		this.#webTouched = false;
 		const { conversationId, entries } = await this.#harness.newSession();
 		return { agent: this.#name, conversationId, entries };
 	}
@@ -359,6 +452,7 @@ export class ContainerAgent implements AgentApi {
 	 * previous session. The conversation keeps its entries and its chat rows;
 	 * nothing is copied, reset, or deleted. */
 	async switchSession(conversationId: number) {
+		this.#webTouched = false;
 		const { conversationId: activeId, entries } = await this.#harness.switchSession(conversationId as ConversationId);
 		return { agent: this.#name, conversationId: activeId, entries };
 	}
@@ -369,6 +463,18 @@ export class ContainerAgent implements AgentApi {
 	 * serialization chain (§7.1). In sidecar mode the only "credential" that
 	 * reaches this process is the placeholder — the key itself lives in the
 	 * sidecar container (R1). */
+	async configureWeb(controlToken: string) {
+		if (typeof controlToken !== "string" || controlToken.length < 32 || controlToken.length > 128) {
+			throw new HttpError(400, {
+				error: "invalid_control_token",
+				message: "controlToken must be 32-128 characters",
+			});
+		}
+		this.#webControl = controlToken;
+		// Never echo the token: only the fact that the delivery landed.
+		return { agent: this.#name, webControl: true };
+	}
+
 	async configureModel({ provider, modelId, apiKey, baseUrl, viaSidecar }: ProviderConfig) {
 		const applied = await configureProvider(this.#models, this.#credentials, {
 			id: provider,

@@ -125,14 +125,17 @@ export const promptSandbox = (
 	event: RequestEvent,
 	prompt: string,
 	requestId: string | undefined,
-	citations: 'required' | 'off' = 'off'
+	citations: 'required' | 'off' = 'off',
+	web: 'allowed' | 'off' = 'off'
 ): Promise<PromptResult> =>
 	sandboxFetch<PromptResult>(event, '/prompt', {
 		method: 'POST',
 		body: JSON.stringify({
 			prompt,
 			...(requestId === undefined ? {} : { requestId }),
-			citations
+			citations,
+			// RFC 0016 §7: per-run, opt-in, decided by the user's toggle.
+			web
 		})
 	});
 

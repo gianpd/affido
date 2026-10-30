@@ -59,7 +59,8 @@ pass "caddy publishes on ${CADDY_BIND}:18080 only"
 echo "== the sandbox cannot reach past its subnet =="
 # Bounded 0.0.0.0-bound host service: the sandbox must not even route to it
 # (the gateway IP is the host). Killed right after the probe.
-HOST_SVC_PORT=18081
+# Overridable: another local project may publish the default port.
+HOST_SVC_PORT="${HOST_SVC_PORT:-18081}"
 timeout 30 python3 -m http.server --bind 0.0.0.0 "${HOST_SVC_PORT}" >/dev/null 2>&1 &
 HOST_SVC_PID=$!
 sleep 0.5
@@ -83,7 +84,9 @@ gateway="$(printf '%s' "${probe}" | field "d['gateway']")"
 # per-user subnet wall; the probe reports its reachability separately.
 [[ "$(printf '%s' "${probe}" | field "d['victimSidecar']")" != "connect:ok" ]] \
 	|| fail "attacker sandbox reached the victim's sidecar: ${probe}"
-pass "no egress (gateway ${gateway}, internet, host services), manager 403, tenant ${VIC_C} and its sidecar unreachable"
+[[ "$(printf '%s' "${probe}" | field "d['victimWebsearch']")" != "connect:ok" ]] \
+	|| fail "attacker sandbox reached the victim's web-search node: ${probe}"
+pass "no egress (gateway ${gateway}, internet, host services), manager 403, tenant ${VIC_C}, its sidecar and web-search node unreachable"
 
 echo "== Phase 0 (RFC 0013 §6.4): no-ptrace enforcement and core-dump suppression =="
 # Behavior probes, asserted unconditionally — the guarantees must hold on ANY
