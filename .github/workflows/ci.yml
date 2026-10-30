@@ -23,12 +23,12 @@ jobs:
         # runtime), and ubuntu-latest has no runsc. systrap needs no /dev/kvm,
         # so it runs inside the GitHub VM. Registered as an additional runtime
         # -- NOT the default: the control plane stays on runc, mirroring the
-        # dev daemon.json. Pinned to the version installed on dev machines.
+        # dev daemon.json. 
         run: |
           curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
           echo "deb [arch=amd64 signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
           sudo apt-get update -qq
-          sudo apt-get install -y runsc=20261019.0
+          sudo apt-get install -y runsc=20261026.0
           { sudo cat /etc/docker/daemon.json 2>/dev/null || echo '{}'; echo '{"runtimes":{"runsc":{"path":"/usr/bin/runsc"}}}'; } \
             | sudo jq -s '.[0] * .[1]' | sudo tee /tmp/daemon.json >/dev/null
           sudo mv /tmp/daemon.json /etc/docker/daemon.json
