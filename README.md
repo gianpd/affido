@@ -464,6 +464,14 @@ Requests without the field keep today's free-form answer;
 default. The chat UI carries the per-question toggle; the report at
 `/inspect?report=citations` measures exactness from the trace alone.
 
+An optional post-gate coherence check (RFC 0017) may run after the gate
+accepts: a local GLiNER2.5-Decide classifier judges each cited line against
+the quote behind its id, behind `AGENT_CITATION_JUDGE=warn|enforce` (empty /
+off by default). Measured on the RFC 0017 eval it cuts unrelated-quote false
+accepts by ~75% but falsely rejects half of supported pairs, so the shipped
+recommendation is off; `warn` records verdicts, latencies and truncations in
+the run report without ever rejecting a publish.
+
 ## Web search (RFC 0016)
 
 Model calls stay in the sandbox; the open web does not. Each sandbox gets a

@@ -2,11 +2,11 @@
 
 | Field | Value |
 |---|---|
-| Status | Implemented |
+| Status | Implemented (the coherence layer of RFC 0017 is implemented and measured, and ships off by default) |
 | Author | Affido maintainers |
 | Date | 2026-10-21 |
 | Target | `agent/`, `frontend/`, sandbox-manager |
-| Related | RFC 0005, PRD 0001, `agent/agent.ts`, `agent/corpus.ts`, `agent/tools.ts`, `frontend/src/routes/api/chat/+server.ts`, `frontend/src/routes/dashboard/chat/+page.svelte` |
+| Related | RFC 0005, PRD 0001, RFC 0017 (post-gate coherence judge), `agent/agent.ts`, `agent/corpus.ts`, `agent/tools.ts`, `frontend/src/routes/api/chat/+server.ts`, `frontend/src/routes/dashboard/chat/+page.svelte` |
 
 ## 1. Summary
 
@@ -439,6 +439,21 @@ POST /prompt { prompt, requestId, citations: "required" }
 Deployment default: `CITATIONS_DEFAULT=required` may set the mode for requests
 that omit the field (a demo user, a jurisprudence workspace); the user's
 explicit choice on the request always wins.
+
+### 5.10 Post-gate coherence check (RFC 0017, off by default)
+
+The gate of §5.4 verifies attribution, not meaning: a line citing a verified
+quote about a different clause passes. RFC 0017 layers an optional
+probabilistic check on top — after `evaluatePublish` accepts and before the
+publish exists, a local GLiNER2.5-Decide classifier judges each (line, quote)
+pair as `supported`/`unsupported`/`contradicted` behind
+`CITATION_JUDGE=off|warn|enforce` (default `off`, the behavior of this RFC
+unchanged). The check is probabilistic: it neither weakens nor replaces any
+check of §5.4, all of which run first and unchanged. Measured on the RFC 0017
+eval (2026-11-03), the judge cuts unrelated-quote false accepts by ~75% but
+falsely rejects 50% of supported pairs on the held-out set — including
+verbatim repeats of the quote — so the shipped recommendation is `off`.
+Details, artifact decision record and measurements: RFC 0017.
 
 ## 6. Interaction with RFC 0005
 
