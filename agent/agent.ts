@@ -20,6 +20,7 @@ import { buildSkillHint, renderSkillsSection } from "./skills.ts";
 import { describeArtifacts, snapshotArtifacts } from "./artifacts.ts";
 import { TraceReader, type TraceEntryDetail, type TraceQuery, type TraceReport, type TraceSource } from "./trace.ts";
 import type { CitationsTraceReport } from "./citation-report.ts";
+import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, PromptResult, ProviderConfig, RunCitations, WebMode } from "./types.ts";
 import { configureProvider } from "./model.ts";
 import { IngestPipeline } from "./ingest.ts";
@@ -45,10 +46,15 @@ export const createAgentRegistry = (options: {
 	readonly workspace: string;
 	readonly store: WorkspaceCitationStore;
 	readonly onWebTaint?: () => void;
+	/** RFC 0017: the coherence judge behind `CITATION_JUDGE` (off by default). */
+	readonly judge?: CitationJudge | null;
+	readonly judgeMode?: JudgeMode;
 }) => {
 	const registry = createRegistry();
 	registry.install(CodingTools);
-	registry.install(citationExtension({ store: options.store, workspace: options.workspace }));
+	registry.install(
+		citationExtension({ store: options.store, workspace: options.workspace, judge: options.judge, judgeMode: options.judgeMode }),
+	);
 	// RFC 0016 §5: web_search and web_read over the isolated search node; the
 	// extension also owns the conversation-scoped taint gate (§6).
 	registry.install(webToolsExtension({ onTaint: options.onWebTaint }));
@@ -76,6 +82,9 @@ export class ContainerAgent implements AgentApi {
 	#apiEnv: NodeExecutionEnv;
 	#harness: HarnessLifecycle;
 	#citationsDefault: CitationMode;
+	/** RFC 0017: the judge instance (null when `CITATION_JUDGE=off`, the default). */
+	#judge: CitationJudge | null;
+	#judgeMode: JudgeMode;
 	#store: WorkspaceCitationStore;
 	#models: MutableModels;
 	#credentials: CredentialStore;
@@ -97,7 +106,9 @@ export class ContainerAgent implements AgentApi {
 	 * unforgeable by a bash child of the sandbox. */
 	#webControl: string | null = null;
 
-	constructor({ name, workspace, sessionDb, idleMs, models, credentials, model, thinkingLevel, citationsDefault, context, log, harness }: AgentOptions) {
+	constructor(
+		{ name, workspace, sessionDb, idleMs, models, credentials, model, thinkingLevel, citationsDefault, judge, judgeMode, context, log, harness }: AgentOptions,
+	) {
 		this.#name = name;
 		this.#workspace = workspace;
 		this.#sessionDb = sessionDb;
@@ -105,6 +116,8 @@ export class ContainerAgent implements AgentApi {
 		this.#context = context;
 		this.#log = log;
 		this.#citationsDefault = citationsDefault ?? "off";
+		this.#judge = judge ?? null;
+		this.#judgeMode = judgeMode ?? "off";
 		this.#models = models;
 		this.#credentials = credentials;
 		// A separate environment for the file API; same local file system id as the tools.
@@ -118,6 +131,8 @@ export class ContainerAgent implements AgentApi {
 			name,
 			workspace,
 			store: this.#store,
+			judge: this.#judge,
+			judgeMode: this.#judgeMode,
 			onWebTaint: () => {
 				this.#webTouched = true;
 			},

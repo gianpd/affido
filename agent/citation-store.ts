@@ -21,6 +21,8 @@ export type VerifyReason =
 	| "unused_citation"
 	| "uncited_line"
 	| "citations_unused" // answer_plain while the run has verified annotations
+	| "incoherent_citation" // RFC 0017: the coherence judge rejected a cited line
+	| "judge_unavailable" // RFC 0017: enforce mode with a judge that errored or timed out
 	| "not_a_strict_run" // a strict-only exit called in a normal run
 	| "turn_budget_exhausted";
 

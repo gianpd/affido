@@ -18,6 +18,8 @@ import {
 	VerifyError,
 	type CitationStore,
 } from "./citation-store.ts";
+import { coherenceOf } from "./citation-judge.ts";
+import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import { CurrentRunDoc, mutateRun, readCurrentRun, readRun, type CurrentRun } from "./citation-run.ts";
 
 export const MAX_CORPUS_CALLS = 48;
@@ -69,7 +71,14 @@ const catchVerify = async (body: () => Promise<ToolExecutionResult>): Promise<To
 	}
 };
 
-export type CitationToolDeps = { readonly store: CitationStore; readonly workspace: string };
+export type CitationToolDeps = {
+	readonly store: CitationStore;
+	readonly workspace: string;
+	/** RFC 0017: the coherence judge and its mode. `judge: null` or mode "off"
+	 * (both defaults) keep behavior exactly at RFC 0006. */
+	readonly judge?: CitationJudge | null;
+	readonly judgeMode?: JudgeMode;
+};
 
 /** The workspace tools the strict gate refuses (§5.7.1). */
 const WORKSPACE_TOOLS = new Set(["bash", "read", "write", "edit"]);
@@ -249,7 +258,7 @@ const annotateTool = ({ store }: CitationToolDeps) =>
 		},
 	});
 
-const publishTool = ({ store: _store }: CitationToolDeps) =>
+const publishTool = ({ store: _store, judge, judgeMode }: CitationToolDeps) =>
 	defineTool({
 		name: "answer_publish",
 		description:
@@ -282,6 +291,47 @@ const publishTool = ({ store: _store }: CitationToolDeps) =>
 						context,
 					);
 					return rejection(error);
+				}
+				// RFC 0017 §4: after the deterministic gate accepted, and before the
+				// publish exists, the coherence judge classifies each cited line against
+				// the quote behind its id. `answer_publish` terminates the turn on
+				// success, so this is the only place a rejected line can retry; there is
+				// no post-hoc audit once published. Input is stored state alone: the
+				// annotation quotes and the line with tokens stripped.
+				if (judge !== null && judge !== undefined && judgeMode !== undefined && judgeMode !== "off") {
+					const coherence = await coherenceOf({
+						markdown: args.markdown,
+						quoteOf: (citationId) => state.annotations[citationId]?.quote,
+						judge,
+					});
+					const reason = coherence.ok ? "incoherent_citation" : coherence.reason === "judge_error" ? "judge_unavailable" : coherence.reason;
+					const rejecting = !coherence.ok && judgeMode === "enforce";
+					await mutateRun(
+						api,
+						{ runId: run.runId, strict: run.strict, prompt: "" },
+						(s) => {
+							const prior = s.judge ?? { mode: judgeMode, verdicts: [], rejections: 0, truncated: 0, errors: 0 };
+							// One replacement object, not create-then-mutate: the commit
+							// layer snapshots a doc property at assignment time, so the
+							// `judgeState.verdicts.push(...)` after `s.judge ??= {...}` was
+							// dropped while `publishRejections` (mutated, never assigned)
+							// survived. The value is built in full and assigned once.
+							s.judge = {
+								mode: judgeMode,
+								verdicts: [...prior.verdicts, ...coherence.records],
+								rejections: prior.rejections + (rejecting ? 1 : 0),
+								truncated: prior.truncated + coherence.records.filter((record) => record.truncated).length,
+								errors: prior.errors + coherence.errors,
+							};
+							if (rejecting) {
+								s.publishRejections[reason] = (s.publishRejections[reason] ?? 0) + 1;
+							}
+						},
+						context,
+					);
+					if (rejecting) {
+						return rejection(new VerifyError(reason, coherence.detail));
+					}
 				}
 				await mutateRun(
 					api,

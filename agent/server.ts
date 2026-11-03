@@ -26,6 +26,8 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { ContainerAgent } from "./agent.ts";
 import { json, HttpError, RawResponse } from "./http.ts";
 import { createModel } from "./model.ts";
+import { GlinerDecideJudge } from "./gliner-decide-judge.ts";
+import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import { IngestPipeline } from "./ingest.ts";
 import {
 	ArtifactTool,
@@ -86,7 +88,37 @@ const parseCitationsDefault = (raw: string | undefined): CitationMode => {
 	return raw;
 };
 
+/** RFC 0017 §3: the coherence layer's mode. `off` (default) keeps the layer
+ * absent — the deterministic gate of RFC 0006 runs exactly as before. */
+const parseJudgeMode = (raw: string | undefined): JudgeMode => {
+	if (raw === undefined || raw === "") return "off";
+	if (raw !== "off" && raw !== "warn" && raw !== "enforce") {
+		throw new Error('CITATION_JUDGE must be "off", "warn" or "enforce"');
+	}
+	return raw;
+};
+
+const JUDGE_MODE = parseJudgeMode(process.env.CITATION_JUDGE);
+/** Built once; loads lazily on the first judged publish and refuses to run
+ * without the pinned local cache (remote models disabled up front). */
+const judge: CitationJudge | null =
+	JUDGE_MODE === "off"
+		? null
+		: new GlinerDecideJudge(process.env.CITATION_JUDGE_MODEL_DIR ?? "/app/judge-models");
+
 const log: Log = (...args) => console.log(`[${AGENT}]`, ...args);
+
+if (JUDGE_MODE !== "off") {
+	// Fail loudly at boot, not at the first publish: a judge that cannot run
+	// would otherwise surface as judge_unavailable rejections mid-conversation.
+	const cached = await (judge as GlinerDecideJudge).cached();
+	if (!cached) {
+		throw new Error(
+			`CITATION_JUDGE=${JUDGE_MODE} but the model cache is incomplete; run agent/scripts/fetch-judge-model.mjs and point CITATION_JUDGE_MODEL_DIR at it`,
+		);
+	}
+	log(`coherence judge ${JUDGE_MODE}: GLiNER2.5-Decide q4f16, local cache verified`);
+}
 
 const { models, credentials, model } = await createModel();
 const agent = new ContainerAgent({
@@ -99,6 +131,8 @@ const agent = new ContainerAgent({
 	model,
 	thinkingLevel: parseThinkingLevel(process.env.THINKING_LEVEL),
 	citationsDefault: parseCitationsDefault(process.env.CITATIONS_DEFAULT),
+	judge,
+	judgeMode: JUDGE_MODE,
 	context,
 	log,
 });

@@ -1,2 +1,6 @@
 node_modules
 npm-debug.log
+
+# RFC 0017: local judge weights and eval output never enter the image
+judge-models/
+judge-eval/
