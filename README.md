@@ -18,10 +18,8 @@ productized and per-user, built on [`@earendil-works/pi-durable`](https://github
 Each user gets one sandboxed agent:
 
 - **Bounded.** The agent lives in a container the control plane created on
-  demand: no host ports, its own `--internal` network with an iptables host
-  wall — no route off its subnet and no path to host services by default, so
-  the sandbox talks to its proxy and nothing else — and its workspace confined
-  to a per-user volume.
+  demand: no host ports, its own private network with no route off its subnet,
+  and its workspace confined to a per-user volume.
 - **Granted.** The agent starts powerless. Capabilities arrive as skills the
   deployer installs, one manifest-verified file at a time — and the runtime
   image ships no installer, so new powers cannot appear from inside.
@@ -36,12 +34,11 @@ Each user gets one sandboxed agent:
 > **Honesty box.** The gate guarantees *attribution, not truth*: every cited
 > span provably exists in your documents and was located by the agent
 > container. Whether the conclusion drawn from it is right stays a human
-> judgment — the model proposes, the code verifies, you decide. And when the
-> check fails, the quote never becomes a citation: the reply is shown as prose
-> with an explicit *no document evidence* label, and the trace keeps the
-> refusal. Also note: Affido builds on `@earendil-works/pi-durable` 1.3.0, an
-> experimental library; this stack pins it exactly and proves restart-survival
-> in its e2e gate on every run.
+> judgment — the model proposes, the code verifies, you decide. When the check
+> fails, the quote never becomes a citation: the reply is shown as prose with
+> an explicit *no document evidence* label, and the trace keeps the refusal.
+> Affido is built on an experimental upstream library, pinned exactly, with
+> restart-survival proven in the e2e gate on every run.
 
 ![The citation gate refusing a tampered quote, then publishing the reply whose
 quote verifies](docs/assets/gate-rejection.gif)
@@ -53,6 +50,10 @@ the reply is labelled *no document evidence* — then the same model quotes the
 stored line exactly and publishes with its citation, `line 8 ·
 attribution_verified`. Higher quality: [MP4, 30 s](docs/assets/gate-rejection.mp4);
 provenance in [`docs/assets/README.md`](docs/assets/README.md).*
+
+*Why a verified quote can still be attached to the wrong sentence, and what
+the coherence check adds: [2:43 explainer](docs/assets/judge-eval.mp4) (Italian,
+captions).*
 
 *The market sells grounding and judgment; affido sells the deterministic gate between them — the quote either is a byte span of a stored document version or it never becomes a citation, and the audit is a hash recompute, not another model.*
 
@@ -82,24 +83,22 @@ curl -H 'Cookie: better-auth.session_token=dev-token' \
 
 The first request cold-provisions that user's sandbox through Caddy. To use a
 real model, each user brings their own key: [BYOK](#byok-bring-your-own-key).
-To check everything, including the idle pause and a hard-stop resume:
-`./verify.sh`.
+To check everything, including idle pause and a hard-stop resume: `./verify.sh`.
 
 ## Layout
 
 ```
 agent/             the sandboxed TypeScript agent (durable harness, tools,
-                   citation gate, traces, skills, artifacts) plus two more
-                   entrypoints of the same image: the key-injection sidecar
-                   (sidecar.ts, RFC 0013) and the web-search node
-                   (websearch.ts, RFC 0016)
+                   citation gate, traces, skills, artifacts), plus the two
+                   other entrypoints of the same image: the key-injection
+                   sidecar and the web-search node
 sandbox-manager/   Python service: sandbox registry, group provisioning,
                    eviction, BYOK key custody and delivery, web-search topology
 frontend/          SvelteKit web client (better-auth, documents, chat, traces)
 caddy/             the only published endpoint, per-user /u/<id>/* routes
 e2e-test/          bash suites driving the stack through Caddy only
 marketplace/       curated skill catalog with manifest hashes
-docs/rfc/          design records (read before changing what they describe)
+docs/              design notes, threat model, recorded demos
 ```
 
 ## Run
@@ -113,6 +112,10 @@ the default, and real models are a per-user choice (BYOK), not a stack flag.
 ./dev.sh up --no-build                   # reuse the built images
 ./dev.sh reload                          # rebuild agent code, recreate sandboxes, keep data
 ./dev.sh build                           # image only, no compose up
+./dev.sh status                          # control plane, sandboxes, volumes
+./dev.sh down                            # stop the control plane, keep sandbox state
+./dev.sh reset                           # remove containers, volumes, images; start from zero
+./dev.sh secrets                         # where each value lives
 ```
 
 `reload` is the edit-test loop: it rebuilds `affido-agent:latest`, brings the
@@ -122,31 +125,16 @@ re-provisions them from the new image. The Postgres volume, `pi-ws-<user>` and
 `reset` is the only command that deletes data.
 
 `./dev.sh secrets` prints where each value lives: `.env` (compose, control
-plane), `secrets/llm_key_kek` (the BYOK KEK, mounted into the manager only),
-and what never touches the host at all (the users' provider keys).
+plane), `secrets/llm_key_kek` (the BYOK key-encryption key, mounted into the
+manager only), and what never touches the host at all (the users' provider
+keys).
 
-```bash
-./dev.sh status                          # control plane, sandboxes, volumes
-./dev.sh down                            # stop the control plane, keep sandbox state
-./dev.sh reset                           # remove containers, volumes, images; start from zero
-```
-
-Users who want a real model use BYOK; running the
-agent image standalone keeps the secret-file branch of `agent/model.ts`
-(see [Use a real model](#use-a-real-model)).
-
-The e2e suite still runs against the running stack:
+The e2e suite runs against the running stack:
 
 ```bash
 # Seeds better-auth-shaped sessions, then cold-provisions agents through Caddy.
 ./e2e-test/run.sh
 ```
-
-The suite prints the sandbox container name for each user; drive that sandbox
-through the same `/u/<user_id>/...` path with a session cookie (see below).
-
-`docker compose down` only stops the control plane; per-user sandboxes and their
-volumes survive, and `./dev.sh down` is the same thing.
 
 ## Web client
 
@@ -163,331 +151,171 @@ pnpm dev                  # http://localhost:5173
 ```
 
 Routes: `/dashboard` (overview), `/dashboard/documents`, `/dashboard/corpus`,
-`/dashboard/chat`, `/dashboard/traces` (every captured snapshot),
-`/dashboard/traces/[id]` (decision graph, entries, tasks, submissions) and
-`/dashboard/settings` (AI provider: BYOK catalog, key entry, verification,
-fingerprints — RFC 0012). The chat
-bridge at `/api/chat` forwards the prompt to the user's sandbox and streams the
-answer as an AI SDK UI message stream; each prompt also captures a trace
-snapshot. See `frontend/README.md` for the two sandbox access modes (Caddy
-gateway for host development, trusted manager `/resolve` for containers).
+`/dashboard/chat`, `/dashboard/skills`, `/dashboard/traces` (every captured
+snapshot), `/dashboard/traces/[id]` (decision graph, entries, tasks,
+submissions) and `/dashboard/settings` (AI provider: catalog, key entry,
+verification, fingerprints). The chat bridge at `/api/chat` forwards the prompt
+to the user's sandbox and streams the answer as an AI SDK UI message stream;
+each prompt also captures a trace snapshot. See `frontend/README.md` for the two
+sandbox access modes (Caddy gateway for host development, trusted manager
+`/resolve` for containers).
 
-## Per-user sandboxes (RFC 0003)
+## Per-user sandboxes
 
-The stack also runs the RFC 0003 control plane: `oltp` (Postgres with
-`sandbox_registry`), `sandbox-manager` (Python, Docker socket) and a Caddy route
-for `/u/<user_id>/*`. On every request Caddy's `forward_auth` subrequest asks the
-manager to resolve the user; the manager provisions (network, volumes, container)
-or starts the sandbox and returns `X-Sandbox-Endpoint`, which Caddy then dials.
-The manager stops a paused sandbox after `STOP_AFTER_S` (L1) and starts it again
-on the next request; the agent resumes the same SQLite session.
+`oltp` (Postgres with the sandbox registry), `sandbox-manager` (Python, Docker
+socket) and a Caddy route per user. On every request Caddy's `forward_auth`
+subrequest asks the manager to resolve the user; the manager provisions
+(network, volumes, container) or starts the sandbox and returns
+`X-Sandbox-Endpoint`, which Caddy then dials. The manager stops an idle sandbox
+after `STOP_AFTER_S` and starts it again on the next request; the agent resumes
+the same SQLite session. Sandboxes run under gVisor (`runsc`, mandatory — the
+manager refuses to boot without it).
 
-The e2e verifier does not log in through the Web Client; it seeds a
+The e2e verifier does not log in through the web client; it seeds a
 better-auth-shaped `"session"` row. The manager looks up the token part of a
 signed better-auth cookie, so the same table serves both the seeded tests and
-real Web Client accounts:
+real accounts (see the [quickstart](#quickstart-5-minutes) for the snippet).
 
-```bash
-docker compose exec -T oltp psql -U pi -d pi <<'SQL'
-CREATE TABLE IF NOT EXISTS "session" (
-  "id" text PRIMARY KEY, "userId" text NOT NULL,
-  "token" text NOT NULL UNIQUE, "expiresAt" timestamptz NOT NULL
-);
-INSERT INTO "session" VALUES ('sess-dev','dev-user','dev-token',now()+interval '1 day')
-  ON CONFLICT ("id") DO NOTHING;
-SQL
+Settings (`.env`):
 
-curl -H 'Cookie: better-auth.session_token=dev-token' localhost:18080/u/dev-user/status
-```
+- `MANAGER_TOKEN` — required by every manager endpoint except `/healthz`;
+  generated into `.env` by `./dev.sh up` and `verify.sh` when missing, and the
+  manager refuses to start on the well-known compose default or an empty token.
+- `STOP_AFTER_S` (600), `EVICT_TICK_S`, `AGENT_IDLE_MS` (5000) — the idle
+  ladder: pause the harness, then stop the container.
+- `AGENT_EGRESS` (`off`) — sandbox networks are created `--internal` with no
+  route to the internet or other subnets. `open` is the opt-in for
+  internet-reached providers, and a prerequisite for BYOK with one; the
+  requirement is enforced when a provider is configured, never a silent
+  fallback to faux.
+- `AGENT_DNS` (`1.1.1.1`) — the sandbox resolver; the only path to internet
+  names, and unroutable while egress is `off`.
+- `OLTP_PORT` (15432, loopback only), `CADDY_BIND` (`127.0.0.1`; set `0.0.0.0`
+  to expose the stack on the LAN), `WEB_CONTAINER` (optional: attach the web
+  app container to each per-user network).
 
-Settings (`.env`): `MANAGER_TOKEN` (required by every manager endpoint except
-`/healthz` — and manager endpoints answer only to the manager/Caddy/web
-containers, never to a sandbox, token or not; `./dev.sh up` and `verify.sh`
-generate a random value into `.env` when missing, and the manager refuses to
-start on the well-known compose default or an empty token —
-`MANAGER_ALLOW_DEFAULT_TOKEN=1` is the explicit throwaway opt-in),
-`STOP_AFTER_S` (default 600),
-`EVICT_TICK_S`, `AGENT_IDLE_MS`, `WEB_CONTAINER` (optional: connect the web app
-container to each per-user network), `AGENT_EGRESS` (`off` by default: sandbox
-networks are created `--internal` with no NAT — no route to the internet or
-other subnets — plus a per-bridge `iptables INPUT DROP` host wall installed by
-the manager (fail-closed); `open` is the opt-in for internet-reached providers
-and a prerequisite for BYOK with one (RFC 0012 §5.5) — routed egress comes
-back but the host wall stays. That requirement is enforced at two fail-closed
-gates — `PUT /providers/config` rejects a real provider with `egress_blocked`
-at setup (§5.5) and resolve raises it again before delivery (§7.11), never a
-silent faux fallback — and `open` means full internet egress for the sandbox
-pair in phase 1 of RFC 0013. RFC 0013 M3 (egress narrowing, §12.1) would
-remove this coupling — the sidecar already holds the key, so the agent
-network could stay `--internal` with NAT attached to the sidecar only — but
-that phase is deliberately not built: content exfiltration by a compromised
-agent is accepted today (the key cannot leak; workspace text can), the
-mandatory `runsc` runtime (gVisor, not an env knob: agent sandboxes always
-run under a userspace kernel — model-generated code never executes
-host-kernel syscalls, `/proc` and `/sys` are synthetic, and netstack leaves
-no raw-socket/ARP surface, so the cleartext key delivery to the key-injection
-sidecar over the per-user bridge cannot be ARP-spoofed from inside a sandbox;
-the manager refuses to boot without the runtime, and both halves of the pair
-run `--cap-drop ALL` — nothing in them needs a Linux capability, and
-`CAP_NET_RAW` would re-open that spoofing vector under runc; control-plane
-containers always run `runc`), `AGENT_DNS` (`1.1.1.1` by
-default, `--dns` for the sandbox plus a resolv.conf rewrite at provision
-time: Docker never writes `--dns` into resolv.conf on user-defined networks
--- it becomes an upstream of the embedded resolver, which gVisor does not
-serve -- so the manager makes `AGENT_DNS` the first nameserver directly; this
-is the only path to internet names, i.e. real BYOK providers, and it is
-unroutable, fail-fast, while `AGENT_EGRESS=off`; container names never use
-DNS: the manager bakes the control-plane guests into the sandbox `/etc/hosts`
-at create time), `OLTP_PORT` (host port for
-Postgres, default 15432, bound to loopback only), `CADDY_BIND` (the published
-bind address of the `:18080` entry point, `127.0.0.1` by default; set
-`0.0.0.0` to expose the stack on the LAN).
-Per-user agents all run `affido-agent:latest` (the manager forwards no `*_MODEL`
-to `docker create`): the faux provider is the boot default, and the manager
-delivers the user's BYOK choice at runtime through the RFC 0013 delivery split
-(key half to the sidecar, keyless half to the agent's `POST /config`). The manager
-starts containers with `--workdir /workspace`;
-the image CMD is absolute (`node /app/server.ts`) so it runs from any workdir.
+## How it works
 
-## How each operation is implemented
+**The agent.** TypeScript, split by concern and wired through ports: a
+`HarnessLifecycle` port with a pi-durable implementation, a `ContainerAgent`
+that owns one container's model, registry, workspace and conversation, and
+`HttpTool` for one HTTP operation each. Tools depend on an interface, not on
+the concrete agent, so the whole agent runs in tests with a fake and no
+database. Node 24 loads the `.ts` sources directly: the image ships no build
+output.
 
-**Navigate its own workspace.** The registry installs `CodingTools` (`read`,
-`write`, `edit`, `bash`). The Harness builds a `NodeExecutionEnv` per tool call
-rooted at `WORKSPACE` (the `env` option of `DurableHarness`). `GET /files` and
-`GET /file` use the same environment (`Agent.#apiEnv`) and refuse paths that
-escape `WORKSPACE`.
-
-**Structure.** The agent is TypeScript, split by concern, with the dependencies
-pointing at ports: `harness.ts` holds `HarnessLifecycle` (the durable lifecycle
-interface) and `DurableHarness` (its pi-durable implementation), `agent.ts`
-holds `ContainerAgent` (one container's model, registry, workspace, and
-conversation), and `tools.ts` holds `HttpTool` (one HTTP operation: a method,
-a path, and a handler). `ContainerAgent` runs on an injected
-`HarnessLifecycle` (`AgentOptions.harness`, defaulting to a `DurableHarness`
-built from the same options), and the tools depend on the `AgentApi` interface
-rather than on `ContainerAgent` itself — `agent.test.ts` substitutes a fake
-lifecycle and drives the agent with no database at all. The server routes each
-request to the first matching `HttpTool`. `npm run typecheck` (`tsc --noEmit`)
-and `npm test` (`node --test`) are the gates; at runtime Node 24 loads the `.ts`
-sources directly with native type stripping, so the image ships no build output.
-
-**Resume previous sessions.** Storage is SQLite at `SESSION_DB`
-(`openNodeSqliteStorage`) on a named volume. `DurableHarness.#open` always calls
-`runtime.root(context, ...)`, which returns the reserved root conversation
-(`conversationId: 1`) with its entries, then `runtime.resume()` continues any run
-the previous process left unfinished. Submitting the same `requestId` returns
-the already-admitted submission instead of running again.
-
-**One conversation per topic.** "New session" in the UI is `POST /session/new`:
-`DurableHarness.newSession()` creates a separate conversation and switches to
-it (RFC 0008). The active conversation is durable state — a session-scoped
-document in `SESSION_DB` — so pause, restart and eviction reopen the same
-conversation, never the root by accident. The chat view's History action is
-`POST /session/switch { conversationId }`: it repoints that same durable
-pointer at an existing conversation, so a session from six days ago resumes
-with its full model context (unknown ids are 404, never a silent fall-back).
-`/reset` keeps its own meaning: a `pi.reset` head marker that cuts the model's
-context inside the current conversation. Nothing is ever deleted by any of
-these routes; every past conversation stays readable through
-`/inspect?conversation=`, and the web app's trace page groups captures by
+**Sessions.** SQLite on a per-user volume. Open, resume and pause are
+serialized on one promise chain, the root conversation is reopened on every
+activation, and an interrupted run is resumed on restart. A repeated
+`requestId` returns the already-admitted submission instead of running again.
+"New session" switches a durable pointer to a separate conversation; History
+repoints it back (`POST /session/switch`), so an old session resumes with its
+full model context.
+Nothing is deleted; `/reset` starts a new context inside the current
 conversation.
 
-The agent config is stored with the session: `root()` applies its `agent`
-options only when it creates the conversation, so on reopen the stored
-`pi.agent` is used. `DurableHarness.#syncAgent` rewrites that stored model when
-the deployment model changes, and the stored thinking level when
-`THINKING_LEVEL` changes, so a BYOK delivery (`POST /config`, which rewrites
-the deployment model) or a reasoning-effort change takes effect without wiping
-the session. Without it, a provider switch would keep resolving the old,
-now-unregistered model and answer `no_model`.
+**Idle pause.** Every activating request resets a timer. When it fires with no
+request in flight, the harness is closed and its SQLite file checkpointed.
+`/health` and `/status` never open storage, so a health probe cannot defeat the
+pause — they report cached state instead. Workspace-only routes (uploads,
+skills, artifacts) never activate the agent either.
 
-**Read its trace.** `GET /inspect` wraps `harness.inspect(context)` plus
-`conversation.entries()`, `harness.usage()`, and filters both by conversation.
-The port is `TraceSource` (three read-only calls) and the report is built by
-`TraceReader` in `trace.ts`; the HTTP tool only parses the query and maps two
-errors (400 for an invalid query, 404 for an unknown conversation). The report
-carries the newest `limit` entries (default 50, clamped to 500) with a
-collapsed summary, the live tasks and queued/placed submissions of that
-conversation, and folded usage. `entries.returned` and `entries.hasMore` avoid
-claiming a conversation total the entries API does not provide; settled
-submissions are visible as `pi.user`/`pi.assistant` entries, not in
-`submissions`, because `inspect()` returns live work only. `paused` is the
-state at request arrival (the read activates the sandbox); `scheduling` is the
-runtime state while reading. `/session/new` conversations are read the same way
-through the `conversation` query parameter.
-
-A summary is a projection: text, `tool:<name>`, `[thinking]`, `[image]`, and
-named prompt sections, flattened and cut at 160 characters. Each entry also
-carries structured decision fields when derivable from its first model message:
-`role`; `tools` (assistant: tool names in call order — the decisions),
-`stopReason`, `model`; `toolName`, `isError`, `durationMs` (tool results). The
-dashboard decision graph is built from these. `GET /entry?id=`
-reads one entry unprojected instead: the stored messages with their tool
-results verbatim, `thinking` blocks as the provider returned them, tool-call
-arguments, and the entry's `data` (tool diagnostics). The dashboard trace page
-opens one row at a time with it, because shipping raw messages for a 500-entry
-page would put every file the agent read into one snapshot row.
-
-Thinking exists only if it was requested: the agent asks the provider for
-reasoning at the `THINKING_LEVEL` it was created with (default `off`, which
-sends no `reasoning` field). A provider that returns reasoning anyway still has
-it stored and shown by `/entry`.
-
-**Pause when idle.** Every activating request resets a timer. When it fires with
-no request in flight, `DurableHarness.#pause` closes the Harness, which
-checkpoints and closes the SQLite file. `GET /health` and `GET /status` never
-open storage, so a health probe cannot defeat the pause.
-
-**Activate when called.** `/prompt`, `/reset`, `/session/new`, `/files`, `/file`, and `/session`
-call `Agent` methods that activate through `Harness.activate`, which reopens
-storage and the Harness if they are closed. Open and pause run on one serialized
-promise chain inside `DurableHarness` so a timer and a request cannot
-interleave. The four `/uploads` endpoints, the four `/skills` endpoints, and
-the three `/artifacts` endpoints are the opposite: they touch only the
-workspace filesystem, like `/ingest`, and never activate the agent.
+**Traces.** `/inspect` returns the newest entries with a collapsed summary and
+structured decision fields (role, tools, stop reason, model, errors, timings),
+live tasks and submissions, and folded usage. `/entry` reads one entry
+unprojected: stored messages, tool results, thinking blocks, tool-call
+arguments. The dashboard decision graph and trace page are built from these.
 
 ## HTTP API
 
+Inside the sandbox, behind Caddy at `/u/<user_id>/...`:
+
 | Method | Path | Activates | Purpose |
 |---|---|---|---|
-| GET | `/health` | no | liveness, used by the Docker healthcheck |
-| GET | `/status` | no | `{ paused, conversationId, entries, inFlight, model, keyVia, webControl }` (cached when paused); `keyVia` is `"sidecar"`, `"direct"` or null — where the current selection's key lives, never the key; `webControl` is the boolean that the manager's control token landed |
-| GET | `/session` | yes | reopen and report `{ conversationId, entries }` |
-| GET | `/inspect?conversation=1&limit=50` | yes | trace report: newest entries (summary + decision fields), live tasks and submissions, usage |
-| GET | `/inspect?report=citations` | yes | citation report (RFC 0006): per-run used/reported/exact and gate friction |
-| GET | `/entry?id=11` | yes | one entry unprojected: stored messages (tool results, thinking), tool-call arguments, `data` |
-| GET | `/files?path=.` | yes | list a workspace directory |
-| GET | `/file?path=...` | yes | read a workspace text file |
-| POST | `/ingest?docId=...&filename=...&title=...` | no | raw body -> `{ docId, path, bytes, sourceSha256, searchable, indexing }` (RFC 0014): stages the bytes, decides admission once (`text`/`derived`/`none`), derives PDF text into `corpus/text/`, writes the registry sidecar |
-| GET | `/raw?docId=...&filename=...` | yes | read the staged bytes of a document back |
-| GET | `/text?docId=...` | yes | read the text derived from a staged PDF (`corpus/text/<docId>.txt`); 404 when none was extracted |
-| DELETE | `/ingest?docId=...&filename=...` | no | remove the staged bytes of a document |
-| POST | `/uploads/dir` | no | `{ path }` -> create/confirm a directory under `corpus/uploads/` (PRD 0003) |
-| POST | `/uploads/file?path=md-to-docx/SKILL.md` | no | raw body -> `{ docId, path, bytes, sourceSha256, searchable, indexing }`; the same pipeline as `/ingest` (RFC 0014), target the uploads tree |
-| GET | `/uploads?path=md-to-docx` | no | recursive tree of the uploads root or of one subtree |
-| DELETE | `/uploads?path=md-to-docx` | no | remove a file or a subtree under `uploads/` |
-| POST | `/skills/file?skill=md-to-docx&path=SKILL.md` | no | raw body -> `{ skill, path, bytes, sha256 }`; installs one bundle file at `skills/<skill>/<path>` (RFC 0009) |
-| GET | `/skills` | no | installed skills of both roots: name, provenance, description, version, fresh verify |
-| POST | `/skills/verify?skill=md-to-docx` | no | manifest body -> per-file ok / mismatch / missing against the installed tree |
-| DELETE | `/skills?skill=md-to-docx` | no | remove the installed skill subtree; missing is not an error |
-| GET | `/artifacts?path=` | no | recursive tree of the artifacts root or of one subtree (symlinks skipped) |
-| GET | `/artifact?path=proposal.docx` | no | the file bytes as a download: attachment, static content type, 25 MiB cap, never a symlink |
-| DELETE | `/artifacts?path=proj` | no | remove a file or subtree under `artifacts/`; missing is not an error |
-| POST | `/prompt` | yes | `{ prompt, requestId?, citations?: "required" \| "off", web?: "allowed" \| "off" }` -> `{ status, answer, evidence, citations[], artifacts[], webMode, submissionId, entries }`; `web` defaults to `"off"` |
-| POST | `/config` | yes | the manager's runtime delivery (RFC 0012 §5.4 / RFC 0013 §5): `{provider, modelId, viaSidecar: true, baseUrl?}` — keyless, the key half went to the sidecar — or the direct `{provider, modelId, apiKey?, baseUrl?}`; serialized with prompts |
-| POST | `/webconfig` | no | the manager's RFC 0016 §7 delivery: `{controlToken}`; stored in memory, never echoed, never on disk. It is what lets a `web: "allowed"` run register with the node |
-| GET | `/corpus/citations?runId=...` | yes | one run's citations, re-verified against the stored text (survives restarts) |
-| POST | `/session/new` | yes | start a separate conversation (RFC 0008) -> `{ conversationId, entries }`; the previous one stays readable |
-| POST | `/reset` | yes | start a new context (`pi.reset`); older entries stay in storage |
-| POST | `/pause` | no | close the Harness now (deterministic pause) |
+| GET | `/health`, `/status` | no | liveness; current state, model and key location |
+| GET | `/session`, `/inspect`, `/entry` | yes | conversation state, trace report, one entry unprojected |
+| GET | `/files`, `/file` | yes | read the workspace (confined to it) |
+| POST/GET/DELETE | `/ingest`, `/raw`, `/text` | mixed | stage a document; read back its bytes and derived PDF text |
+| POST/GET/DELETE | `/uploads`, `/uploads/dir`, `/uploads/file` | no | a user-shared tree under `corpus/uploads/` |
+| GET/POST/DELETE | `/skills`, `/skills/file`, `/skills/verify` | no | install a skill bundle file-by-file, verify it, remove it |
+| GET/DELETE | `/artifacts`, `/artifact` | no | the download surface |
+| POST | `/prompt` | yes | ask; returns the answer, evidence, citations and artifacts |
+| POST | `/config`, `/webconfig` | yes / no | runtime delivery from the manager: model and key mode, web-search token |
+| POST | `/session/new`, `/session/switch`, `/reset`, `/pause` | yes / no | new conversation, resume a past one, fresh context, deterministic pause |
 
-`/ingest` only stages bytes: it hashes them and writes them to the workspace, and
-it does not run the parser yet. The control plane keeps the metadata and the
-ingestion event; the bytes and any parsed markdown stay on the volume.
+Both ingestion paths (documents and user uploads) go through one pipeline:
+admission to the citation index is decided once, at ingest, and recorded in a
+registry sidecar. Text files enter when their bytes are strict UTF-8, PDFs
+through text extracted at upload time, other binaries never. The citation
+store reads only that registry, so a document whose staged bytes or admitted
+text no longer hash to the recorded values stops being evidence until it is
+re-ingested. The sandbox validates each uploaded path (relative, no `..`,
+bounded depth) and prefixes `corpus/uploads/` itself, so a crafted request
+cannot write outside the workspace.
 
-`/uploads` is a different contract (PRD 0003): the client dictates every path.
-A directory tree a user shares with the agent — a skill with `SKILL.md` and a
-`references/` folder, say — lands under `WORKSPACE/corpus/uploads/<path>` with
-the structure intact, and the agent reads those files with its own tools. Both
-entry points ingest through one pipeline (RFC 0014): admission to the citation
-index is decided once, at ingest, and recorded in the `corpus/meta/<docId>.json`
-registry — text files when their bytes are strict UTF-8, PDFs through text
-extracted at upload time (`corpus/text/`), other binaries never. The citation
-store reads only the registry: a document whose staged bytes or admitted text no
-longer hash to its registry entry stops being evidence until re-ingested.
-The sandbox validates each path (`safeTreePath`: relative, no `..`, bounded
-depth) and prefixes `corpus/uploads/` itself, so a crafted request cannot
-write outside the workspace.
+## Skills and artifacts
 
-Once the conversation has read web content (RFC 0016 §6), `/ingest`,
-`/uploads/*` and `/skills/file` answer `409 web_tainted`: a fetched page cannot
-be laundered into the searchable corpus or into a skill that outlives the run.
-`/session/new` starts a clean conversation, which lifts the block for it.
-
-## Skills and artifacts (RFC 0009)
-
-Two more workspace roots, both plain filesystem work that never activates the
-agent:
+Two workspace roots, both plain filesystem work that never activates the agent:
 
 - **`skills/`** — marketplace installs. The platform curates a catalog in the
-  repo (`marketplace/skills/`, manifest-hashed by `marketplace/manifest.mjs`);
-  the dashboard `/dashboard/skills` page installs it file-by-file into the
-  user's sandbox and verifies against the manifest. Installs survive pause,
-  stop, eviction, and reprovision (per-user volume); only `dev.sh reset`
-  removes them. A prompt starting `/skill_name` gets a server-built hint in the
-  stored content — resolved: "read that SKILL.md first"; unknown: an honest
-  not-installed note naming what is installed. A user-shared
-  `uploads/<name>/SKILL.md` tree is invocable the same way.
+  repo (`marketplace/`, manifest-hashed); the dashboard installs it file-by-file
+  into the user's sandbox and verifies against the manifest. Installs survive
+  pause, stop, eviction and reprovision; only `dev.sh reset` removes them. A
+  prompt starting `/skill_name` gets a server-built hint — resolved: "read that
+  SKILL.md first"; unknown: an honest not-installed note naming what is
+  installed. A user-shared `uploads/<name>/SKILL.md` tree is invocable the same
+  way.
 - **`artifacts/`** — the download surface. Deliverables the model writes there
-  are reported by the `/prompt` envelope (`artifacts[]` with bytes, sha256,
-  mtime — server-built, re-derived on idempotent replay), listed by
-  `GET /artifacts`, and downloadable through the chat buttons or the uploads
-  dashboard panel via the authenticated `/api/artifact` proxy. Downloads are
-  always attachments with a static content type, capped at 25 MiB, and a
-  symlink anywhere under `artifacts/` is neither listed nor served.
+  are reported by the `/prompt` envelope (bytes, sha256, mtime, re-derived on
+  replay), listed by `GET /artifacts`, and downloadable through the chat buttons
+  or the uploads panel. Downloads are always attachments with a static content
+  type, capped at 25 MiB, and a symlink anywhere under `artifacts/` is neither
+  listed nor served.
 
 The image ships capability, not knowledge: a closed set of runtime libraries
-(`docx` for document generation, `unpdf` for PDF text extraction — both
-exact-pinned, resolved through `NODE_PATH`) and **no installer** — `npm`,
-`npx`, and `corepack` are deleted from the runtime image, so extending the
-toolbox at runtime fails with `command not found`. `verify.sh` asserts both
-properties. The server-built container prompt section states these facts to
-the model in every sandbox — which libraries exist, that PDFs are read with
-`unpdf`, and that nothing can be installed — so an uploaded PDF is read
-through `unpdf`, never characterized by its magic bytes for lack of
-`pdftotext`. `unpdf` bundles a serverless build of PDF.js; the bundled engine
-version is pinned by a unit test, so upgrading it is a one-line, reviewed
-change. `md-to-docx` is the first catalog skill; the e2e drives the shipped
-bundle end to end, including the faux documents dance that builds a real
-`.docx` without an API key.
+(`docx` for document generation, `unpdf` for PDF text extraction, both
+exact-pinned) and **no installer** — `npm`, `npx` and `corepack` are deleted
+from the runtime image, so extending the toolbox at runtime fails with
+`command not found`. `verify.sh` asserts both properties, and the container
+prompt tells the model what exists so an uploaded PDF is read rather than
+guessed at. `md-to-docx` is the first catalog skill; the e2e builds a real
+`.docx` from it without an API key.
 
-## Strict citations (RFC 0006)
+## Strict citations
 
 A `/prompt` request with `citations: "required"` turns that one submission into
 a strict run. The model gets `corpus_grep`, `corpus_read`, `corpus_annotate`,
-`answer_publish` and `answer_plain`; an answer that carries document evidence
-exists only through the gate: every non-heading line must carry a `[cit_...]`
+`answer_publish` and `answer_plain`. An answer that carries document evidence
+exists only through the gate: every non-heading line must carry a citation
 token, the declared ids must be exactly the tokens used, and every id must be a
 verified annotation of this run. A quote that is not an exact span of the
-stored document produces no `citationId` at all, so it cannot be cited: further
-`answer_publish` attempts are refused, and the model's remaining exit is
-`answer_plain`, whose reply carries the explicit *no document evidence* label.
-The envelope reports `evidence: "cited" | "plain" | "none"` plus the `citations`
-array; the fields are server-built, never typed by the model. While the current
-run is strict, the workspace tools (`bash`, `read`, `write`, `edit`) are refused
-outright (RFC 0014 §5.7): the only readable evidence is the citation index, so a
-fact the index cannot verify cannot even be read; in every run `write`/`edit`
-refuse `corpus/**`, and the index build verifies each admitted document's staged
-bytes and admitted text against the hashes its registry entry recorded.
-Requests without the field keep today's free-form answer;
-`AGENT_CITATIONS_DEFAULT=required` (followed by `./dev.sh reload`) flips that
-default. The chat UI carries the per-question toggle; the report at
-`/inspect?report=citations` measures exactness from the trace alone.
+stored document produces no citation at all, so further `answer_publish`
+attempts are refused and the model's remaining exit is `answer_plain`, whose
+reply carries the explicit *no document evidence* label. The envelope reports
+`evidence: "cited" | "plain" | "none"` plus the citations; those fields are
+server-built, never typed by the model. While the run is strict, workspace
+tools are refused outright: the only readable evidence is the citation index,
+so a fact the index cannot verify cannot even be read.
 
-A post-gate coherence check (RFC 0017, defaulting to enforce since RFC 0018)
-runs after the gate accepts: **LiquidAI d1.1 via OpenRouter** — a hosted
-decision model that answers one typed-choice question (supported / unrelated /
-contradicted) per cited line, with no text generation — judges each line
-against the quote behind its id. On the RFC 0017 fixtures it scores 100%
-accuracy with 0% false accepts and 0% false rejects, so an incoherent line
-rejects the publish (`incoherent_citation`) and the model retries; verdicts,
-latencies and truncations land in the run report either way. The judge rides
-the run's OpenRouter credential (BYOK key or the RFC 0013 sidecar's pinned
-`/judge/decisions` route — never a separate key) and is simply absent when no
-OpenRouter credential backs the run, so the keyless stack behaves exactly as
-RFC 0006. `AGENT_CITATION_JUDGE=warn|off` degrades to record-only or off. The
-judge is one class over pi-ai's classifier contract with the d1.1 binding in
-code, so there is no backend switch, no model cache and no weights in the image.
+A post-gate coherence check then judges each cited line against the quote
+behind its id with a hosted decision model that answers one typed choice
+(supported / unrelated / contradicted) and generates no text. On the shipped
+fixtures it scores 100% accuracy with 0% false accepts, so an incoherent line
+rejects the publish and the model retries; verdicts, latencies and truncations
+land in the trace, and the traces page renders the per-pair verdicts. The judge
+rides the run's own OpenRouter credential and is simply absent when none backs
+the run, so the keyless stack behaves exactly like the pure gate. The chat UI
+carries the per-question toggle; `/inspect?report=citations` measures exactness
+from the trace alone. `AGENT_CITATIONS_DEFAULT=required` (followed by
+`./dev.sh reload`) flips the default for requests that omit the field.
 
-## Web search (RFC 0016)
+## Web search
 
 Model calls stay in the sandbox; the open web does not. Each sandbox gets a
-third container, `u<slug>-websearch`, on the same per-user network. It owns no
-writable volume, runs no user code, and has no route to the internet: it talks
-to operator-supplied SearXNG (search) and Camofox (page reads) on a shared
-internal network, and those two services are the only containers with egress.
-
-Two tools are installed beside the coding and citation tools:
+third container on the same per-user network. It owns no writable volume, runs
+no user code and has no route to the internet: it talks to operator-supplied
+SearXNG (search) and Camofox (page reads) on a shared internal network, and
+those two services are the only containers with egress.
 
 | Tool | Returns | Bounds |
 |---|---|---|
@@ -495,66 +323,30 @@ Two tools are installed beside the coding and citation tools:
 | `web_read {sourceId}` | `{untrusted: true, url, title, text, sha256}` | opaque ids issued to this run, one read per result, 6000 chars |
 
 Web is **off by default**. The user enables it per message with the Web toggle
-next to Strict citations; the chat route sends `web: "allowed"` on `/prompt`,
-and the sandbox records that grant in the run. Without it both tools answer
+next to Strict citations; the chat route sends `web: "allowed"` on `/prompt`
+and the sandbox registers that grant for the run. Without it both tools answer
 `web_not_authorized` and never touch the node. The grant is not a model choice:
-it is written by the trusted admission path, one run at a time.
+it is written by the trusted admission path, one run at a time, and bound to a
+per-run token the node issues back.
 
 The model never names a URL: `web_read` has no URL argument, and the node
-resolves `sourceId` from the run's own table (`no_url_in_arguments`,
+resolves the id from the run's own table (`no_url_in_arguments`,
 `unknown_source`, `already_read`, `budget_exhausted` are the named refusals).
 Result URLs whose host is a private, loopback or link-local literal are dropped
-before the model sees them, so a poisoned result cannot point the browser at the
-host's bridge or the cloud metadata endpoint.
-The first successful read marks the conversation tainted in a durable document
-that is never cleared, so the block survives pause, restart and compaction.
-`write`/`edit` into `corpus/**` is already refused in every run; the taint adds
-the HTTP persistence paths (`/ingest`, `/uploads/*`, `/skills/file`).
+before the model sees them, so a poisoned result cannot point the browser at
+the host's bridge or the cloud metadata endpoint. The first successful read
+marks the conversation tainted in a durable document that is never cleared —
+the block survives pause, restart and compaction — and the HTTP persistence
+paths then answer `409 web_tainted`, so a fetched page cannot be laundered into
+the searchable corpus or into a skill that outlives the run. A new
+conversation starts clean.
 
-The node is created by the manager, never by compose, and the manager bakes its
-address into the agent's `/etc/hosts` (gVisor has no embedded DNS). Search
-service hostnames must match the containers attached to `WEBSEARCH_IN`; the
-manager bakes their IPs into the node the same way. Without them the tools
-answer `search_unavailable` and the rest of the sandbox is unaffected.
-
-The per-run grant is enforced at the node, not only at the tool:
-
-1. The manager derives a per-user control token from `MANAGER_TOKEN` and
-   delivers it on every resolve (`POST /control` to the node, `POST /webconfig`
-   to the agent). Both keep it in memory.
-2. On `/prompt` with `web: "allowed"`, the agent's trusted admission code
-   registers the run with the node using that token and stores the returned
-   per-run token in the run pointer.
-3. `web_search`/`web_read` send the per-run token; the node refuses any run it
-   did not register, any run registered with `web: false`, and any call without
-   the matching token.
-
-A bash child of the sandbox shares the network address but not the agent's
-memory: it cannot read the control token, so it cannot register a run, and a
-forged run id or token answers `web_not_authorized`. Runs expire after an hour;
-a `web: "off"` prompt has no token at all.
-
-```bash
-# ./verify.sh runs an e2e-only fake stack: one container, SearXNG on :8080 and
-# Camofox on :9377, attached to websearch-in.
-docker network create --internal websearch-in          # if missing
-docker network connect websearch-in searxng            # operator services
-docker network connect websearch-in camofox-browser
-```
-
-The node bakes those addresses at create time: after attaching the services,
-recreate the node (`./dev.sh reload`) so a node created earlier picks them up.
-When SearXNG's default engine set is suspended (CAPTCHA, rate limits), the node
-retries one engine at a time (`bing`, `duckduckgo`, `brave`, `mojeek`,
-`wikipedia`, `yandex`) instead of reporting an empty result list. SearXNG's own
-per-engine timeout must cover the container's DNS latency: the stock 3s expires
-before the first engine answers when Docker's resolver has an unreachable
-upstream first, and every engine then reports `timeout`.
-
-`.env` names the topology and the services (`WEBSEARCH_IN`, `WEBSEARCH_OUT`,
-`SEARXNG_URL`, `CAMOFOX_URL`, `CAMOFOX_API_KEY`, `WEBSEARCH_MEMORY`,
-`WEBSEARCH_CPUS`). `CAMOFOX_API_KEY` is a shared operator secret, passed to the
-node only; it never enters a sandbox and no tool echoes it.
+The node is created by the manager, never by compose. Without the search
+services attached it answers `search_unavailable` and the rest of the sandbox
+is unaffected. `.env` names the topology and the services (`WEBSEARCH_IN`,
+`WEBSEARCH_OUT`, `SEARXNG_URL`, `CAMOFOX_URL`, `CAMOFOX_API_KEY`,
+`WEBSEARCH_MEMORY`, `WEBSEARCH_CPUS`); the API key is a shared operator secret
+passed to the node only — it never enters a sandbox and no tool echoes it.
 
 ## Architecture
 
@@ -570,12 +362,12 @@ node only; it never enters a sandbox and no tool echoes it.
           | sandbox-      |-----------------------------+
           | manager       |                             |   one group per user:
           +-------+-------+                             v   u<slug>:8080            u<slug>-sidecar:8081
-             |   POST /config {provider, modelId,         |   agent — no key          key-injection sidecar
-          +---------+   viaSidecar: true}                |        ^                          |
-          |  oltp   |  key ciphertext (AES-GCM)          +--------+---- pi-net-<slug> ------+
+             |   POST /config {provider, modelId,       |   agent — no key          key-injection sidecar
+          +---------+   viaSidecar: true}               |        ^                          |
+          |  oltp   |  key ciphertext (AES-GCM)         +--------+---- pi-net-<slug> ------+
           |registry |  ---------------------------------------------|         pinned upstream (TLS)
           +---------+                                                v
-                                                            provider (api.deepseek.com, ...)
+                                                           provider (api.deepseek.com, ...)
 
    u<slug>-websearch:8082  — no volumes, no egress
         |                 |
@@ -584,63 +376,50 @@ node only; it never enters a sandbox and no tool echoes it.
 ```
 
 The control plane declares no agent `ports`, so the sole host mapping is Caddy's
-`18080:80`. Caddy dials each agent by container name on the per-user
-`pi-net-<slug>` network the manager created; the agent containers, their key
-sidecars (`u<slug>-sidecar:8081`, RFC 0013) and the web-search nodes
-(`u<slug>-websearch:8082`, RFC 0016) are not compose services, so
-`docker compose ps` lists only caddy, oltp and sandbox-manager. Each per-user
-network hosts exactly one such group; cross-tenant reachability (agent→agent,
-agent→sidecar, agent→node, node→node) is blocked by the per-user subnet wall,
-the node's source-subnet guard, and proven by `e2e-test/security.sh`.
+`18080:80`. Caddy dials each agent by container name on the per-user network the
+manager created; the agent containers, their key sidecars and the web-search
+nodes are not compose services, so `docker compose ps` lists only caddy, oltp
+and sandbox-manager. Each per-user network hosts exactly one group, and
+cross-tenant reachability is blocked and proven by `e2e-test/security.sh`.
 
 ## Use a real model
 
-Sandbox agents are created by the manager, which forwards no `*_MODEL` variable;
-the faux provider is the default and is scripted by transcript state: a tool
-call (`ls -la`) then an answer built from the listing, and a citation dance
-(`corpus_grep` → `corpus_read` → `corpus_annotate` → `answer_publish`) when the
-question mentions renewal — so the strict path can be exercised with no API key.
-The recording at the top of this file is one more transcript
+Sandbox agents are created by the manager, which forwards no model variable: the
+faux provider is the default and is scripted by transcript state — a tool call
+and an answer built from the listing, or a citation dance when the question
+mentions renewal — so the strict path can be exercised with no API key. The
+recording at the top of this file is one more transcript
 (`agent/citation-gate-demo.ts`): two questions, a tampered quote and an exact
 one.
 
-### BYOK (bring your own key, RFC 0012 + RFC 0013)
+### BYOK (bring your own key)
 
 An authenticated user picks a provider from a curated catalog (or registers a
 custom OpenAI-compatible endpoint) and submits their own API key. The key is
-stored AES-256-GCM-encrypted in Postgres (the KEK is
-[secrets/llm_key_kek](secrets/llm_key_kek), mounted into the manager only),
-and re-delivered after any restart — never written to any container
-environment, image, filesystem, URLs, or logs. Switching provider or rotating
-a key never wipes a session.
+stored AES-256-GCM-encrypted in Postgres, the key-encryption key lives in
+`secrets/llm_key_kek` (mounted into the manager only), and the key is
+re-delivered after any restart — never written to a container environment, the
+image, a filesystem, a URL or a log. Switching provider or rotating a key never
+wipes a session.
 
-**RFC 0013 — the key never enters the agent process.** Each sandbox is a
-*pair*: the agent container plus a key-injection sidecar (same image, second
-entrypoint `node /app/sidecar.ts`, own 128m/0.25 caps, no volumes, created by
-the manager on the same per-user `--internal` network). At resolve time the
-manager delivers `{provider, modelId, apiKey, baseUrl?}` to the sidecar's
-`POST /config` — the only process that ever holds the plaintext — and a
-keyless `{provider, modelId, viaSidecar: true}` to the agent. The agent
-registers its models against `SIDECAR_URL` with a placeholder credential; the
-sidecar strips inbound auth headers, stamps the real `Authorization`, and
-forwards to an upstream **pinned at delivery time** (catalog hostname or the
-user-registered endpoint; any other host, redirect, or provider prefix is
-refused). An attacker who fully controls the agent process — prompt injection,
-tool escape — can *spend* the key (inherent: the agent must call the provider)
-but cannot *disclose* it: there is no plaintext in the agent container at all
-(`/status` reports `keyVia: "sidecar"` instead of a fingerprint), and
-tool-to-server memory reads are kernel-denied (Phase 0: a seccomp deny list
-for `ptrace`/`process_vm_readv`/`pidfd_getfd`/`kcmp` plus `--ulimit core=0`,
-applied to both containers of every pair). The pair shares one lifecycle:
-idle eviction, recreation and health cover agent+sidecar together, and a
-resolve never routes an agent to a dead sidecar (`sidecar_unhealthy`, fail
-closed).
+**The key never enters the agent process.** Each sandbox is a *pair*: the agent
+plus a key-injection sidecar (same image, second entrypoint, no volumes, same
+private network). At resolve time the manager delivers the key to the sidecar —
+the only process that ever holds the plaintext — and a keyless model selection
+to the agent. The agent registers its models against the sidecar with a
+placeholder credential; the sidecar strips inbound auth headers, stamps the
+real one and forwards to an upstream pinned at delivery time (any other host,
+redirect or provider prefix is refused). An attacker who fully controls the
+agent process can *spend* the key — inherent, the agent must call the provider
+— but cannot *disclose* it: there is no plaintext in the agent container, and
+`/status` reports where the key lives instead of a fingerprint. The pair shares
+one lifecycle: eviction, recreation and health cover both, and a resolve never
+routes an agent to a dead sidecar.
 
 ```bash
-# once, in .env: the stack-level prerequisites
-#   AGENT_EGRESS=open          (real providers are reached over the internet)
-# then bring the stack up; dev.sh creates secrets/llm_key_kek when missing
-./dev.sh up
+# once, in .env: real providers are reached over the internet
+#   AGENT_EGRESS=open
+./dev.sh up                 # dev.sh creates secrets/llm_key_kek when missing
 ```
 
 From the web app: Settings -> AI provider (catalog, key entry, verification,
@@ -654,17 +433,15 @@ curl -X PUT -H 'Cookie: better-auth.session_token=<token>' \
 ```
 
 The manager answers with the masked view (selection plus key fingerprints, and
-never the key). The next request to `/u/<user_id>/...` resolves, delivers the
-key half to the sidecar and the keyless half to the agent
-(`setProvider` + `conversation.configure`, serialized with prompts), and the
-prompt is answered by the provider through the sidecar. A user's key exists
-in plaintext only in their own sidecar's RAM; an idle-stopped pair holds no
-key material at all.
+never the key). The next request resolves, delivers both halves, and the prompt
+is answered by the provider through the sidecar. A user's key exists in
+plaintext only in their own sidecar's RAM; an idle-stopped pair holds no key
+material at all.
 
-Production prerequisite (RFC 0012 §8.3): terminate TLS at Caddy (automatic
-HTTPS on a public site address, or `tls internal` for private deployments)
-before opening the BYOK endpoints to users — the shipped Caddyfile serves
-plain HTTP on loopback, which is a dev-stack exception.
+Production prerequisite: terminate TLS at Caddy (automatic HTTPS on a public
+site address, or `tls internal` for private deployments) before opening the
+BYOK endpoints to users — the shipped Caddyfile serves plain HTTP on loopback,
+which is a dev-stack exception.
 
 ### Standalone (no manager)
 
@@ -683,60 +460,26 @@ stack never uses it.
 
 ## Verify
 
-`./verify.sh` type-checks the agent (`npm run typecheck`, `tsc --noEmit` under
-`strict`), runs its unit tests (including the sidecar handler tests of RFC
-0013 §11: strip/stamp/pin, SSE pass-through, unpinned-host refusal, and the
-full pi-ai→sidecar→upstream chain against a local fake upstream) and the
-manager's BYOK unit tests (pair provisioning, the delivery split, reconcile
-against sidecar `/status`, `sidecar_unhealthy` fail-closed, Phase 0 args),
-builds `affido-agent:latest`, starts the control plane, then runs the e2e
-suite (including `websearch.sh`: the node's tool contract through the manager,
-the per-run Web authorisation — a run without it is refused with
-`web_not_authorized`, a forged control token cannot register — the agent's
-search→read dance against an e2e-only fake SearXNG/Camofox, and the taint
-gate's durability across a restart), `./verify-sandbox.sh`, the security
-containment negatives (now
-including the RFC 0013 Phase 0 probes — the `ptrace`-family denial asserted
-unconditionally inside every sandbox, `ulimit -c` 0, no core after a
-self-SIGSEGV — and the victim-sidecar and victim-websearch isolation probes),
-and finally the BYOK
-chain against a fake OpenAI-compatible upstream through the sidecar (RFC 0012
-§10 + RFC 0013 §11: proves the delivery split, `keyVia: "sidecar"`, the
-pinned-upstream refusal of exfiltration attempts, RAM-only key custody in
-both containers, rotation, validation, L0/L1/recreation durability and pair
-recreation, then restores the keyless default). It exits non-zero on the
-first failure. Before starting the stack the gate probes the Docker daemon
-for the `runsc` runtime and fails fast when the host does not provide it:
-gVisor is mandatory (the manager itself refuses to boot without it), because
-under runc a compromised agent could ARP-spoof the sidecar and capture the
-cleartext key delivery.
+`./verify.sh` is the stack gate. It type-checks and unit-tests the agent and
+the manager's BYOK code, builds `affido-agent:latest`, starts the control plane,
+and then runs the e2e suites through Caddy only — the per-feature suites below,
+plus web search against an e2e-only fake SearXNG/Camofox (authorisation
+refusals, forged tokens, taint durability across a restart), the sandbox
+durability checks, the containment negatives, and the full BYOK chain against a
+fake upstream (delivery split, pinned-upstream refusal, RAM-only key custody in
+both containers, rotation, durability, pair recreation) before restoring the
+keyless default. It exits non-zero on the first failure, and it fails fast on a
+host without the sandbox runtime.
 
-`./e2e-test/run.sh` asserts that compose declares only the control plane, then
-runs these checks through Caddy only:
-
-- `happy-path.sh`: caddy -> sandbox-manager (cold provision) -> caddy -> sandbox
-  agent -> reply, plus the 401/403 identity checks.
-- `parallel.sh`: three users cold-provision three sandboxes and three Caddy
-  requests get three concurrent agent replies; the script asserts distinct
-  agents and overlapping request intervals.
-- `citations.sh`: uploads a fixture document, asks a grounded question with
-  `citations: "required"`, and asserts the gate-published envelope, the
-  idempotent replay, the free-form answer without the field, the trace-only
-  exactness report, and citation re-verification after a container restart.
-- `uploads.sh`: creates a directory, uploads a two-level tree with full paths
-  (PRD 0003), reads a file back through the agent's own file API, asserts the
-  tree listing, refuses `../` escapes, and deletes the subtree.
-- `skills.sh` and `artifacts.sh`: the marketplace loop (install, verify,
-  corruption, uninstall) and the documents dance with its downloads.
-- `providers.sh`: the manager's BYOK API in the default stack — catalog served
-  from the agent image, cookieless 401 before the write handlers, the
-  `egress_blocked` fail-closed, custom-baseUrl rules, the no-Origin 403,
-  `no-store`, session binding, the trusted-caller token wall, and the peer
-  guard on `/providers/*`.
-
-`./verify-sandbox.sh` (part of the gate) then proves the L0 idle pause, the
-manager's L1 stop and restart with the same conversation and entries, and that a
-client-supplied `X-Sandbox-Endpoint` is stripped.
+`./e2e-test/run.sh` asserts that compose declares only the control plane and
+that no agent, sidecar or web-search service leaked into it, then drives the
+running stack: cold provisioning and identity checks (`happy-path.sh`),
+three users provisioned in parallel (`parallel.sh`), the citation gate with
+replay and re-verification after a restart (`citations.sh`), uploads
+(`uploads.sh`), skills and artifacts (`skills.sh`, `artifacts.sh`) and the
+provider API (`providers.sh`). `./verify-sandbox.sh` then proves the idle
+pause, the manager's stop and restart with the same conversation and entries,
+and that a client-supplied `X-Sandbox-Endpoint` is stripped.
 
 ```
 ALL CHECKS PASSED
@@ -747,14 +490,14 @@ ALL CHECKS PASSED
 - `/status` reports `entries: 0` and `conversationId: null` while paused because
   it deliberately does not open storage. Call `/session` to resume and read the
   live values.
-- The idle timer is `IDLE_MS` (default 5000 ms). `docker restart <sandbox>`
-  demonstrates resume from a hard stop; the same happens on `SIGTERM`, which
-  closes the Harness cleanly.
-- Pausing closes the Harness and its SQLite file but keeps the process up. When
+- The agent-side idle timer (`AGENT_IDLE_MS`, default 5000 ms) pauses the
+  harness. `docker restart <sandbox>` demonstrates resume from a hard stop; the
+  same happens on `SIGTERM`, which closes the harness cleanly.
+- Pausing closes the harness and its SQLite file but keeps the process up. When
   the user stays away for `STOP_AFTER_S`, the manager stops the container; the
   next request through `/u/<id>/...` starts it again, so the proxy never needs a
   live upstream ahead of time.
-- The workspace seeds `README.md`, `notes.txt`, and `data.txt` on first start.
+- The workspace seeds `README.md`, `notes.txt` and `data.txt` on first start.
 
 ## License
 
@@ -764,10 +507,7 @@ license; everything in this repository is Apache-2.0.
 
 ## Docs
 
-- [docs/rfc/](docs/rfc/) — design records: sandboxes (0002, 0003), citations
-  gate (0006), sessions (0008), skills and artifacts (0009), BYOK user-selected
-  providers (0012), key-injection sidecar (0013), ingestion and index registry
-  (0014)
+- [CHANGELOG.md](CHANGELOG.md) — what changed, and the design record behind
+  each change
 - [docs/security.md](docs/security.md) — threat model (draft)
 - [CONTRIBUTING.md](CONTRIBUTING.md) — the gate and the rules
-- [CHANGELOG.md](CHANGELOG.md)
