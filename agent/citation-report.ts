@@ -4,6 +4,7 @@
 // cost visible per reason so prompt regressions show up after every session.
 
 import type { ConversationId } from "@earendil-works/pi-durable";
+import type { JudgePairRecord } from "./citation-judge.ts";
 import type { CitationRunState } from "./citation-run.ts";
 
 export type CitationRunReport = {
@@ -31,6 +32,9 @@ export type CitationRunReport = {
 	 * judge never ran (mode off, or no credential backed it). */
 	readonly judge: {
 		readonly mode: "warn" | "enforce";
+		/** Judged (line, citation) pairs, in call order. Stored state only:
+		 * line, citation id, verdict, score, latency and the truncation flag. */
+		readonly verdicts: readonly JudgePairRecord[];
 		/** Judged (line, citation) pairs. */
 		readonly judgeVerdicts: number;
 		readonly judgeRejections: number;
@@ -95,6 +99,7 @@ const judgeReportOf = (
 	const sorted = [...judge.verdicts].map((record) => record.ms).sort((a, b) => a - b);
 	return {
 		mode: judge.mode,
+		verdicts: judge.verdicts,
 		judgeVerdicts: judge.verdicts.length,
 		judgeRejections: judge.rejections,
 		judgeTruncated: judge.truncated,

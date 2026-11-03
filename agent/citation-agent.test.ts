@@ -546,6 +546,13 @@ test("enforce rejects an incoherent line with incoherent_citation, records it, a
 	assert.equal(run?.judge?.supported, 1);
 	assert.equal(run?.judge?.judgeTruncated, 0);
 	assert.notEqual(run?.judge?.latencyMs, null);
+	const verdicts = run?.judge?.verdicts ?? [];
+	assert.deepEqual(verdicts.map((record) => record.verdict), ["unsupported", "supported"]);
+	assert.deepEqual(verdicts.map((record) => record.line), [3, 3]);
+	assert.match(verdicts[0]?.citationId ?? "", /^cit_[0-9a-f]{10}$/);
+	assert.equal(typeof verdicts[0]?.score, "number");
+	assert.equal(typeof verdicts[0]?.ms, "number");
+	assert.equal(verdicts[0]?.truncated, false);
 	await agent.close();
 });
 
