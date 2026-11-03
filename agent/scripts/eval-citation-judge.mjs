@@ -99,10 +99,45 @@ const rates = (results) => {
 	};
 };
 
+/** Gold label aligned with the prediction space: the gate treats "unrelated"
+ * and "unsupported" alike, so the eval's unrelated class is the unsupported
+ * class of the verdict space. */
+const goldOf = (label) => (label === "unrelated" ? "unsupported" : label);
+const CLASSES = ["supported", "unsupported", "contradicted"];
+
+/** Accuracy, macro-F1 and per-class precision/recall/F1 over the aligned
+ * confusion matrix (RFC 0017 §8). */
+const classificationMetrics = (results) => {
+	const matrix = {};
+	for (const c of CLASSES) matrix[c] = Object.fromEntries(CLASSES.map((p) => [p, 0]));
+	for (const result of results) matrix[goldOf(result.label)][result.outcome] += 1;
+	const total = results.length;
+	const correct = CLASSES.reduce((sum, c) => sum + matrix[c][c], 0);
+	const perClass = {};
+	const f1s = [];
+	for (const c of CLASSES) {
+		const tp = matrix[c][c];
+		const fp = CLASSES.reduce((sum, o) => sum + matrix[o][c], 0) - tp;
+		const fn = CLASSES.reduce((sum, p) => sum + matrix[c][p], 0) - tp;
+		const precision = tp + fp === 0 ? 0 : tp / (tp + fp);
+		const recall = tp + fn === 0 ? 0 : tp / (tp + fn);
+		const f1 = precision + recall === 0 ? 0 : (2 * precision * recall) / (precision + recall);
+		perClass[c] = { precision, recall, f1 };
+		f1s.push(f1);
+	}
+	return {
+		n: total,
+		accuracy: total === 0 ? 0 : correct / total,
+		macroF1: f1s.reduce((a, b) => a + b, 0) / f1s.length,
+		perClass,
+	};
+};
+
 const summarize = (name, results, latencies, truncatedCount, rssPeak) => ({
 	name,
 	n: results.length,
 	confusion: confusion(results),
+	classification: classificationMetrics(results),
 	...rates(results),
 	perLanguage: ["en", "it"].map((lang) => {
 		const subset = results.filter((r) => r.lang === lang);
@@ -215,6 +250,8 @@ ${line(full.test)}
 
 ## Confusion (label -> outcome), with the Italian subset rates
 
+* accuracy / macro-F1: mobile dev ${mobile.dev.classification.accuracy.toFixed(2)}/${mobile.dev.classification.macroF1.toFixed(2)}, mobile test ${mobile.test.classification.accuracy.toFixed(2)}/${mobile.test.classification.macroF1.toFixed(2)}, full test ${full.test.classification.accuracy.toFixed(2)}/${full.test.classification.macroF1.toFixed(2)}
+* supported class P/R/F1 — mobile test: ${mobile.test.classification.perClass.supported.precision.toFixed(2)}/${mobile.test.classification.perClass.supported.recall.toFixed(2)}/${mobile.test.classification.perClass.supported.f1.toFixed(2)}
 * ${mobile.dev.name}: ${confusionRow(mobile.dev)}
 * ${mobile.test.name}: ${confusionRow(mobile.test)}
 * ${full.test.name}: ${confusionRow(full.test)}

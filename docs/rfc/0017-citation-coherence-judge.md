@@ -214,6 +214,18 @@ Mobile vs non-mobile verdict agreement: 44/44 dev, 30/30 test (worst
 probability difference 0.019). Truncated pairs: 0 (the over-cap fixture was
 cut and the cut still judged the pair correctly).
 
+Classification quality of the judge itself (gold `unrelated` aligned to the
+verdict class `unsupported`):
+
+| Run | Accuracy | Macro-F1 | supported P/R/F1 | contradicted P/R/F1 |
+|---|---|---|---|---|
+| mobile, dev | 0.68 | 0.67 | 0.71 / 0.79 / 0.75 | 0.53 / 0.69 / 0.60 |
+| mobile, test | 0.53 | 0.53 | 0.64 / 0.50 / 0.56 | 0.38 / 0.71 / 0.50 |
+| full 523 MB, test | 0.53 | 0.53 | identical to mobile (verdicts 30/30 equal) |
+
+The `supported` recall of 0.50 on the held-out set is the number that rejects
+`enforce`: half of correct publishes would be refused.
+
 **The agreed success bar is missed**: false accepts are cut by 75% (bar: ≥60%)
 but false rejects on supported pairs are 50% on the held-out test (bar: ≤10%;
 dev was already 21%). Per the protocol: no tuning on test, the flag stays
