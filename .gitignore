@@ -50,3 +50,7 @@ desktop.ini
 
 # Verification skill evidence (verify-affido-ui)
 verify-runs/
+
+# RFC 0017: local GLiNER judge weights and eval output (fetch-judge-model.mjs owns them)
+agent/judge-models/
+agent/judge-eval/
