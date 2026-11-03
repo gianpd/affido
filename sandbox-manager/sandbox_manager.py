@@ -55,6 +55,13 @@ AGENT_IMAGE     = os.getenv("AGENT_IMAGE", "affido-agent:latest")
 AGENT_PORT      = int(os.getenv("AGENT_PORT", "8080"))
 AGENT_IDLE_MS   = int(os.getenv("AGENT_IDLE_MS", "5000"))
 AGENT_CITATIONS_DEFAULT = os.getenv("AGENT_CITATIONS_DEFAULT", "")
+# RFC 0017 §3: the post-gate coherence judge. off (default) keeps the layer
+# absent; warn/enforce require the model cache inside the agent image
+# (CITATION_JUDGE_MODEL_DIR, default /app/judge-models) and a memory cap the
+# judge fits in (measured peak RSS ~930 MB on 20 CPUs; AGENT_MEMORY 512m will
+# OOM an enforcing sandbox).
+AGENT_CITATION_JUDGE = os.getenv("AGENT_CITATION_JUDGE", "")
+AGENT_CITATION_JUDGE_MODEL_DIR = os.getenv("AGENT_CITATION_JUDGE_MODEL_DIR", "")
 # `off` (default): per-user networks are created without NAT egress, so a
 # sandbox can talk to its guests (caddy, manager, web) on its own subnet and
 # nothing else. `open` keeps the plain-bridge behaviour (internet egress) for
@@ -1029,6 +1036,12 @@ def create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
         # RFC 0006 §5.9: the mode of /prompt requests that omit the `citations`
         # field. Sandbox env is fixed at create; the per-request field always wins.
         args += ["-e", f"CITATIONS_DEFAULT={AGENT_CITATIONS_DEFAULT}"]
+    if AGENT_CITATION_JUDGE:
+        # RFC 0017 §3: the coherence layer's mode and, optionally, its model
+        # cache directory. No secret ever travels here; unset means off.
+        args += ["-e", f"CITATION_JUDGE={AGENT_CITATION_JUDGE}"]
+        if AGENT_CITATION_JUDGE_MODEL_DIR:
+            args += ["-e", f"CITATION_JUDGE_MODEL_DIR={AGENT_CITATION_JUDGE_MODEL_DIR}"]
     for name, ip in sorted((hosts or {}).items()):
         args += ["--add-host", f"{name}:{ip}"]
     if AGENT_DNS:

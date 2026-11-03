@@ -378,6 +378,30 @@ class CreateArgsTest(unittest.TestCase):
         env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
         self.assertIn(f"SIDECAR_URL=http://{sm.sidecar_name('user-sc')}:{sm.SIDECAR_PORT}", env)
 
+    def test_create_args_forward_the_citation_judge_flag(self) -> None:
+        # RFC 0017 §3: warn/enforce reach the agent only through create args;
+        # unset means off, and the model dir is only forwarded when set.
+        saved, saved_dir = sm.AGENT_CITATION_JUDGE, sm.AGENT_CITATION_JUDGE_MODEL_DIR
+        try:
+            sm.AGENT_CITATION_JUDGE, sm.AGENT_CITATION_JUDGE_MODEL_DIR = "", ""
+            args = sm.create_args("user-j")
+            env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+            self.assertFalse(any(e.startswith("CITATION_JUDGE") for e in env))
+
+            sm.AGENT_CITATION_JUDGE, sm.AGENT_CITATION_JUDGE_MODEL_DIR = "warn", ""
+            args = sm.create_args("user-j")
+            env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+            self.assertIn("CITATION_JUDGE=warn", env)
+            self.assertFalse(any(e.startswith("CITATION_JUDGE_MODEL_DIR") for e in env))
+
+            sm.AGENT_CITATION_JUDGE_MODEL_DIR = "/app/judge-models"
+            args = sm.create_args("user-j")
+            env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+            self.assertIn("CITATION_JUDGE=warn", env)
+            self.assertIn("CITATION_JUDGE_MODEL_DIR=/app/judge-models", env)
+        finally:
+            sm.AGENT_CITATION_JUDGE, sm.AGENT_CITATION_JUDGE_MODEL_DIR = saved, saved_dir
+
     def test_create_args_bakes_the_websearch_url(self) -> None:
         # RFC 0016 §5: the web tools resolve the node through this env; the
         # hostname is a baked /etc/hosts entry added at create time.
