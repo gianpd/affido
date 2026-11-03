@@ -23,12 +23,21 @@ jobs:
         # runtime), and ubuntu-latest has no runsc. systrap needs no /dev/kvm,
         # so it runs inside the GitHub VM. Registered as an additional runtime
         # -- NOT the default: the control plane stays on runc, mirroring the
-        # dev daemon.json. 
+        # dev daemon.json.
+        #
+        # Do not install from the apt channel with a dated pin: its Packages
+        # index lists exactly one build (the newest), so `apt-get install
+        # runsc=<date>` stops resolving the day the next gVisor release ships.
+        # That broke CI twice. The archive pool keeps every build, so fetch the
+        # pinned .deb directly and assert the installed version: a bad pin must
+        # fail loudly, never silently run a different runtime.
+        env:
+          RUNSC_VERSION: "20261102.0"
         run: |
-          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
-          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
-          sudo apt-get update -qq
-          sudo apt-get install -y runsc=20261026.0
+          curl -fsSL -o /tmp/runsc.deb \
+            "https://storage.googleapis.com/gvisor/releases/pool/${RUNSC_VERSION}/binary-amd64/runsc.deb"
+          sudo dpkg -i /tmp/runsc.deb
+          runsc --version | grep -q "release-${RUNSC_VERSION}"
           { sudo cat /etc/docker/daemon.json 2>/dev/null || echo '{}'; echo '{"runtimes":{"runsc":{"path":"/usr/bin/runsc"}}}'; } \
             | sudo jq -s '.[0] * .[1]' | sudo tee /tmp/daemon.json >/dev/null
           sudo mv /tmp/daemon.json /etc/docker/daemon.json

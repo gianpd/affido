@@ -24,8 +24,12 @@ CONTAINER="$(sql -c "SELECT container_name FROM sandbox_registry WHERE user_id =
 [[ -n "${CONTAINER}" ]] || fail "manager did not record a container for ${USER_ID}"
 [[ "$(printf '%s' "${status_json}" | field "d['agent']")" == "${CONTAINER}" ]] \
 	|| fail "reply came from $(printf '%s' "${status_json}" | field "d['agent']"), expected ${CONTAINER}"
-[[ "$(sql -c "SELECT status FROM sandbox_registry WHERE user_id = '${USER_ID}'")" == "running" ]] \
-	|| fail "registry status is not running"
+# The row may already read 'idle_paused': the gate stack evicts aggressively
+# (IDLE_GRACE_S=EVICT_TICK_S=2s) and the psql round-trip above costs a second
+# or two. Same tolerance as parallel.sh; the container and the reply below are
+# the invariants under test.
+[[ "$(sql -c "SELECT count(*) FROM sandbox_registry WHERE user_id = '${USER_ID}' AND status IN ('running','idle_paused')")" == "1" ]] \
+	|| fail "registry status is not running (or idle_paused after the grace)"
 [[ "$(docker inspect -f '{{.State.Running}}' "${CONTAINER}")" == "true" ]] \
 	|| fail "${CONTAINER} is not running"
 members="$(docker network inspect "pi-net-${CONTAINER#u}" -f '{{range .Containers}}{{.Name}} {{end}}')"
