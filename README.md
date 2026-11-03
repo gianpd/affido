@@ -475,9 +475,9 @@ latencies and truncations land in the run report either way. The judge rides
 the run's OpenRouter credential (BYOK key or the RFC 0013 sidecar's pinned
 `/judge/decisions` route — never a separate key) and is simply absent when no
 OpenRouter credential backs the run, so the keyless stack behaves exactly as
-RFC 0006. `AGENT_CITATION_JUDGE=warn|off` degrades to record-only or off, and
-`AGENT_CITATION_JUDGE_BACKEND=gliner` keeps RFC 0017's local encoder for
-no-egress deployments.
+RFC 0006. `AGENT_CITATION_JUDGE=warn|off` degrades to record-only or off. The
+judge is one class over pi-ai's classifier contract with the d1.1 binding in
+code, so there is no backend switch, no model cache and no weights in the image.
 
 ## Web search (RFC 0016)
 

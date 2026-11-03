@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Implemented |
+| Status | Implemented; amended 2026-11-03: runtime behind pi-ai's classifier contract, GLiNER backend removed (§9) |
 | Author | Affido maintainers |
 | Date | 2026-11-24 |
 | Target | `agent/`, `sandbox-manager/` (env forwarding only) |
@@ -34,8 +34,9 @@ outcomes in `agent/judge-eval/zero-shot-d1or/`.
 
 Decision: the default coherence judge of RFC 0017's layer becomes **d1.1 via
 OpenRouter**, and the layer's default mode flips **off → enforce**. The GLiNER
-runtime stays selectable (`CITATION_JUDGE_BACKEND=gliner`) as the no-egress
-artifact; it is no longer the default.
+runtime was kept selectable at first (`CITATION_JUDGE_BACKEND=gliner`) and then
+removed by the amendment in §9: one runtime, one binding, no weights in the
+image.
 
 ## 2. Serving shape
 
@@ -67,12 +68,13 @@ model calls use, under the same discipline (RFC 0012 R3 / RFC 0013 R1: in
 memory only, never env, image, SESSION_DB or WORKSPACE). There is no separate
 judge key and no config field for one.
 
-`ContainerAgent.judgeEndpoint()` resolves per call from live runtime state:
+`ContainerAgent.judgeTarget()` resolves the classifier target per call from
+live runtime state (same shape, new type: `{ model, apiKey? }`, §9):
 
-| Runtime state | Endpoint |
+| Runtime state | Target |
 |---|---|
 | active provider ≠ openrouter (faux, others) | `null` — layer absent |
-| openrouter, `keyVia: "direct"` (standalone secret file, or a direct BYOK delivery) | the pinned decisions URL with the key from the in-memory credential store |
+| openrouter, `keyVia: "direct"` (standalone secret file, or a direct BYOK delivery) | the pinned decisions base URL with the key from the in-memory credential store, as an explicit request option |
 | openrouter, `keyVia: "sidecar"` (managed BYOK, RFC 0013) | `POST {SIDECAR_URL}/judge/decisions`, no key in the agent process |
 
 **Keyless deployments are unchanged.** The default stack (faux, no egress)
@@ -115,13 +117,12 @@ POST {SIDECAR_URL}/judge/decisions
 | Env (agent) | Env (manager forwards) | Values | Default |
 |---|---|---|---|
 | `CITATION_JUDGE` | `AGENT_CITATION_JUDGE` | `off` `warn` `enforce` | **`enforce`** (was `off`) |
-| `CITATION_JUDGE_BACKEND` | `AGENT_CITATION_JUDGE_BACKEND` | `d1` `gliner` | `d1` |
-| `CITATION_JUDGE_MODEL_DIR` | `AGENT_CITATION_JUDGE_MODEL_DIR` | path | `/app/judge-models` (gliner only) |
 
-The model id is pinned in code (`liquid/d1.1`); the eval numbers are for that
-model and the pin is the drift control. `gliner` keeps RFC 0017's boot-time
-cache check and footprint; `d1` adds no dependency (native `fetch`) and no
-weights.
+The model id and the decisions protocol are pinned in code
+(`agent/judge-model.ts`: `liquid/d1.1`); the eval numbers are for that model and
+the pin is the drift control. The binding adds no dependency (native `fetch`)
+and no weights: there is no backend switch and no model cache. The §9 amendment
+removed `CITATION_JUDGE_BACKEND` and `CITATION_JUDGE_MODEL_DIR`.
 
 Egress: `d1` needs the sandbox to reach `openrouter.ai` — the same requirement
 as real model calls (`AGENT_EGRESS=open`), and in the managed stack the
@@ -136,24 +137,26 @@ call.
 available?(): Promise<boolean>
 ```
 
-Absent means always available (`ScriptedJudge`, `GlinerDecideJudge` — its boot
-check already fails loudly). `OpenRouterDecideJudge.available()` is true iff
-the endpoint resolver returns non-null. The publish path enters the layer only
-when the mode is not `off` *and* the judge is available.
+Absent means always available (`ScriptedJudge`). `Judge.available()` is true
+iff its target resolver returns non-null (§9). The publish path enters the layer
+only when the mode is not `off` *and* the judge is available.
 
 ## 7. Testing
 
-- `agent/openrouter-decide-judge.test.ts` — verdict mapping
-  (`unrelated → unsupported`), confidence score, retry on 5xx then success,
-  no-retry on 401, `available()` false with a null endpoint, Bearer stamping
-  in direct mode, endpoint resolution from credential-store state
-  (direct/sidecar/placeholder/faux).
+- `agent/judge.test.ts` — verdict mapping (`unrelated → unsupported`),
+  confidence score with probability fallback, the frozen request shape, retry
+  on 5xx then success, no-retry on 401, `available()` false with a null target,
+  Bearer stamping in direct mode and no Authorization through the sidecar,
+  target resolution from credential-store state
+  (direct/sidecar/placeholder/faux), and provider agnosticism (a second
+  provider + model id served by the same `Judge` class).
 - `agent/sidecar.test.ts` — `/judge/decisions`: 200 relay with the stamped key
   against the catalog pin, 503 faux slot, 404 non-openrouter provider, inbound
   Authorization stripped.
 - `agent/citation-agent.test.ts` — `enforce` + an unavailable judge publishes
   (layer absent), matching the keyless default stack.
-- `sandbox-manager` unit tests cover `AGENT_CITATION_JUDGE_BACKEND` forwarding.
+- `sandbox-manager` unit tests cover `AGENT_CITATION_JUDGE` mode forwarding and
+  assert that no model path or backend env is emitted.
 
 ## 8. Caveats carried from the experiment
 
@@ -165,3 +168,55 @@ when the mode is not `off` *and* the judge is available.
 - The split-support fixture sits near a boundary for d1.1 too (supported 0.515
   vs unrelated 0.463 on the first half) — it lands on the correct side, but
   boundary cases exist.
+
+## 9. Amendment — one judge class over pi-ai's classifier contract
+
+The first implementation hard-coded the runtime twice: a local ONNX adapter
+(`GlinerDecideJudge`, RFC 0017) and a hand-rolled OpenRouter fetch
+(`OpenRouterDecideJudge`), selected by `CITATION_JUDGE_BACKEND`. Both bypassed
+pi-ai's classifier abstraction, so the agent carried two transports, the
+OpenRouter one knew its own URL, model id, body and response shape, and the
+GLiNER one dragged `@huggingface/transformers` + `onnxruntime-node` (≈ 300 MB)
+into every image and every boot even when the default path never loaded a
+model.
+
+What the layer needs is not a transport, it is *a classification*: one state,
+one typed-choice question, one answer. Pi-ai 1.3.0 already models that
+(`Models.classify`, `ClassifierModel`, `ClassifierContext`, `ClassifierResult`).
+The amendment makes that the seam:
+
+```
+agent/judge.ts         Judge implements CitationJudge over Models.classify.
+                       Owns the frozen question + label definitions (product
+                       semantics), the `unrelated -> unsupported` mapping, the
+                       score, and `available()` from a target resolver.
+agent/judge-model.ts   The current binding: pinned model id, decisions
+                       protocol (`ProviderClassifier`), key routing, and
+                       `judgeTargetOf()` from live state. Swapping runtime =
+                       another binding + provider registration; judge.ts does
+                       not change.
+```
+
+The `Judge` class imports no provider, no URL and no model id. `Models`
+resolves auth per call; the direct key travels as an explicit request option
+read from the same in-memory store (RFC 0012 R3), and the sidecar route still
+carries no key (RFC 0013 R1). `Models.classify` never rejects — it returns
+`stopReason: "error" | "aborted"` — so `Judge` converts a non-`stop` result
+back into a thrown error, which is what `coherenceOf` already treats as an
+unverified pair (`judge_error`/`judge_unavailable` under `enforce`).
+
+Removed by this amendment:
+
+- `agent/gliner-decide-judge.ts`, `agent/openrouter-decide-judge.ts` and their
+test file; `agent/scripts/fetch-judge-model.mjs` (weights fetch) and
+`agent/scripts/eval-citation-judge.mjs` (GLiNER-only eval; the remaining
+zero-shot experiment script drops the GLiNER arm). RFC 0017's measured
+outcomes stay in that document as history.
+- `@huggingface/transformers` and its `onnxruntime-node`/`sharp` tree from
+  `agent/package.json` and the image.
+- `CITATION_JUDGE_BACKEND` / `CITATION_JUDGE_MODEL_DIR` and their manager
+  forwarding: with one binding there is nothing to select and nothing to bake.
+
+What did not change: the wire protocol in §2, the key routing in §3, the
+sidecar route in §4, the mode flag, the per-pair timeout, truncation,
+aggregation and rejection reasons.

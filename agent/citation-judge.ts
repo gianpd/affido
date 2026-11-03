@@ -4,8 +4,8 @@
 // coherent with the quote behind its [cit_...] id?
 //
 // The port is one method. The gate and the tools depend on `CitationJudge`
-// only; the GLiNER runtime (model, tokenizer, ONNX) lives behind
-// `GlinerDecideJudge` in its own file, and tests drive a scripted fake.
+// only; the runtime lives behind `Judge` (`judge.ts`) on pi-ai's classifier
+// contract, its model binding in `judge-model.ts`, and tests drive a fake.
 
 /** One coherence verdict over a (claim, quote) pair.
  * `verdict` is the judge's decision; `score` is the probability the judge
@@ -21,8 +21,8 @@ export type JudgeVerdict = {
 export interface CitationJudge {
 	judge(input: { readonly claim: string; readonly quote: string }): Promise<JudgeVerdict>;
 	/** RFC 0018: whether the runtime can currently judge at all. Absent means
-	 * always available (ScriptedJudge, GlinerDecideJudge — whose boot check
-	 * already fails loudly). A judge that is not available is *absent*, not
+	 * always available (`ScriptedJudge`); `Judge` answers from its target
+	 * resolver. A judge that is not available is *absent*, not
 	 * erroring: the publish path skips the layer, so `enforce` never rejects
 	 * a publish merely because no credential backs the judge. A judge that is
 	 * available and then fails still rejects under `enforce` (`judge_error`). */

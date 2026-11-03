@@ -2,11 +2,11 @@
 
 | Field | Value |
 |---|---|
-| Status | Implemented; enforcement superseded by RFC 0018 (default judge: d1.1 via OpenRouter, default mode `enforce`). This document records the layer's contract, the GLiNER artifact and the eval that rejected it |
+| Status | Implemented; enforcement superseded by RFC 0018 (default judge: d1.1 via OpenRouter, default mode `enforce`; runtime now a pi-ai classifier, RFC 0018 §9). This document records the layer's contract, the GLiNER artifact and the eval that rejected it |
 | Author | Affido maintainers |
 | Date | 2026-11-03 |
 | Target | `agent/`, `sandbox-manager/` (env forwarding only) |
-| Related | RFC 0006 (the deterministic gate), RFC 0012, `agent/citation-store.ts`, `agent/citation-judge.ts`, `agent/gliner-decide-judge.ts`, `agent/scripts/fetch-judge-model.mjs`, `agent/scripts/eval-citation-judge.mjs` |
+| Related | RFC 0006 (the deterministic gate), RFC 0012, `agent/citation-store.ts`, `agent/citation-judge.ts`, `agent/judge.ts` (current runtime), `agent/judge-model.ts` (current model binding) |
 
 ## 1. Summary
 
@@ -31,8 +31,11 @@ deterministic gate is unchanged; the flag stays `off`.
 
 ## 2. Artifact decision (written before the integration)
 
-Sizes are actual file bytes at the pinned revisions, verified by SHA256 in
-`agent/scripts/fetch-judge-model.mjs`.
+The artifact and its fetch/eval scripts were removed by RFC 0018 §9; this
+section is the decision record, and the measurements below are historical.
+
+Sizes are actual file bytes at the pinned revisions, verified by SHA256 in the
+(the now removed) `agent/scripts/fetch-judge-model.mjs`.
 
 | Artifact | Weights | Runtime | Status |
 |---|---|---|---|
@@ -103,14 +106,11 @@ flipped to `enforce` (d1.1 judge) by RFC 0018 — read once at agent boot:
   model retries — no publish without a pass, the same rule the gate applies to
   itself.
 
-The manager forwards `AGENT_CITATION_JUDGE` / `AGENT_CITATION_JUDGE_MODEL_DIR`
-into `docker create` exactly like `AGENT_CITATIONS_DEFAULT` (sandbox env is
-fixed at create). The weights are not in the repo and not in the default
-image; an operator who enables the flag bakes the fetched cache into a derived
-image (`COPY … /app/judge-models`) and points `AGENT_IMAGE` at it — no ad-hoc
-mounts. The agent loads with `env.allowRemoteModels = false` and
-`env.localModelPath` pinned to the cache, and a boot-time presence check fails
-loudly when the cache is incomplete, so nothing ever downloads mid-run.
+The manager forwards `AGENT_CITATION_JUDGE` into `docker create` exactly like
+`AGENT_CITATIONS_DEFAULT` (sandbox env is fixed at create). The model directory
+and backend envs described here at the time of this RFC were removed by
+RFC 0018 §9 along with the local runtime: the shipped judge needs no weights
+and no cache, so there is nothing to bake into a derived image.
 
 ## 4. Where the check runs and what it sees
 
@@ -134,21 +134,22 @@ contradiction overrides it. Headings and blank lines stay exempt.
 ## 5. Port and runtime
 
 ```
-agent/citation-judge.ts       CitationJudge port, JudgeVerdict, JudgeMode,
-                              truncation, aggregation, ScriptedJudge
-agent/gliner-decide-judge.ts  GlinerDecideJudge + the gliner2 encoding +
-                              pinned manifests (bytes + SHA256); the only
-                              file that imports @huggingface/transformers
+agent/citation-judge.ts  CitationJudge port, JudgeVerdict, JudgeMode,
+                         truncation, aggregation, ScriptedJudge
+agent/judge.ts           Judge: the port over pi-ai's Models.classify (current
+                         runtime, RFC 0018 §9)
+agent/judge-model.ts     The current classifier binding + target resolution
 ```
 
 `CitationJudge` is one method: `judge({ claim, quote }): Promise<JudgeVerdict>`
 with `JudgeVerdict = { verdict: "supported" | "unsupported" | "contradicted";
-score: number }` (score = the softmax probability of the returned verdict).
-The gate and tools depend on the port; every test drives `ScriptedJudge`.
+score: number }` (score = the probability of the returned verdict). The gate
+and tools depend on the port; every test drives `ScriptedJudge`.
 
-`GlinerDecideJudge` owns load/judge/close: lazy load on the first judged
-publish (cold start ≈ 1.2 s, model session 0.8 s of it), `close()` disposes
-the ONNX session.
+`GlinerDecideJudge` (removed by RFC 0018 §9) owned load/judge/close: lazy load
+on the first judged publish (cold start ≈ 1.2 s, model session 0.8 s of it).
+`Judge` keeps the same shape over the classifier contract: the runtime target
+is resolved per call (absence = layer absent), and nothing is loaded.
 
 ## 6. Run state and report
 
@@ -197,8 +198,9 @@ flips, one English pair from `agent/citation-agent.test.ts`, one Italian pair
 from `e2e-test/citations.sh`, and near-/over-cap quotes exercising truncation.
 
 One command, deterministic (pinned weights, argmax, no sampling):
-`node agent/scripts/eval-citation-judge.mjs` — writes raw JSON and
-`SUMMARY.md` under `agent/judge-eval/` (gitignored).
+`node agent/scripts/eval-citation-judge.mjs` (removed with the runtime by
+RFC 0018 §9) — wrote raw JSON and `SUMMARY.md` under `agent/judge-eval/`
+(gitignored). The table below is the frozen outcome of that run.
 
 Run of 2026-11-03 (20-CPU host, node 24, both caches local):
 
@@ -281,4 +283,5 @@ quotes well.
 - Deterministic-gate tests are untouched: `citationExactness`, `unreportedUsed`,
   `padded` and every existing rejection reason behave exactly as before
   (142 agent tests pass).
-- `sandbox-manager` unit tests cover the env forwarding.
+- `sandbox-manager` unit tests cover the mode env forwarding (RFC 0018 §9
+  removed the backend/model-dir envs this section originally covered).

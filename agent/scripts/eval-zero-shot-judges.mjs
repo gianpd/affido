@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // Zero-shot classification experiment (host-run research script, never a
 // sandbox/product path): score the RFC 0017 citation-coherence fixtures with
-// three different zero-shot classifiers under the same modality —
+// the candidate zero-shot classifiers under the same modality —
 //
-//   gliner     GLiNER2.5-Decide-mobile-ONNX (RFC 0017 primary artifact)
 //   systemone  Typesafe System One (Jev) hosted API, one typed choice question
 //   d1         LiquidAI d1-2B-GGUF, a local lfm2-d1 *decision model* (no text
 //              generation) served by llama.cpp's native /v1/systemone endpoint
@@ -24,22 +23,23 @@
 // Same dataset (agent/scripts/judge-eval-fixtures.json), same state text
 // (CLAIM:/EVIDENCE:), same frozen question, same truncation (truncatePair),
 // same aggregation (multi lines: pass iff >=1 supported and 0 contradicted)
-// and the same metrics as eval-citation-judge.mjs (FA/FR, accuracy, macro-F1,
-// per-class P/R/F1, per-language, confusion, latency).
+// and the same metrics (FA/FR, accuracy, macro-F1, per-class P/R/F1,
+// per-language, confusion, latency).
 //
-// Fairness note: GLiNER keeps its RFC 0017 frozen bare-label form (labels are
-// token-budget-bound); systemone and d1 get one neutral definition per label.
-// The definitions describe the dataset's gold semantics, they do not leak pairs.
+// The GLiNER2.5-Decide arm was removed with the RFC 0018 runtime switch: the
+// local ONNX artifact it measured is no longer shipped (see RFC 0017 §8 for
+// the frozen outcomes). The remaining models get one neutral definition per
+// label; the definitions describe the dataset's gold semantics, they do not
+// leak pairs.
 //
 // Usage:
-//   node agent/scripts/eval-zero-shot-judges.mjs [--models gliner,systemone,d1,d1vllm,d1or]
+//   node agent/scripts/eval-zero-shot-judges.mjs [--models systemone,d1,d1vllm,d1or]
 //        [--limit N] [--out dir] [--typesafe-env path/to/.env]
 //        [--d1-url http://127.0.0.1:8080/v1]
 //        [--d1-vllm-url http://127.0.0.1:8000/v1]
 //        [--openrouter-env path/to/.env]
 //
 // Prerequisites (host only):
-//   gliner     agent/judge-models/decide-mobile (fetch-judge-model.mjs)
 //   systemone  TYPESAFE_API_KEY (or --typesafe-env pointing at a .env with
 //              TYPESAFE_KEY=...; the key is never printed or stored)
 //   d1         a running llama-server with the GGUF at --d1-url, or set
@@ -56,11 +56,9 @@ import { spawn } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { hostname, cpus, totalmem } from "node:os";
 import { truncatePair } from "../citation-judge.ts";
-import { GlinerDecideJudge, MOBILE_MANIFEST } from "../gliner-decide-judge.ts";
 
 const HERE = dirname(new URL(import.meta.url).pathname);
 const ROOT = resolve(HERE, "..", "..");
-const CACHE = join(ROOT, "agent", "judge-models");
 const DEFAULT_OUT_ROOT = join(ROOT, "agent", "judge-eval");
 
 // ---------------------------------------------------------------- arguments
@@ -69,7 +67,7 @@ const argOf = (flag) => {
 	const at = argv.indexOf(flag);
 	return at === -1 ? null : (argv[at + 1] ?? null);
 };
-const modelsWanted = (argOf("--models") ?? "gliner,systemone,d1").split(",").map((s) => s.trim());
+const modelsWanted = (argOf("--models") ?? "systemone,d1").split(",").map((s) => s.trim());
 const limit = argOf("--limit") !== null ? Number(argOf("--limit")) : null;
 const typesafeEnvPath = argOf("--typesafe-env");
 const d1Url = (argOf("--d1-url") ?? process.env.D1_BASE_URL ?? "http://127.0.0.1:8080/v1").replace(/\/+$/, "");
@@ -109,16 +107,6 @@ const parseEnvFile = async (path) => {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const glinerAdapter = () => {
-	const judge = new GlinerDecideJudge(join(CACHE, "decide-mobile"), MOBILE_MANIFEST);
-	return {
-		id: "gliner",
-		meta: { artifact: `${MOBILE_MANIFEST.repo}@${MOBILE_MANIFEST.revision}`, dtype: MOBILE_MANIFEST.dtype, form: "frozen three-way choice, bare labels (RFC 0017)" },
-		judge: async ({ claim, quote }) => judge.judge({ claim, quote }),
-		close: async () => judge.close(),
-	};
-};
 
 const systemOneAdapter = async () => {
 	const envFile = typesafeEnvPath ? await parseEnvFile(typesafeEnvPath) : {};
@@ -470,7 +458,7 @@ const report = {
 };
 
 for (const id of modelsWanted) {
-	const adapter = id === "gliner" ? glinerAdapter() : id === "systemone" ? await systemOneAdapter() : id === "d1" ? await d1Adapter() : id === "d1vllm" ? await d1VllmAdapter() : id === "d1or" ? await d1OpenRouterAdapter() : null;
+	const adapter = id === "systemone" ? await systemOneAdapter() : id === "d1" ? await d1Adapter() : id === "d1vllm" ? await d1VllmAdapter() : id === "d1or" ? await d1OpenRouterAdapter() : null;
 	if (!adapter) throw new Error(`unknown model id ${id}`);
 	console.log(`\n=== ${id} (${adapter.meta.artifact}) ===`);
 	try {
@@ -504,7 +492,7 @@ const tableRow = (id, run) => `| ${id}/${run.name.split("/")[1] ?? run.split} | 
 
 let summary = `# Zero-shot judge experiment — ${report.date}
 
-Dataset: RFC 0017 fixtures (${report.dataset.total} pairs, dev ${report.dataset.dev} / test ${report.dataset.test}${limit !== null ? `, limited to ${limit} per split` : ""}). Same state text, question, truncation and aggregation for every model. GLiNER uses its frozen bare-label form; systemone, d1 and d1or get the same one-line label definitions (d1 is an lfm2-d1 decision model scored through llama.cpp's /v1/systemone, d1or is the hosted d1.1 on OpenRouter's decisions endpoint, both the same typed-choice shape as systemone). Alignment: gold unrelated == unsupported.
+Dataset: RFC 0017 fixtures (${report.dataset.total} pairs, dev ${report.dataset.dev} / test ${report.dataset.test}${limit !== null ? `, limited to ${limit} per split` : ""}). Same state text, question, truncation and aggregation for every model, one neutral label definition each (d1 is an lfm2-d1 decision model scored through llama.cpp's /v1/systemone, d1or is the hosted d1.1 on OpenRouter's decisions endpoint, both the same typed-choice shape as systemone). Alignment: gold unrelated == unsupported.
 Bar for reference (RFC 0017): FA cut >= 60%, FR on supported <= 10%.
 
 | Model/split | n | Acc | Macro-F1 | FA | FR | p50/p95 ms | unparsed |

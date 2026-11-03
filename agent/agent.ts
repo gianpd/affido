@@ -21,7 +21,8 @@ import { describeArtifacts, snapshotArtifacts } from "./artifacts.ts";
 import { TraceReader, type TraceEntryDetail, type TraceQuery, type TraceReport, type TraceSource } from "./trace.ts";
 import type { CitationsTraceReport } from "./citation-report.ts";
 import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
-import { resolveJudgeEndpoint, type JudgeEndpoint } from "./openrouter-decide-judge.ts";
+import type { JudgeTarget } from "./judge.ts";
+import { judgeTargetOf } from "./judge-model.ts";
 import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, PromptResult, ProviderConfig, RunCitations, WebMode } from "./types.ts";
 import { configureProvider } from "./model.ts";
 import { IngestPipeline } from "./ingest.ts";
@@ -493,11 +494,11 @@ export class ContainerAgent implements AgentApi {
 		return { agent: this.#name, webControl: true };
 	}
 
-	/** RFC 0018 §3: where the coherence judge calls d1.1, resolved from the
-	 * live provider selection per call — direct key, sidecar route, or null
-	 * (no OpenRouter credential backs the run: the layer is absent). */
-	async judgeEndpoint(): Promise<JudgeEndpoint | null> {
-		return resolveJudgeEndpoint({ provider: this.#model.provider, keyVia: this.#keyVia, credentials: this.#credentials });
+	/** RFC 0018 §3: the classifier model the coherence judge runs on, resolved
+	 * from the live provider selection per call — direct key, sidecar route, or
+	 * null (no OpenRouter credential backs the run: the layer is absent). */
+	async judgeTarget(): Promise<JudgeTarget | null> {
+		return judgeTargetOf({ provider: this.#model.provider, keyVia: this.#keyVia, credentials: this.#credentials });
 	}
 
 	async configureModel({ provider, modelId, apiKey, baseUrl, viaSidecar }: ProviderConfig) {

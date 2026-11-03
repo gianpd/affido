@@ -26,8 +26,8 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { ContainerAgent } from "./agent.ts";
 import { json, HttpError, RawResponse } from "./http.ts";
 import { createModel } from "./model.ts";
-import { GlinerDecideJudge } from "./gliner-decide-judge.ts";
-import { OpenRouterDecideJudge, type JudgeEndpoint } from "./openrouter-decide-judge.ts";
+import { Judge, type JudgeTarget } from "./judge.ts";
+import { registerJudgeProvider } from "./judge-model.ts";
 import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import { IngestPipeline } from "./ingest.ts";
 import {
@@ -101,48 +101,29 @@ const parseJudgeMode = (raw: string | undefined): JudgeMode => {
 	return raw;
 };
 
-/** RFC 0018 §5: the judge runtime. `d1` (default) is LiquidAI d1.1 via
- * OpenRouter's decisions endpoint; `gliner` keeps RFC 0017's local artifact
- * (weights baked into a derived image, boot-time cache check). */
-const parseJudgeBackend = (raw: string | undefined): "d1" | "gliner" => {
-	if (raw === undefined || raw === "" || raw === "d1") return "d1";
-	if (raw === "gliner") return "gliner";
-	throw new Error('CITATION_JUDGE_BACKEND must be "d1" or "gliner"');
-};
-
 const JUDGE_MODE = parseJudgeMode(process.env.CITATION_JUDGE);
-const JUDGE_BACKEND = parseJudgeBackend(process.env.CITATION_JUDGE_BACKEND);
 
-/** The d1.1 judge resolves its endpoint per call from the agent's live
- * provider state; until the agent exists the resolver answers null. */
-let judgeEndpointOf: () => Promise<JudgeEndpoint | null> = async () => null;
+const { models, credentials, model } = await createModel();
+// The judge runs on pi-ai's classifier contract (RFC 0018 amendment): its
+// own provider entry, no relation to the selected chat provider, and a target
+// resolved per call (absence = layer absent, not an error).
+if (JUDGE_MODE !== "off") registerJudgeProvider(models);
+
+/** The judge target resolves from the agent's live provider state; until the
+ * agent exists the resolver answers null. */
+let judgeTargetOfRun: () => Promise<JudgeTarget | null> = async () => null;
 const judge: CitationJudge | null =
-	JUDGE_MODE === "off"
-		? null
-		: JUDGE_BACKEND === "gliner"
-			? new GlinerDecideJudge(process.env.CITATION_JUDGE_MODEL_DIR ?? "/app/judge-models")
-			: new OpenRouterDecideJudge(() => judgeEndpointOf());
+	JUDGE_MODE === "off" ? null : new Judge(models, () => judgeTargetOfRun());
 
 const log: Log = (...args) => console.log(`[${AGENT}]`, ...args);
 
-if (JUDGE_MODE !== "off" && JUDGE_BACKEND === "gliner") {
-	// Fail loudly at boot, not at the first publish: a judge that cannot run
-	// would otherwise surface as judge_unavailable rejections mid-conversation.
-	const cached = await (judge as GlinerDecideJudge).cached();
-	if (!cached) {
-		throw new Error(
-			`CITATION_JUDGE=${JUDGE_MODE} but the model cache is incomplete; run agent/scripts/fetch-judge-model.mjs and point CITATION_JUDGE_MODEL_DIR at it`,
-		);
-	}
-	log(`coherence judge ${JUDGE_MODE}: GLiNER2.5-Decide q4f16, local cache verified`);
-} else if (JUDGE_MODE !== "off") {
+if (JUDGE_MODE !== "off") {
 	log(
-		`coherence judge ${JUDGE_MODE}: LiquidAI d1.1 via OpenRouter (decisions endpoint); ` +
+		`coherence judge ${JUDGE_MODE}: pi-ai classifier contract, target resolved per call; ` +
 			"active while an OpenRouter selection backs the run, absent otherwise",
 	);
 }
 
-const { models, credentials, model } = await createModel();
 const agent = new ContainerAgent({
 	name: AGENT,
 	workspace: WORKSPACE,
@@ -158,7 +139,7 @@ const agent = new ContainerAgent({
 	context,
 	log,
 });
-judgeEndpointOf = () => agent.judgeEndpoint();
+judgeTargetOfRun = () => agent.judgeTarget();
 
 // One pipeline for every staging and deletion entry point (RFC 0014 R1).
 const pipeline = new IngestPipeline(WORKSPACE);

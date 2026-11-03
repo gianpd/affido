@@ -450,7 +450,7 @@ publish exists, a classifier judges each (line, quote) pair as
 `CITATION_JUDGE=off|warn|enforce`. RFC 0018 made that check default-on
 (`enforce`) with LiquidAI d1.1 via OpenRouter, which scores 100% on the RFC
 0017 fixtures; the original GLiNER artifact (0.53 accuracy, 50% false rejects
-on the held-out set) stays selectable as `CITATION_JUDGE_BACKEND=gliner`. The
+on the held-out set) was removed with the runtime refactor in RFC 0018 §9. The
 check is probabilistic: it neither weakens nor replaces any check of §5.4,
 all of which run first and unchanged — and when no OpenRouter credential
 backs the run the layer is absent entirely, so this RFC's behavior stands
