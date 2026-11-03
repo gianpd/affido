@@ -2,11 +2,11 @@
 
 | Field | Value |
 |---|---|
-| Status | Implemented |
+| Status | Implemented (the coherence layer of RFC 0017 is implemented and measured, and ships off by default) |
 | Author | Affido maintainers |
 | Date | 2026-10-21 |
 | Target | `agent/`, `frontend/`, sandbox-manager |
-| Related | RFC 0005, PRD 0001, `agent/agent.ts`, `agent/corpus.ts`, `agent/tools.ts`, `frontend/src/routes/api/chat/+server.ts`, `frontend/src/routes/dashboard/chat/+page.svelte` |
+| Related | RFC 0005, PRD 0001, RFC 0017 (post-gate coherence judge), `agent/agent.ts`, `agent/corpus.ts`, `agent/tools.ts`, `frontend/src/routes/api/chat/+server.ts`, `frontend/src/routes/dashboard/chat/+page.svelte` |
 
 ## 1. Summary
 
@@ -439,6 +439,23 @@ POST /prompt { prompt, requestId, citations: "required" }
 Deployment default: `CITATIONS_DEFAULT=required` may set the mode for requests
 that omit the field (a demo user, a jurisprudence workspace); the user's
 explicit choice on the request always wins.
+
+### 5.10 Post-gate coherence check (RFC 0017, off by default)
+
+The gate of §5.4 verifies attribution, not meaning: a line citing a verified
+quote about a different clause passes. RFC 0017 layered an optional
+probabilistic check on top — after `evaluatePublish` accepts and before the
+publish exists, a classifier judges each (line, quote) pair as
+`supported`/`unsupported`/`contradicted` behind
+`CITATION_JUDGE=off|warn|enforce`. RFC 0018 made that check default-on
+(`enforce`) with LiquidAI d1.1 via OpenRouter, which scores 100% on the RFC
+0017 fixtures; the original GLiNER artifact (0.53 accuracy, 50% false rejects
+on the held-out set) was removed with the runtime refactor in RFC 0018 §9. The
+check is probabilistic: it neither weakens nor replaces any check of §5.4,
+all of which run first and unchanged — and when no OpenRouter credential
+backs the run the layer is absent entirely, so this RFC's behavior stands
+on its own.
+Details, artifact decision record and measurements: RFC 0017.
 
 ## 6. Interaction with RFC 0005
 

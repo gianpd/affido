@@ -48,6 +48,9 @@ type CatalogEntry = {
 	readonly id: string;
 	readonly baseUrl?: string;
 	readonly auth?: string;
+	/** RFC 0018 §4: the catalog-pinned typed-choice endpoint of a decisions
+	 * model (OpenRouter's /api/alpha/decisions). Present only for openrouter; */
+	readonly decisionsUrl?: string;
 };
 
 /** Module-level state: the sidecar's whole reason to exist is that this lives
@@ -242,7 +245,31 @@ const proxy = async (req: IncomingMessage, res: ServerResponse, url: URL): Promi
 	const target = new URL(slot.upstream);
 	target.pathname = target.pathname.replace(/\/+$/, "") + (parsed.rest === "" ? "" : `/${parsed.rest}`);
 	target.search = url.search;
+	await relayPinned(req, res, target);
+};
 
+/** RFC 0018 §4: POST /judge/decisions — the fixed route the coherence judge
+ * (d1.1 via OpenRouter) calls. The agent controls no URL here: the target is
+ * the `decisionsUrl` pinned in the operator-built catalog, the key and auth
+ * header come from the slot exactly as for chat calls, and the body rides
+ * through verbatim. Served only for a provider whose catalog entry pins a
+ * decisions endpoint; today that is openrouter alone. */
+const judgeDecisions = async (req: IncomingMessage, res: ServerResponse, catalogPath: string): Promise<void> => {
+	if (slot === null) throw new ProxyRefused(503, "not_configured", "the sidecar holds no provider config");
+	const current = slot;
+	const entry = (await loadCatalog(catalogPath)).find((candidate) => candidate.id === current.provider);
+	if (entry === undefined || typeof entry.decisionsUrl !== "string" || entry.decisionsUrl === "")
+		throw new ProxyRefused(404, "no_decisions_endpoint", `provider "${current.provider}" pins no decisions endpoint`);
+	if (current.apiKey === null)
+		throw new ProxyRefused(503, "not_configured", `provider "${current.provider}" carries no key (faux stays direct)`);
+	await relayPinned(req, res, new URL(entry.decisionsUrl));
+};
+
+/** Strip inbound credentials, stamp the slot's key, forward to the pinned
+ * target and relay the response unbuffered — the shared core of the chat
+ * proxy and the judge route. The target is always sidecar-pinned (R3). */
+const relayPinned = async (req: IncomingMessage, res: ServerResponse, target: URL): Promise<void> => {
+	if (slot === null || slot.apiKey === null) throw new ProxyRefused(503, "not_configured", "no keyed slot");
 	const headers: Record<string, string> = {};
 	for (const [name, value] of Object.entries(req.headers)) {
 		if (STRIPPED_REQUEST_HEADERS.has(name.toLowerCase())) continue;
@@ -347,6 +374,9 @@ export const createSidecarServer = async (options: {
 						keyFingerprint: applied.keyFingerprint,
 						upstream: applied.upstream,
 					});
+				}
+				if (req.method === "POST" && url.pathname === "/judge/decisions") {
+					return await judgeDecisions(req, res, catalogPath);
 				}
 				return await proxy(req, res, url);
 			} catch (error) {

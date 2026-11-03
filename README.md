@@ -464,6 +464,21 @@ Requests without the field keep today's free-form answer;
 default. The chat UI carries the per-question toggle; the report at
 `/inspect?report=citations` measures exactness from the trace alone.
 
+A post-gate coherence check (RFC 0017, defaulting to enforce since RFC 0018)
+runs after the gate accepts: **LiquidAI d1.1 via OpenRouter** — a hosted
+decision model that answers one typed-choice question (supported / unrelated /
+contradicted) per cited line, with no text generation — judges each line
+against the quote behind its id. On the RFC 0017 fixtures it scores 100%
+accuracy with 0% false accepts and 0% false rejects, so an incoherent line
+rejects the publish (`incoherent_citation`) and the model retries; verdicts,
+latencies and truncations land in the run report either way. The judge rides
+the run's OpenRouter credential (BYOK key or the RFC 0013 sidecar's pinned
+`/judge/decisions` route — never a separate key) and is simply absent when no
+OpenRouter credential backs the run, so the keyless stack behaves exactly as
+RFC 0006. `AGENT_CITATION_JUDGE=warn|off` degrades to record-only or off. The
+judge is one class over pi-ai's classifier contract with the d1.1 binding in
+code, so there is no backend switch, no model cache and no weights in the image.
+
 ## Web search (RFC 0016)
 
 Model calls stay in the sandbox; the open web does not. Each sandbox gets a

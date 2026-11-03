@@ -55,6 +55,12 @@ AGENT_IMAGE     = os.getenv("AGENT_IMAGE", "affido-agent:latest")
 AGENT_PORT      = int(os.getenv("AGENT_PORT", "8080"))
 AGENT_IDLE_MS   = int(os.getenv("AGENT_IDLE_MS", "5000"))
 AGENT_CITATIONS_DEFAULT = os.getenv("AGENT_CITATIONS_DEFAULT", "")
+# RFC 0017 §3 / RFC 0018 §5: the post-gate coherence judge's mode. The
+# agent's default is enforce, backed by a typed-choice classification that
+# rides the run's OpenRouter credential (BYOK sidecar) and is simply absent
+# when no such credential backs the run; it needs no weights, no model cache
+# and no memory cap. This env exists to override that default, not to enable it.
+AGENT_CITATION_JUDGE = os.getenv("AGENT_CITATION_JUDGE", "")
 # `off` (default): per-user networks are created without NAT egress, so a
 # sandbox can talk to its guests (caddy, manager, web) on its own subnet and
 # nothing else. `open` keeps the plain-bridge behaviour (internet egress) for
@@ -1029,6 +1035,10 @@ def create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
         # RFC 0006 §5.9: the mode of /prompt requests that omit the `citations`
         # field. Sandbox env is fixed at create; the per-request field always wins.
         args += ["-e", f"CITATIONS_DEFAULT={AGENT_CITATIONS_DEFAULT}"]
+    if AGENT_CITATION_JUDGE:
+        # RFC 0017 §3 / RFC 0018 §5: the coherence layer's mode. No secret ever
+        # travels here; the judge target resolves from the run's own provider.
+        args += ["-e", f"CITATION_JUDGE={AGENT_CITATION_JUDGE}"]
     for name, ip in sorted((hosts or {}).items()):
         args += ["--add-host", f"{name}:{ip}"]
     if AGENT_DNS:

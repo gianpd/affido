@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>afFido citations vs. LAQuer (ACL 2025) — what the gate proves</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=IBM+Plex+Mono:wght@400;500;600&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   RFC 0006 vs. LAQuer — same dossier aesthetic as
+   docs/rfc/explainer.html, 0005, 0013, 0016.
+   colour code, kept identical in every diagram:
+     afFido (the gate)     teal
+     LAQuer (the paper)    violet
+     the mismatch          red
+     measured numbers      amber
+   ============================================================ */
+:root{
+	--paper:#f4eddd; --paper-2:#fbf6ea; --paper-3:#ece3cd;
+	--ink:#22303f; --ink-soft:#5a6672;
+	--rule:#d3c7a8; --rule-soft:#e2d8bf;
+	--red:#bd3f1d; --red-soft:#f3ddd2;
+	--teal:#0e7568; --teal-soft:#ddeae4;
+	--blue:#2b5d92; --blue-soft:#e0e8ef;
+	--amber:#a96f14; --amber-soft:#f0e4c8;
+	--violet:#5f3f8f; --violet-soft:#e8e1f3;
+	--gray-soft:#e7e1d2;
+	--serif:"Fraunces",Georgia,serif;
+	--body:"Spectral",Georgia,serif;
+	--mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+	background:
+		radial-gradient(ellipse at 18% -5%, rgba(255,252,240,.92), transparent 55%),
+		radial-gradient(ellipse at 96% 104%, rgba(214,197,160,.34), transparent 52%),
+		var(--paper);
+	color:var(--ink); font-family:var(--body); font-size:16.5px; line-height:1.62;
+}
+body::before{
+	content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+	background-image:
+		linear-gradient(rgba(83,94,110,.055) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(83,94,110,.055) 1px, transparent 1px);
+	background-size:28px 28px;
+}
+.page{position:relative; z-index:1; max-width:1180px; margin:0 auto; padding:0 28px 90px;}
+
+/* ---------- masthead ---------- */
+.masthead{border-bottom:3px double var(--ink); padding:34px 0 22px; position:relative;}
+.masthead .meta{
+	display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;
+	font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+	color:var(--ink-soft); border-bottom:1px solid var(--rule); padding-bottom:10px; margin-bottom:22px;
+}
+.masthead h1{
+	font-family:var(--serif); font-weight:900; font-size:clamp(32px,5.2vw,56px);
+	line-height:1.03; letter-spacing:-.015em; max-width:900px;
+}
+.masthead h1 em{font-style:italic; font-weight:400; color:var(--teal);}
+.masthead .sub{margin-top:18px; font-size:18px; color:var(--ink-soft); max-width:800px; font-style:italic;}
+.stamp{
+	position:absolute; right:0; bottom:18px; transform:rotate(4deg);
+	font-family:var(--mono); font-weight:600; font-size:11px; letter-spacing:.2em;
+	color:var(--teal); border:2.5px solid var(--teal); padding:8px 15px; border-radius:4px;
+	opacity:.8; text-transform:uppercase; line-height:1.6; text-align:center;
+}
+@media (max-width:1080px){ .stamp{display:none;} }
+
+/* ---------- toc ---------- */
+.toc{display:flex; flex-wrap:wrap; gap:10px; margin:26px 0 8px;}
+.toc a{
+	font-family:var(--mono); font-size:12px; letter-spacing:.06em; text-decoration:none;
+	color:var(--ink); border:1px solid var(--ink); padding:6px 12px; border-radius:2px;
+	background:var(--paper-2); transition:all .18s ease; text-transform:uppercase;
+}
+.toc a:hover{background:var(--ink); color:var(--paper-2); transform:translate(-1px,-1px); box-shadow:2px 2px 0 var(--teal);}
+
+/* ---------- sections ---------- */
+section{margin-top:62px;}
+.sec-head{display:flex; align-items:baseline; gap:18px; border-bottom:1.5px solid var(--ink); padding-bottom:10px; margin-bottom:8px;}
+.sec-no{font-family:var(--serif); font-weight:900; font-size:44px; line-height:1; color:var(--teal); min-width:60px;}
+.sec-head h2{font-family:var(--serif); font-weight:600; font-size:clamp(23px,3.2vw,32px); letter-spacing:-.01em;}
+.sec-q{font-family:var(--mono); font-size:11.5px; letter-spacing:.1em; color:var(--ink-soft); text-transform:uppercase; margin:10px 0 18px;}
+.lede{font-size:18px; max-width:880px; margin-bottom:22px;}
+.lede strong{font-weight:600;}
+p.note{font-size:15px; color:var(--ink-soft); border-left:3px solid var(--teal); padding:2px 0 2px 14px; margin:18px 0; max-width:920px; font-style:italic;}
+p.note b{color:var(--ink); font-style:normal;}
+p.note.red{border-left-color:var(--red);}
+code{font-family:var(--mono); font-size:.86em; background:rgba(34,48,63,.07); border-radius:3px; padding:1px 5px;}
+.mono{font-family:var(--mono);}
+
+/* ---------- cards ---------- */
+.grid-2{display:grid; grid-template-columns:1fr 1fr; gap:18px;}
+.grid-3{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.card{background:var(--paper-2); border:1px solid var(--rule); border-radius:4px; padding:16px 18px;}
+.card h3{font-family:var(--serif); font-size:18px; font-weight:600; margin-bottom:6px;}
+.card p{font-size:14.5px; color:var(--ink-soft);}
+.card p + p{margin-top:8px;}
+.card .flag{font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; display:block; margin-bottom:8px;}
+.card.bad{border-left:4px solid var(--red);}
+.card.ok{border-left:4px solid var(--teal);}
+.card.new{border-left:4px solid var(--violet);}
+.card.warn{border-left:4px solid var(--amber);}
+.card.bad .flag{color:var(--red);}
+.card.ok .flag{color:var(--teal);}
+.card.new .flag{color:var(--violet);}
+.card.warn .flag{color:var(--amber);}
+@media (max-width:980px){ .grid-3,.grid-2{grid-template-columns:1fr;} }
+
+/* ---------- tables ---------- */
+table{border-collapse:collapse; width:100%; font-size:13.6px; margin-top:14px;}
+th,td{text-align:left; vertical-align:top; padding:9px 11px; border-bottom:1px solid var(--rule-soft);}
+thead th{
+	font-family:var(--mono); font-size:10.5px; letter-spacing:.09em; text-transform:uppercase;
+	color:var(--ink-soft); border-bottom:1.4px solid var(--ink); white-space:nowrap;
+}
+tbody tr:hover{background:rgba(255,255,255,.5);}
+td.id{font-family:var(--mono); font-size:11.5px; color:var(--teal); font-weight:600; white-space:nowrap;}
+td.mono,th.mono{font-family:var(--mono); font-size:11.5px;}
+td.k{white-space:nowrap; font-weight:600;}
+.tbl-note{font-size:13px; color:var(--ink-soft); margin-top:10px; font-style:italic;}
+.tbl-wrap{overflow-x:auto;}
+tr.axis td{background:rgba(14,117,104,.06);}
+tr.axis td:first-child{box-shadow:inset 3px 0 0 var(--teal);}
+.think{font-weight:600; color:var(--teal);}
+
+/* legend chips */
+.legend{display:flex; flex-wrap:wrap; gap:16px; margin:18px 0 12px; font-size:12px; color:var(--ink-soft);}
+.legend span{display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:11px; letter-spacing:.03em;}
+.sw{width:20px; height:12px; border-radius:2px; display:inline-block;}
+.sw-ff{background:var(--teal-soft); border:1.6px solid var(--teal);}
+.sw-lq{background:var(--violet-soft); border:1.6px solid var(--violet);}
+.sw-gap{background:var(--red-soft); border:1.6px solid var(--red);}
+.sw-num{background:var(--amber-soft); border:1.4px solid var(--amber);}
+
+/* canvas */
+.canvas{background:var(--paper-2); border:1px solid var(--rule); border-radius:4px; padding:8px; overflow:hidden;}
+.canvas.bleed{position:relative; left:50%; transform:translateX(-50%); width:min(1620px, calc(100vw - 24px));}
+svg{display:block; width:100%; height:auto;}
+svg text{font-family:var(--body);}
+.t-title{font-size:13.5px; font-weight:600; fill:var(--ink);}
+.t-title-lg{font-size:15.5px; font-weight:700; fill:var(--ink);}
+.t-sub{font-size:10.6px; fill:var(--ink-soft);}
+.t-mono{font-family:var(--mono); font-size:9.7px; fill:#3d4b5b;}
+.t-mono-b{font-family:var(--mono); font-size:9.7px; font-weight:600; fill:var(--ink);}
+.t-ff{fill:var(--teal);}
+.t-lq{fill:var(--violet);}
+.t-bad{fill:var(--red);}
+.t-num{fill:var(--amber);}
+.t-band{font-family:var(--mono); font-size:10.6px; letter-spacing:.13em; text-transform:uppercase; fill:var(--ink-soft); font-weight:600;}
+.band-ff{fill:rgba(14,117,104,.06); stroke:var(--teal); stroke-width:1.4; stroke-dasharray:6 4;}
+.band-lq{fill:rgba(95,63,143,.06); stroke:var(--violet); stroke-width:1.4; stroke-dasharray:6 4;}
+.box-ff{fill:var(--teal-soft); stroke:var(--teal); stroke-width:1.6;}
+.box-lq{fill:var(--violet-soft); stroke:var(--violet); stroke-width:1.6;}
+.box-gate{fill:#fff; stroke:var(--red); stroke-width:2; }
+.box-grey{fill:#fff; stroke:var(--ink-soft); stroke-width:1.2;}
+.box-doc{fill:#fff; stroke:var(--ink); stroke-width:1.3;}
+.span-ok{fill:rgba(14,117,104,.16); stroke:var(--teal); stroke-width:1.6;}
+.span-gap{fill:rgba(189,63,29,.13); stroke:var(--red); stroke-width:1.8; stroke-dasharray:5 3;}
+.edge{fill:none; stroke:var(--ink-soft); stroke-width:1.8; marker-end:url(#arw);}
+.edge-ff{fill:none; stroke:var(--teal); stroke-width:2.1; marker-end:url(#arw-ff);}
+.edge-lq{fill:none; stroke:var(--violet); stroke-width:2.1; marker-end:url(#arw-lq);}
+.edge-bad{fill:none; stroke:var(--red); stroke-width:2.2; stroke-dasharray:6 4; marker-end:url(#arw-bad);}
+.hr{stroke:var(--rule); stroke-width:1; stroke-dasharray:2 3;}
+.axis-lbl{font-family:var(--mono); font-size:9.2px; fill:var(--ink-soft); letter-spacing:.05em;}
+
+/* ---------- code / transcript ---------- */
+.code{
+	background:#fff; border:1px solid var(--rule); border-radius:3px;
+	padding:12px 14px; margin-top:10px; overflow-x:auto;
+	font-family:var(--mono); font-size:11.6px; line-height:1.65; color:var(--ink);
+	white-space:pre;
+}
+.code .h{color:var(--teal); font-weight:600;}
+.code .v{color:var(--violet); font-weight:600;}
+.code .c{color:var(--ink-soft); font-style:italic;}
+.code .x{color:var(--red);}
+.code .n{color:var(--amber);}
+.code-cap{font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-soft); margin-top:14px;}
+
+/* side-by-side example */
+.ex{display:grid; grid-template-columns:1fr 1fr; gap:0; border:1px solid var(--rule); border-radius:4px; overflow:hidden; margin-top:18px;}
+.ex > div{padding:16px 18px;}
+.ex > div:first-child{background:rgba(14,117,104,.055); border-right:1px solid var(--rule);}
+.ex > div:last-child{background:rgba(95,63,143,.055);}
+.ex h4{font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; margin-bottom:10px;}
+.ex .ff h4{color:var(--teal);}
+.ex .lq h4{color:var(--violet);}
+.ex p{font-size:14px; color:var(--ink-soft);}
+.ex p + p{margin-top:8px;}
+.verdict{display:inline-block; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; padding:3px 9px; border-radius:2px; margin-top:10px;}
+.verdict.pass{background:var(--teal-soft); color:var(--teal); border:1px solid var(--teal);}
+.verdict.fail{background:var(--red-soft); color:var(--red); border:1px solid var(--red);}
+.verdict.void{background:var(--gray-soft); color:var(--ink-soft); border:1px solid var(--ink-soft);}
+@media (max-width:880px){ .ex{grid-template-columns:1fr;} .ex > div:first-child{border-right:0;border-bottom:1px solid var(--rule);} }
+
+/* invariants */
+.inv{display:grid; grid-template-columns:repeat(2,1fr); gap:14px 28px; margin-top:16px;}
+.inv div{border-top:1px solid var(--rule); padding-top:10px;}
+.inv dt{font-family:var(--mono); font-size:11px; letter-spacing:.06em; color:var(--teal); text-transform:uppercase;}
+.inv dd{font-size:14px; color:var(--ink-soft); margin-top:2px;}
+.inv dd b{color:var(--ink); font-weight:600;}
+@media (max-width:820px){ .inv{grid-template-columns:1fr;} }
+
+.foot{margin-top:60px; padding-top:16px; border-top:1.5px solid var(--ink); font-size:13px; color:var(--ink-soft); display:flex; flex-wrap:wrap; gap:12px 28px; justify-content:space-between;}
+.foot .mono{font-size:11px; letter-spacing:.06em;}
+.foot a{color:var(--teal);}
+@media print{
+	body{background:#fff;}
+	body::before,body::after{display:none;}
+	.page{max-width:none; padding:0;}
+	section{break-inside:avoid;}
+	.canvas{border:0; padding:0;}
+	.toc{display:none;}
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="masthead">
+	<div class="meta">
+		<span>Comparative analysis · RFC 0006</span>
+		<span>LAQuer, ACL 2025 long · pp. 15355–15370</span>
+		<span>2026-11-03</span>
+	</div>
+	<h1>Both find the span. Only one of them <em>proves</em> it — and neither asks the same question.</h1>
+	<p class="sub">afFido's strict citations and the paper's LAQuer task both answer "where in the source does this claim come from?". They differ in who asks, when, about how much text, and what happens when the answer is bad.</p>
+	<div class="stamp">analysis<br>not a proposal</div>
+</header>
+
+<nav class="toc">
+	<a href="#pipelines">1 · Two pipelines</a>
+	<a href="#diff">2 · Operative differences</a>
+	<a href="#agree">3 · Where we agree</a>
+	<a href="#gap">4 · Where we are misaligned</a>
+	<a href="#examples">5 · Two real runs</a>
+	<a href="#metric">6 · The metric that cannot see it</a>
+	<a href="#verdict">7 · Verdict</a>
+</nav>
+
+<!-- ============================================================ -->
+<section id="pipelines">
+	<div class="sec-head"><span class="sec-no">1</span><h2>Two pipelines, one difference of direction</h2></div>
+	<div class="sec-q">one is a gate around generation · the other is a task after it</div>
+
+	<p class="lede">LAQuer assumes an answer already exists and the user points at a piece of it. afFido assumes nothing exists yet: the model must earn the right to print a line by declaring a quote the server can find. The paper's method is <strong>post-hoc and user-driven</strong>; ours is <strong>generation-time and model-driven</strong>. Everything else below follows from that.</p>
+
+	<div class="legend">
+		<span><i class="sw sw-ff"></i>afFido · RFC 0006 gate</span>
+		<span><i class="sw sw-lq"></i>LAQuer · paper §4</span>
+		<span><i class="sw sw-gap"></i>no counterpart</span>
+	</div>
+
+	<div class="canvas">
+<svg viewBox="0 0 1120 620" role="img" aria-label="Side-by-side pipelines: afFido gates generation, LAQuer attributes after generation">
+	<defs>
+		<marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+			<path d="M0,0 L10,5 L0,10 z" fill="#5a6672"/>
+		</marker>
+		<marker id="arw-ff" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+			<path d="M0,0 L10,5 L0,10 z" fill="#0e7568"/>
+		</marker>
+		<marker id="arw-lq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+			<path d="M0,0 L10,5 L0,10 z" fill="#5f3f8f"/>
+		</marker>
+		<marker id="arw-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+			<path d="M0,0 L10,5 L0,10 z" fill="#bd3f1d"/>
+		</marker>
+	</defs>
+
+	<!-- ============ LANE A : afFido ============ -->
+	<text class="t-band" x="24" y="34">A · afFido — generation is the gate</text>
+	<rect class="band-ff" x="14" y="46" width="1092" height="240" rx="6"/>
+
+	<!-- stage boxes A -->
+	<rect class="box-grey" x="34" y="76" width="150" height="72" rx="4"/>
+	<text class="t-title" x="46" y="100">1 · user submits</text>
+	<text class="t-mono" x="46" y="118">POST /prompt</text>
+	<text class="t-mono-b" x="46" y="134">citations:"required"</text>
+
+	<rect class="box-ff" x="212" y="76" width="170" height="72" rx="4"/>
+	<text class="t-title" x="224" y="100">2 · the model reads</text>
+	<text class="t-mono" x="224" y="118">corpus_grep → corpus_read</text>
+	<text class="t-sub" x="224" y="134">server owns every offset</text>
+
+	<rect class="box-ff" x="410" y="76" width="182" height="72" rx="4"/>
+	<text class="t-title" x="422" y="100">3 · declares reliance</text>
+	<text class="t-mono" x="422" y="118">corpus_annotate{quote}</text>
+	<text class="t-sub" x="422" y="134">indexOf → slice verified</text>
+
+	<rect class="box-gate" x="620" y="70" width="188" height="84" rx="4"/>
+	<text class="t-title" x="632" y="94">4 · answer_publish</text>
+	<text class="t-mono" x="632" y="112">every line ≥ 1 [cit_…]</text>
+	<text class="t-mono" x="632" y="128">declared == used</text>
+	<text class="t-mono-b t-bad" x="632" y="144">reject → write nothing</text>
+
+	<rect class="box-grey" x="836" y="76" width="248" height="72" rx="4"/>
+	<text class="t-title" x="848" y="100">5 · reply + citations[]</text>
+	<text class="t-mono" x="848" y="118">doc · version · line · span</text>
+	<text class="t-mono" x="848" y="134">textSha256 · attribution_verified</text>
+
+	<path class="edge-ff" d="M184,112 L210,112"/>
+	<path class="edge-ff" d="M382,112 L408,112"/>
+	<path class="edge-ff" d="M592,112 L618,112"/>
+	<path class="edge-ff" d="M808,112 L834,112"/>
+
+	<!-- who decides the question -->
+	<rect x="34" y="182" width="1050" height="88" rx="4" fill="#fff" stroke="#d3c7a8"/>
+	<text class="t-mono-b" x="48" y="204">who chooses WHICH span needs a source?</text>
+	<text class="t-sub" x="48" y="224">the model, while it writes. The user's only lever is the per-submission toggle: <tspan class="t-mono-b">all lines or nothing</tspan>.</text>
+	<text class="t-mono" x="48" y="244">Cheap: no second model call. The verifier is a string comparison, not a judge.</text>
+	<text class="t-mono t-ff" x="48" y="260">Blocking: no evidence for a line ⇒ no line. Refusal is the failure mode.</text>
+
+	<!-- ============ LANE B : LAQuer ============ -->
+	<text class="t-band" x="24" y="330">B · LAQuer — generation happens, then the user points</text>
+	<rect class="band-lq" x="14" y="342" width="1092" height="230" rx="6"/>
+
+	<rect class="box-grey" x="34" y="372" width="150" height="76" rx="4"/>
+	<text class="t-title" x="46" y="396">1 · generation</text>
+	<text class="t-mono" x="46" y="414">Vanilla / ALCE</text>
+	<text class="t-mono" x="46" y="430">Attr.First</text>
+
+	<rect class="box-lq" x="212" y="372" width="146" height="76" rx="4"/>
+	<text class="t-title" x="224" y="396">2 · user highlights</text>
+	<text class="t-mono" x="224" y="414">output span o₁…oₙ</text>
+	<text class="t-sub" x="224" y="430">word → whole sentence</text>
+
+	<rect class="box-lq" x="386" y="372" width="176" height="76" rx="4"/>
+	<text class="t-title" x="398" y="396">3 (A) decontextualize</text>
+	<text class="t-mono" x="398" y="414">MolecularFacts prompt</text>
+	<text class="t-sub" x="398" y="430">adds the missing referents</text>
+
+	<rect class="box-lq" x="590" y="372" width="196" height="76" rx="4"/>
+	<text class="t-title" x="602" y="396">4 (B) attribute</text>
+	<text class="t-mono" x="602" y="414">LLM prompt | LLM internals</text>
+	<text class="t-sub" x="602" y="430">fuzzy match · retry ×5</text>
+
+	<rect class="box-grey" x="814" y="372" width="270" height="76" rx="4"/>
+	<text class="t-title" x="826" y="396">5 · source spans s₁…sₘ</text>
+	<text class="t-mono" x="826" y="414">fallback: metadata → all docs</text>
+	<text class="t-mono t-lq" x="826" y="430">degrade, never refuse</text>
+
+	<path class="edge-lq" d="M184,410 L210,410"/>
+	<path class="edge-lq" d="M358,410 L384,410"/>
+	<path class="edge-lq" d="M562,410 L588,410"/>
+	<path class="edge-lq" d="M786,410 L812,410"/>
+
+	<rect x="34" y="466" width="1050" height="90" rx="4" fill="#fff" stroke="#d3c7a8"/>
+	<text class="t-mono-b" x="48" y="488">the objective, verbatim from §3:</text>
+	<text class="t-mono" x="48" y="508">concat(s₁…sₘ) ⊨ I(o₁…oₙ | o)    — the spans must express the DEcontextualized meaning of the highlighted output</text>
+	<text class="t-sub" x="48" y="528">Scored downstream with an NLI model (AutoAIS), not enforced at write time. Nothing in the paper refuses an attribution;</text>
+	<text class="t-sub" x="48" y="544">it measures how often the attribution is insufficient, and reports the number.</text>
+
+	<!-- the pivot arrow between lanes -->
+	<path class="edge-bad" d="M560,286 L560,326"/>
+	<text class="t-mono-b t-bad" x="574" y="308">the operative divide</text>
+	<text class="t-mono t-bad" x="574" y="322">BEFORE vs AFTER the answer exists</text>
+</svg>
+	</div>
+	<p class="tbl-note">Left: RFC 0006 §5.3–5.5, agent/citation-tools.ts. Right: LAQuer §4, Fig. 2.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="diff">
+	<div class="sec-head"><span class="sec-no">2</span><h2>Operative differences, one axis per row</h2></div>
+	<div class="sec-q">the rows with a teal bar are the ones that change what the product can answer</div>
+
+	<div class="tbl-wrap">
+	<table>
+		<thead>
+			<tr><th>Axis</th><th>afFido · RFC 0006</th><th>LAQuer · ACL 2025</th></tr>
+		</thead>
+		<tbody>
+			<tr class="axis">
+				<td class="k">Who initiates</td>
+				<td>The model, while writing. The user only sets <code>citations:"required"</code> for the whole submission.</td>
+				<td>The user, after reading, by highlighting any output span. The method must serve a query the system could not anticipate.</td>
+			</tr>
+			<tr class="axis">
+				<td class="k">When</td>
+				<td>Generation time. Nothing is published before the evidence exists.</td>
+				<td>Post-hoc. Runs on outputs produced by other systems, including unattributed ones.</td>
+			</tr>
+			<tr class="axis">
+				<td class="k">Unit of the query</td>
+				<td>The whole reply: every non-heading, non-blank line.</td>
+				<td>One span <code>o₁…oₙ</code>, from a single word to the full output.</td>
+			</tr>
+			<tr>
+				<td class="k">Granularity of the check</td>
+				<td>Line-level presence: the line must carry ≥1 <code>[cit_…]</code>. Token <em>position</em> is model-asserted, unchecked.</td>
+				<td>Span-to-span alignment: the returned source spans must support the highlighted output span.</td>
+			</tr>
+			<tr class="axis">
+				<td class="k">Verification</td>
+				<td>Deterministic: <code>indexOf</code> over stored bytes, code-point span, <code>textSha256</code> re-checked at every index build. No model in the loop.</td>
+				<td>Model-produced alignment, fuzzy-matched (diff-match-patch), retried ×5. Quality measured later by an NLI model (AutoAIS, T5-xxl).</td>
+			</tr>
+			<tr class="axis">
+				<td class="k">Failure policy</td>
+				<td>Reject. <code>quote_mismatch</code>, <code>uncited_line</code>, <code>foreign_citation</code> — nothing is written, no id is minted.</td>
+				<td>Degrade. Fuzzy match → retry → fall back to generation metadata → fall back to <em>all source documents</em>.</td>
+			</tr>
+			<tr>
+				<td class="k">Decontextualization</td>
+				<td>Absent. The quote is whatever the model copied.</td>
+				<td>Step (A), mandatory: pronouns and elided referents are rewritten into a standalone statement, and extra output spans are added to the highlight.</td>
+			</tr>
+			<tr>
+				<td class="k">Minimality</td>
+				<td>Absent. Only a length cap: <code>MAX_QUOTE_CHARS = 1000</code>.</td>
+				<td>The point of the task. Measured as characters of attributed text per fact (Table 6).</td>
+			</tr>
+			<tr>
+				<td class="k">Sufficiency</td>
+				<td>Explicit non-goal: "a citation proves attribution, not truth" (RFC 0006 §3.2).</td>
+				<td>The objective: <code>concat(s₁…sₘ) ⊨ I(o|o…)</code>, scored by entailment.</td>
+			</tr>
+			<tr>
+				<td class="k">Persistence / audit</td>
+				<td>Durable run state in SQLite, re-verifiable after restart (<code>GET /corpus/citations</code>), exactness recomputed from the trace with no judge.</td>
+				<td>A benchmark. No durable per-run audit, no idempotent replay, no cross-restart re-verification.</td>
+			</tr>
+			<tr>
+				<td class="k">Cost</td>
+				<td>Corpus tool calls under a budget (48/run). Zero extra model calls.</td>
+				<td>Extra LLM call per query, or an 8B model on one A100 for ≈8 h to run the internals baseline.</td>
+			</tr>
+		</tbody>
+	</table>
+	</div>
+	<p class="tbl-note">The teal-barred rows are not "better vs worse": they are the rows where the two systems answer different questions, so a metric from one cannot score the other.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="agree">
+	<div class="sec-head"><span class="sec-no">3</span><h2>Where we agree — and the paper is evidence for our choices</h2></div>
+	<div class="sec-q">four design decisions RFC 0006 made, four results that support them</div>
+
+	<div class="grid-2">
+		<div class="card ok">
+			<span class="flag">Agreement 1 · no similarity-based localizer</span>
+			<h3>Hidden-state alignment loses badly</h3>
+			<p>LAQuer's LLM-internals method scores <b>18.0</b> AutoAIS (contextualized) and <b>13.1</b> (decontextualized) on MDS, against 82.2 for plain generation. The best case for it is a 46.6 on LFQA on top of Attr.First — still far below the 83.0 of the prompt-based method.</p>
+			<p>RFC 0006 never locates a quote by similarity. It locates it by exact string equality and refuses when the string is absent. The paper's negative result is the empirical reason that is not a loss.</p>
+		</div>
+
+		<div class="card ok">
+			<span class="flag">Agreement 2 · attribute during generation</span>
+			<h3>Localized generation metadata is the best carrier</h3>
+			<p>Attr.First wins the contextualized column in both tasks (<b>80.3</b> MDS, <b>88.0</b> LFQA) and the paper's reading is that LAQuer "can leverage initially localized attributions provided by the generation method itself".</p>
+			<p>afFido goes further and makes the generation method <em>be</em> the attributor: there is no separate generation step to borrow metadata from. The model that writes is the model that must quote.</p>
+		</div>
+
+		<div class="card ok">
+			<span class="flag">Agreement 3 · spans beat documents</span>
+			<h3>The length argument is the same argument</h3>
+			<p>Document-level attribution costs <b>4679.5</b> characters per fact; sentence-level <b>278.5</b>; span-level <b>128.0</b>. LAQuer cuts read length by two orders of magnitude over Vanilla/ALCE and 59% over Attr.First.</p>
+			<p>RFC 0006 caps an annotated quote at 1000 characters and points the "Files used" panel at a line, not a file. Same direction — but see §4, misalignment M2: 1000 ≫ 128.</p>
+		</div>
+
+		<div class="card ok">
+			<span class="flag">Agreement 4 · attribution ≠ truth</span>
+			<h3>Both separate "is it in the source" from "is it supported"</h3>
+			<p>The paper keeps attribution quality (AutoAIS) apart from output quality (Rouge-L, BertScore, METEOR, BLEURT-20, MAUVE). RFC 0006 declares truth verification a non-goal outright.</p>
+			<p>The difference is where the second question lives: in the paper it is a scored metric; in afFido it is currently <em>nowhere</em>, which is misalignment M1.</p>
+		</div>
+	</div>
+
+	<p class="note">A fifth, structural agreement: both refuse to let the model compute offsets. The paper's LLM emits span <em>text</em> and the pipeline locates it; <code>corpus_annotate</code> accepts only <code>citation.text</code> and the server returns <code>start</code>/<code>end</code>/<code>line</code>. A model-supplied hash or offset is ignored in both designs — R1 in RFC 0006 is the same instinct.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="gap">
+	<div class="sec-head"><span class="sec-no">4</span><h2>Where we are misaligned</h2></div>
+	<div class="sec-q">six gaps, each with the code line that causes it</div>
+
+	<div class="grid-2">
+		<div class="card bad">
+			<span class="flag">M1 · the gate certifies attribution, never sufficiency</span>
+			<h3>A verified quote can be useless on its own</h3>
+			<p><code>annotate()</code> succeeds when <code>document.text.indexOf(quote) !== -1</code>. That is all. Nothing asks whether the span contains the referents a reader needs. LAQuer's desideratum 3 asks exactly that, and Table 4 shows the cost of skipping it: Attr.First drops from <b>80.3 → 58.0</b> (MDS) and <b>88.0 → 83.9</b> (LFQA) once facts are decontextualized.</p>
+			<p>This matters in our UI, not just in theory: the hover card and the Files used panel show <code>quote</code> <em>alone</em>, out of context. §5 example 2 is a live case.</p>
+		</div>
+
+		<div class="card bad">
+			<span class="flag">M2 · no minimality</span>
+			<h3>Cite the entire document: still "verified"</h3>
+			<p>The only bound is <code>MAX_QUOTE_CHARS = 1000</code>. A model may annotate the whole file and publish against it, and the gate will accept. Executed: a 145-character whole-document annotation minted <code>cit_f5271a3732</code> (span <code>0–145</code>) and <code>answer_publish</code> returned <code>{"ok":true}</code>.</p>
+			<p>LAQuer's central measured quantity — attributed characters per fact — has no counterpart in our report. <code>citationExactness</code> is blind to it by construction.</p>
+		</div>
+
+		<div class="card bad">
+			<span class="flag">M3 · strict mode cannot answer a post-hoc query</span>
+			<h3>A free-run answer has no span map</h3>
+			<p>Citations exist only for runs that went through <code>answer_publish</code>. A reply produced in a free run is a string; there is no stored mapping from its words to a source. The user cannot later ask "which document supports these two words?" — the question the paper is built around.</p>
+			<p>Closing this is not a patch: it needs token positions persisted per message plus a re-entry route that can call <code>corpus_annotate</code> outside a submission. It is an RFC, not a config flag.</p>
+		</div>
+
+		<div class="card bad">
+			<span class="flag">M4 · line granularity flattens the paper's Figure-1 case</span>
+			<h3>Two facts, one sentence, two sources</h3>
+			<p>The paper's motivating example: one sentence contains a fact from <code>nbcnews.com</code> and another from <code>statnews.com</code>. Its gate equivalent needs per-span attribution.</p>
+			<p>Our gate checks <code>lineCarriesToken()</code> — the line carries <em>some</em> token. The model places <code>[cit_a]</code> next to the right clause, and it usually gets it right, but the position is asserted, not verified. Two tokens on one line is legal and both are accepted wherever they sit.</p>
+		</div>
+
+		<div class="card bad">
+			<span class="flag">M5 · the user's lever is all-or-nothing</span>
+			<h3>No "cite only this claim"</h3>
+			<p><code>citations:"required"</code> is per submission (RFC 0006 §5.9, correctly so — it beats a sandbox env var). But its granularity is the entire reply: every line must be provenanced or the run cannot exit through <code>answer_publish</code>.</p>
+			<p>LAQuer's desideratum 1 is that "it is not possible to predict a user's specific interests in advance". Our toggle predicts them exactly: all of them, every time, or none.</p>
+		</div>
+
+		<div class="card bad">
+			<span class="flag">M6 · our metric cannot see the failure the paper measures</span>
+			<h3>citationExactness = 1.0 while the attribution is insufficient</h3>
+			<p><code>exact = set(reported) == set(used)</code> over published runs. A run whose every quote is real-but-insufficient scores 1.0. The paper's headline failure mode — the decontextualized collapse — is invisible to this number.</p>
+			<p>This is not a bug in the metric: the metric measures the property RFC 0006 claims (no padding, no omission). It just does not measure the property the paper cares about.</p>
+		</div>
+	</div>
+
+	<p class="note red"><b>The honest summary of the misalignment:</b> RFC 0006 closes the <em>forgery</em> channel completely and leaves the <em>relevance</em> channel entirely open. LAQuer does the opposite — it optimises relevance and never refuses an attribution. A product that needs both has to run both, because neither one can be turned into the other by adjusting a threshold.</p>
+</section>
+
+<!-- ============================================================ -->
+<section id="examples">
+	<div class="sec-head"><span class="sec-no">5</span><h2>Two real runs on one real document</h2></div>
+	<div class="sec-q">values below are produced by the shipped code, not written by hand</div>
+
+	<p class="lede">Both examples use the maintenance contract fixture already in <code>agent/citation-agent.test.ts</code>, staged through <code>IngestPipeline</code> and read through <code>WorkspaceCitationStore</code>. The ids, spans, line numbers and hashes are the ones the store returned.</p>
+
+	<div class="canvas">
+<svg viewBox="0 0 1120 330" role="img" aria-label="The real document with the two verified spans and the missing referent">
+	<!-- document -->
+	<rect class="box-doc" x="24" y="30" width="700" height="248" rx="4"/>
+	<text class="t-mono-b" x="40" y="54">doc_42 · contratto.md · v1 · 145 code points</text>
+	<text class="t-mono" x="40" y="70">textSha256 c74e51e230de06d3595b4cd4863764ad73ba7921b20cfd42364d7b23900e8562</text>
+	<line class="hr" x1="40" y1="80" x2="708" y2="80"/>
+
+	<text class="t-mono" x="40" y="104">L1  # Contratto di manutenzione</text>
+	<text class="t-mono" x="40" y="122">L2</text>
+	<text class="t-mono" x="40" y="140">L3  ## Rinnovo</text>
+
+	<!-- span A -->
+	<rect class="span-ok" x="34" y="150" width="676" height="22" rx="3"/>
+	<text class="t-mono" x="40" y="166">L4  Il contratto si rinnova tacitamente il 1° marzo 2027.</text>
+	<text class="t-mono-b t-ff" x="486" y="166">← span 40–93</text>
+
+	<!-- span B -->
+	<rect class="span-gap" x="34" y="178" width="676" height="22" rx="3"/>
+	<text class="t-mono" x="40" y="194">L5  La disdetta deve essere comunicata 90 giorni prima.</text>
+	<text class="t-mono-b t-bad" x="486" y="194">← span 94–145</text>
+
+	<text class="t-sub" x="40" y="232">The referent of "prima" is not inside span B: <tspan class="t-mono-b">rinnovo</tspan> → not_found;</text>
+	<text class="t-sub" x="40" y="248"><tspan class="t-mono-b">rinnova</tspan> → L4 span 56–57; <tspan class="t-mono-b">contratto</tspan> → L4. Span B contains neither.</text>
+	<text class="t-mono t-bad" x="40" y="268">⇒ attribution_verified · and insufficient</text>
+
+	<!-- right column: what each method says -->
+	<rect x="752" y="30" width="344" height="112" rx="4" fill="#fff" stroke="#0e7568" stroke-width="1.6"/>
+	<text class="t-mono-b t-ff" x="766" y="52">EX 1 — "when does it renew?"</text>
+	<text class="t-mono" x="766" y="74">afFido: cit_531c34f776 · L4 · 40–93</text>
+	<text class="t-mono t-ff" x="766" y="92">LAQuer: same span, 53 chars, sufficient</text>
+	<text class="t-mono-b t-ff" x="766" y="114">→ agree</text>
+	<text class="t-sub" x="766" y="132">Both find line 4. LAQuer adds the proof that it is enough.</text>
+
+	<rect x="752" y="152" width="344" height="126" rx="4" fill="#fff" stroke="#bd3f1d" stroke-width="1.6"/>
+	<text class="t-mono-b t-bad" x="766" y="174">EX 2 — "how much notice?"</text>
+	<text class="t-mono" x="766" y="196">afFido: cit_1b4255d2d2 · L5 · 94–145</text>
+	<text class="t-mono t-ff" x="766" y="214">verdict: attribution_verified</text>
+	<text class="t-mono t-bad" x="766" y="236">LAQuer: span lacks "contratto"/"rinnovo"</text>
+	<text class="t-mono-b t-bad" x="766" y="254">→ disagree: insufficient, not wrong</text>
+	<text class="t-sub" x="766" y="270">Decontextualized fact needs L4 inside the attribution.</text>
+</svg>
+	</div>
+
+<h4 class="code-cap">Example 1 — the renewal date: full agreement</h4>
+<div class="ex">
+	<div class="ff">
+		<h4>afFido · what the gate returned</h4>
+		<div class="code" style="margin-top:0"><span class="h">corpus_annotate</span>{"docId":"doc_42","docVersion":1,"citation":{"text":
+  "Il contratto si rinnova tacitamente il 1° marzo 2027."}}
+<span class="c">→ located by indexOf, no model in the loop</span>
+{"citationId":"<span class="h">cit_531c34f776</span>","start":<span class="n">40</span>,"end":<span class="n">93</span>,"line":<span class="n">4</span>,
+ "textSha256":"c74e51e2…","status":"verified"}
+<span class="h">answer_publish</span>{"markdown":"## Rinnovo\n\nIl contratto si
+  rinnova tacitamente il 1° marzo 2027 [cit_531c34f776].", …}
+→ {"ok":true}</div>
+		<p style="margin-top:10px"><b>Proves:</b> those 53 characters exist at that span of that version of that document, now and after a restart.</p>
+		<p><b>Does not prove:</b> that 53 characters are <em>enough</em>, or that the answer line contains only that fact.</p>
+		<span class="verdict pass">sufficient · minimal · exact</span>
+	</div>
+	<div class="lq">
+		<h4>LAQuer · what the pipeline would return</h4>
+		<p><b>(A)</b> user highlights <code>1° marzo 2027</code> → decontextualize, adding the referents the highlight dropped:</p>
+		<div class="code" style="margin-top:6px">"Il contratto di manutenzione si rinnova
+ tacitamente il 1° marzo 2027."</div>
+		<p><b>(B)</b> attribute that statement → the same L4 span, ~53–70 chars.</p>
+		<p><b>Score:</b> AutoAIS ≈ positive; the attributed length is at the span level (128 chars/fact average, Table 6), not the sentence level (278.5).</p>
+		<span class="verdict pass">agrees with the gate, plus a minimality claim</span>
+	</div>
+</div>
+
+<h4 class="code-cap">Example 2 — the 90-day notice: the gate says verified, LAQuer says insufficient</h4>
+<div class="ex">
+	<div class="ff">
+		<h4>afFido · what the gate returned</h4>
+		<div class="code" style="margin-top:0"><span class="h">corpus_annotate</span>{"docId":"doc_42","docVersion":1,"citation":{"text":
+  "La disdetta deve essere comunicata 90 giorni prima."}}
+{"citationId":"<span class="h">cit_1b4255d2d2</span>","start":<span class="n">94</span>,"end":<span class="n">145</span>,"line":<span class="n">5</span>,
+ "status":"verified"}
+<span class="h">answer_publish</span>{"markdown":"## Rinnovo\n\nIl contratto si rinnova
+  tacitamente il 1° marzo 2027 [cit_531c34f776], mentre la disdetta
+  deve essere comunicata 90 giorni prima [cit_1b4255d2d2].", …}
+→ {"ok":true}</div>
+		<p style="margin-top:10px"><b>Gate result:</b> a two-fact line, two tokens, two verified annotations, one accepted publish. Exactly what RFC 0006 promises.</p>
+		<p><b>Reader result:</b> the hover card shows <code>La disdetta deve essere comunicata 90 giorni prima.</code> — "before what?" is on the previous line, outside the quote.</p>
+		<span class="verdict pass">gate: pass</span>
+	</div>
+	<div class="lq">
+		<h4>LAQuer · what the pipeline would return</h4>
+		<p><b>(A)</b> user highlights <code>90 giorni prima</code> → decontextualize. The pronoun/ellipsis resolution pulls in the earlier output span:</p>
+		<div class="code" style="margin-top:6px">"La disdetta del contratto deve essere
+ comunicata 90 giorni prima del rinnovo."</div>
+		<p><b>(B)</b> attribute that statement. The candidate span at L5 <b>does not contain</b> <code>contratto</code> or <code>rinnovo</code> — verified by the same store: <code>rinnovo</code> → <code>not_found</code>, <code>rinnova</code> → L4.</p>
+		<p>Correct output: spans covering <b>L4+L5</b>. The L5-only span fails the entailment check.</p>
+		<span class="verdict fail">insufficient attribution</span>
+	</div>
+</div>
+
+<p class="note">The disagreement is not a bug in either system. The document itself is context-dependent — line 5 leans on line 4. LAQuer is designed to detect exactly that and does; RFC 0006 is designed to detect forgery and does. Both verdicts are correct answers to different questions, and a user reading the Files used panel gets the second-hand version of the first problem without any label for it.</p>
+
+<h4 class="code-cap">The third datum: no minimality rule exists</h4>
+<div class="code"><span class="h">corpus_annotate</span>{"docId":"doc_42","docVersion":1,"kind":"quote","citation":{"text":"<span class="c"># Contratto di manutenzione\n\n## Rinnovo\nIl contratto si rinnova… (whole file)</span>"}}
+{"citationId":"<span class="h">cit_f5271a3732</span>,"start":<span class="n">0</span>,"end":<span class="n">145</span>,"status":"verified"}
+<span class="h">answer_publish</span>{ … "citationIds":["cit_f5271a3732"] } → {"ok":true}
+<span class="c">MAX_QUOTE_CHARS = 1000 is the only cost the gate imposes.</span>
+<span class="c">LAQuer's measured quantity — characters per fact — would record this as 145,</span>
+<span class="c">against 128 for a span-level attribution and 4679.5 for a document-level one.</span></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="metric">
+	<div class="sec-head"><span class="sec-no">6</span><h2>The two metrics sit on different axes</h2></div>
+	<div class="sec-q">neither number can be read as a score of the other system</div>
+
+	<div class="tbl-wrap">
+	<table>
+		<thead>
+			<tr><th>Question the metric answers</th><th>afFido <code>citationExactness</code></th><th>LAQuer <code>AutoAIS</code> / length</th></tr>
+		</thead>
+		<tbody>
+			<tr><td class="k">Did the answer report exactly what it used?</td><td>yes — <code>set(reported) == set(used)</code>, no judge</td><td>not asked</td></tr>
+			<tr><td class="k">Is the attributed text enough to support the claim?</td><td>not asked</td><td>yes — NLI entailment, contextualized and decontextualized</td></tr>
+			<tr><td class="k">How much must the reader read?</td><td>not asked</td><td>yes — content words, and characters per fact by granularity</td></tr>
+			<tr><td class="k">Can the model pad or omit?</td><td>impossible after the gate; measured as <code>padded</code>/<code>unreportedUsed</code></td><td>possible; captured only as a lower AutoAIS</td></tr>
+			<tr class="axis"><td class="k">Example 2 under this metric</td><td><b>1.0</b> — every reported id was annotated, every annotated id was reported</td><td><b>below the contextualized score</b> — the span is real but does not entail the decontextualized fact</td></tr>
+		</tbody>
+	</table>
+	</div>
+
+	<div class="grid-3" style="margin-top:20px">
+		<div class="card warn"><span class="flag">Reading the paper's numbers</span><p>Attr.First, MDS: <b>80.3</b> contextualized → <b>58.0</b> decontextualized. The 22-point drop is the price of removing the surrounding context, and it is the number that predicts example 2.</p></div>
+		<div class="card warn"><span class="flag">Reading our number</span><p><b>1.0</b> exactness is a statement about bookkeeping, not relevance. It will stay 1.0 for a corpus full of orphaned spans, because a real quote is always a real quote.</p></div>
+		<div class="card warn"><span class="flag">The gap in one line</span><p>Our gate makes a <em>fabricated</em> citation impossible and a <em>low</em> AutoAIS invisible — a real quote attached to a claim it does not support passes. LAQuer makes that visible and refuses nothing.</p></div>
+	</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="verdict">
+	<div class="sec-head"><span class="sec-no">7</span><h2>Verdict</h2></div>
+	<div class="sec-q">what is aligned, what is not, and what it would cost to close it</div>
+
+	<div class="inv">
+		<div>
+			<dt>Aligned by design</dt>
+			<dd><b>Span-level attribution, offsets computed server-side, no model-supplied hashes.</b> The paper validates the architecture RFC 0006 already had, and its negative result on hidden-state alignment validates the choice of exact matching over fuzzy alignment.</dd>
+		</div>
+		<div>
+			<dt>Aligned by outcome</dt>
+			<dd><b>Reading length.</b> Both replace "read the document" with "read the span". Ours is ~8× looser in the worst case (1000 vs 128 characters), same direction, weaker bound.</dd>
+		</div>
+		<div>
+			<dt>Misaligned, unfixable by config</dt>
+			<dd><b>Post-hoc queries.</b> Our citations are a property of a submission, not of an answer. Answering "what supports these words?" on an existing reply needs persisted token positions and a route outside <code>/prompt</code>.</dd>
+		</div>
+		<div>
+			<dt>Misaligned, fixable cheaply</dt>
+			<dd><b>Decontextualization lint.</b> A quote that leans on an unresolved anaphor or comparative while its referent sits outside the quote can be <em>flagged</em> by a lexical heuristic — no judge, no model. It would surface example 2 at the gate instead of leaving it to the reader. This is a warning, not the gate's property: the gate stays exactly as mechanical as it is.</dd>
+		</div>
+		<div>
+			<dt>Misaligned, fixable cheaply</dt>
+			<dd><b>Minimality bound.</b> Cap a quote at the sentence that contains the match rather than 1000 characters, and report attributed characters per published citation next to <code>citationExactness</code>. Both are additions to an existing counter, not new mechanism.</dd>
+		</div>
+		<div>
+			<dt>Deliberately out of scope</dt>
+			<dd><b>Entailment.</b> Requiring <code>concat(s) ⊨ claim</code> means judging the claim, which RFC 0006 §3.2 refuses on purpose: the gate must be mechanical and judge-free. Adopting LAQuer's objective would make the gate probabilistic and the property unmeasurable from the trace alone.</dd>
+		</div>
+	</div>
+
+	<p class="note">If only one thing is taken from the paper: <b>refusing bad evidence and finding the <em>right</em> evidence are different problems with different proofs.</b> afFido solved the first, exhaustively. The paper's contribution is that the second one has a measurable definition — and it is the one users actually experience when they hover a reference.</p>
+</section>
+
+<div class="foot">
+	<span>Source: <em>LAQuer: Localized Attribution Queries in Content-grounded Generation</em>, Hirsch, Slobodkin, Wan, Stengel-Eskin, Bansal, Dagan · ACL 2025 Long, pp. 15355–15370.</span>
+	<span class="mono">afFido: RFC 0006 · agent/citation-tools.ts · agent/workspace-store.ts · agent/citation-report.ts</span>
+</div>
+
+</div>
+</body>
+</html>

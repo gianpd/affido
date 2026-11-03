@@ -25,6 +25,8 @@ import {
 	type FauxResponseFactory,
 } from "@earendil-works/pi-ai/providers/faux";
 import { MAX_CORPUS_CALLS } from "./citation-tools.ts";
+import { ScriptedJudge } from "./citation-judge.ts";
+import type { CitationJudge, JudgeMode, JudgeVerdict } from "./citation-judge.ts";
 import { ContainerAgent, createAgentRegistry } from "./agent.ts";
 import { DurableHarness } from "./harness.ts";
 import { createModel } from "./model.ts";
@@ -44,7 +46,12 @@ const CONTRACT = [
 
 type Fixture = { agent: ContainerAgent; workspace: string; sessionDb: string };
 
-const buildAgent = async (workspace: string, sessionDb: string, bundle: Awaited<ReturnType<typeof createModel>>): Promise<Fixture> => {
+const buildAgent = async (
+	workspace: string,
+	sessionDb: string,
+	bundle: Awaited<ReturnType<typeof createModel>>,
+	judge?: { readonly judge: CitationJudge; readonly mode: JudgeMode },
+): Promise<Fixture> => {
 	const { models, credentials, model } = bundle;
 	const context = BACKGROUND_CONTEXT;
 	const apiEnv = new NodeExecutionEnv({ cwd: workspace });
@@ -52,7 +59,7 @@ const buildAgent = async (workspace: string, sessionDb: string, bundle: Awaited<
 	const harness = new DurableHarness({
 		openOptions: {
 			models,
-			registry: createAgentRegistry({ name: "test", workspace, store }),
+			registry: createAgentRegistry({ name: "test", workspace, store, judge: judge?.judge ?? null, judgeMode: judge?.mode ?? "off" }),
 			env: (target) => new NodeExecutionEnv({ cwd: target.cwd ?? workspace }),
 		},
 		rootOptions: { agent: { model, cwd: workspace, thinkingLevel: "off" as const } },
@@ -313,14 +320,18 @@ const scriptedBundle = (script: FauxResponseFactory) => {
 	return { bundle: { models, credentials, model: { provider: "faux", modelId: "faux-1" } }, state: faux.state };
 };
 
-const stagedFixture = async (prefix: string, bundle: Awaited<ReturnType<typeof createModel>>) => {
+const stagedFixture = async (
+	prefix: string,
+	bundle: Awaited<ReturnType<typeof createModel>>,
+	judge?: { readonly judge: CitationJudge; readonly mode: JudgeMode },
+) => {
 	const workspace = await mkdtemp(join(tmpdir(), prefix));
 	const sessionDb = join(workspace, "session.sqlite");
 	await new IngestPipeline(workspace).stage({
 		bytes: new TextEncoder().encode(CONTRACT),
 		target: { kind: "document", docId: "doc_42", filename: "contratto.md", title: "Contratto di manutenzione" },
 	});
-	const { agent } = await buildAgent(workspace, sessionDb, bundle);
+	const { agent } = await buildAgent(workspace, sessionDb, bundle, judge);
 	await agent.seedWorkspace();
 	return agent;
 };
@@ -467,5 +478,218 @@ test("a bare-text strict answer is bounced twice, then ends evidence none with n
 	assert.equal(run?.published, false);
 	assert.equal(run?.plain, false);
 	assert.equal(run?.corpusCalls, 0);
+	await agent.close();
+});
+
+// ── RFC 0017 §7: the post-gate coherence judge, warn and enforce, driven
+// through the real strict path with the shared transcript and a fake judge. ──
+
+/** grep -> read -> annotate, then publish the dodge line the judge must catch:
+ * the document says the disdetta is 90 giorni, the answer claims assistance. */
+const INCOHERENT = "L'assistenza e inclusa nel canone annuo";
+const COHERENT = "La disdetta deve essere comunicata 90 giorni prima";
+
+/** One strict publish attempt with `line` as the answer body; returns the
+ * publish tool result so a test can assert the rejection and the retry. */
+const publishOnce = (line: string): FauxResponseFactory => (transcript) => {
+	const tool = lastToolResult(transcript.messages);
+	if (tool === undefined) return call("corpus_grep", { pattern: "disdetta" });
+	if (tool.name === "corpus_grep" && !tool.isError) {
+		const hit = (JSON.parse(tool.text) as { hits: { docId: string; text: string }[] }).hits[0];
+		if (hit !== undefined) return call("corpus_read", { docId: hit.docId, needle: hit.text });
+	}
+	if (tool.name === "corpus_read" && !tool.isError) {
+		const args = lastToolArgs(transcript.messages, "corpus_read");
+		if (typeof args?.docId === "string" && typeof args?.needle === "string") {
+			return call("corpus_annotate", { docId: args.docId, docVersion: 1, kind: "quote", citation: { text: args.needle } });
+		}
+	}
+	if (tool.name === "corpus_annotate" && !tool.isError) {
+		const citationId = (JSON.parse(tool.text) as { citationId: string }).citationId;
+		return call("answer_publish", { markdown: `## Rinnovo\n\n${line} [${citationId}].\n`, citationIds: [citationId] });
+	}
+	if (tool.name === "answer_publish" && tool.isError) {
+		// The judge rejected the line: the only fix is a coherent line.
+		const annotate = lastResultOf(transcript.messages, "corpus_annotate");
+		const citationId = annotate === undefined ? "" : (JSON.parse(annotate.text) as { citationId: string }).citationId;
+		return call("answer_publish", { markdown: `## Rinnovo\n\n${COHERENT} [${citationId}].\n`, citationIds: [citationId] });
+	}
+	return fauxAssistantMessage([fauxText("The script reached an unexpected state.")]);
+};
+
+test("enforce rejects an incoherent line with incoherent_citation, records it, and lets the model retry", async () => {
+	// The judge calls the first (incoherent) line unsupported; the retry is coherent.
+	const seen: string[] = [];
+	const judge: CitationJudge = new ScriptedJudge(({ claim }) => {
+		seen.push(claim);
+		const verdict: JudgeVerdict = claim.includes("assistenza") ? { verdict: "unsupported", score: 0.81 } : { verdict: "supported", score: 0.9 };
+		return verdict;
+	});
+	const { bundle } = scriptedBundle(publishOnce(INCOHERENT));
+	const agent = await stagedFixture("citation-judge-1-", bundle, { judge, mode: "enforce" });
+
+	const result = (await agent.prompt("Quando va comunicata la disdetta?", "req-judge-1", "required")) as PromptResult;
+	assert.equal(result.status, "done");
+	assert.equal(result.evidence, "cited");
+	assert.ok(result.answer?.includes("90 giorni"));
+	assert.deepEqual(seen.map((claim) => claim.includes("assistenza")), [true, false], "both attempts were judged");
+
+	const report = (await agent.inspect({ limit: 50, report: "citations" })) as CitationsTraceReport;
+	const run = report.runs.find((candidate) => candidate.runId === "req-judge-1");
+	assert.notEqual(run, undefined);
+	console.log("RUN", JSON.stringify(run?.judge), JSON.stringify(run?.publishRejected));
+	assert.equal(run?.publishRejected.incoherent_citation, 1);
+	assert.equal(run?.judge?.mode, "enforce");
+	assert.equal(run?.judge?.judgeVerdicts, 2);
+	assert.equal(run?.judge?.judgeRejections, 1);
+	assert.equal(run?.judge?.unsupported, 1);
+	assert.equal(run?.judge?.supported, 1);
+	assert.equal(run?.judge?.judgeTruncated, 0);
+	assert.notEqual(run?.judge?.latencyMs, null);
+	const verdicts = run?.judge?.verdicts ?? [];
+	assert.deepEqual(verdicts.map((record) => record.verdict), ["unsupported", "supported"]);
+	assert.deepEqual(verdicts.map((record) => record.line), [3, 3]);
+	assert.match(verdicts[0]?.citationId ?? "", /^cit_[0-9a-f]{10}$/);
+	assert.equal(typeof verdicts[0]?.score, "number");
+	assert.equal(typeof verdicts[0]?.ms, "number");
+	assert.equal(verdicts[0]?.truncated, false);
+	await agent.close();
+});
+
+test("enforce with an unavailable judge publishes: the layer is absent, not erroring (RFC 0018)", async () => {
+	// A judge with no endpoint behind it (no OpenRouter credential backs the
+	// run) must never reject a publish: the keyless stack behaves exactly as
+	// RFC 0006. The script publishes the incoherent line once and is done.
+	const judge: CitationJudge = new (class extends ScriptedJudge {
+		async available() {
+			return false;
+		}
+	})(() => ({ verdict: "contradicted", score: 0.99 }));
+	const publishIncoherentOnce: FauxResponseFactory = (transcript) => {
+		const tool = lastToolResult(transcript.messages);
+		if (tool === undefined) return call("corpus_grep", { pattern: "disdetta" });
+		if (tool.name === "corpus_grep" && !tool.isError) {
+			const hit = (JSON.parse(tool.text) as { hits: { docId: string; text: string }[] }).hits[0];
+			if (hit !== undefined) return call("corpus_read", { docId: hit.docId, needle: hit.text });
+		}
+		if (tool.name === "corpus_read" && !tool.isError) {
+			const args = lastToolArgs(transcript.messages, "corpus_read");
+			if (typeof args?.docId === "string" && typeof args?.needle === "string") {
+				return call("corpus_annotate", { docId: args.docId, docVersion: 1, kind: "quote", citation: { text: args.needle } });
+			}
+		}
+		if (tool.name === "corpus_annotate" && !tool.isError) {
+			const citationId = (JSON.parse(tool.text) as { citationId: string }).citationId;
+			return call("answer_publish", { markdown: `## Rinnovo\n\n${INCOHERENT} [${citationId}].\n`, citationIds: [citationId] });
+		}
+		return fauxAssistantMessage([fauxText("The script reached an unexpected state.")]);
+	};
+	const { bundle } = scriptedBundle(publishIncoherentOnce);
+	const agent = await stagedFixture("citation-judge-absent-", bundle, { judge, mode: "enforce" });
+
+	const result = (await agent.prompt("Quando va comunicata la disdetta?", "req-judge-absent", "required")) as PromptResult;
+	assert.equal(result.status, "done");
+	assert.equal(result.evidence, "cited", "the publish stands: an unavailable judge is absent, never a rejection");
+
+	const report = (await agent.inspect({ limit: 50, report: "citations" })) as CitationsTraceReport;
+	const run = report.runs.find((candidate) => candidate.runId === "req-judge-absent");
+	assert.notEqual(run, undefined);
+	assert.equal(run?.publishRejected.incoherent_citation, undefined, "no judge rejection was recorded");
+	assert.equal(run?.judge, null, "the layer never ran");
+	await agent.close();
+});
+
+test("warn records the incoherent verdict and publishes anyway", async () => {
+	const judge: CitationJudge = new ScriptedJudge(({ claim }) =>
+		claim.includes("assistenza") ? { verdict: "unsupported", score: 0.81 } : { verdict: "supported", score: 0.9 },
+	);
+	// The shared script publishes the CONTRACT renewal line, which is coherent;
+	// a warn-mode script that stops after the first publish needs no retry path.
+	const warnScript: FauxResponseFactory = (transcript) => {
+		const tool = lastToolResult(transcript.messages);
+		if (tool === undefined) return call("corpus_grep", { pattern: "rinnova" });
+		if (tool.name === "corpus_grep" && !tool.isError) {
+			const hit = (JSON.parse(tool.text) as { hits: { docId: string; text: string }[] }).hits[0];
+			if (hit !== undefined) return call("corpus_read", { docId: hit.docId, needle: hit.text });
+		}
+		if (tool.name === "corpus_read" && !tool.isError) {
+			const args = lastToolArgs(transcript.messages, "corpus_read");
+			if (typeof args?.docId === "string" && typeof args?.needle === "string") {
+				return call("corpus_annotate", { docId: args.docId, docVersion: 1, kind: "quote", citation: { text: args.needle } });
+			}
+		}
+		if (tool.name === "corpus_annotate" && !tool.isError) {
+			const citationId = (JSON.parse(tool.text) as { citationId: string }).citationId;
+			// Deliberately incoherent: the quote is the renewal sentence, the claim is about assistance.
+			return call("answer_publish", { markdown: `## Rinnovo\n\n${INCOHERENT} [${citationId}].\n`, citationIds: [citationId] });
+		}
+		return fauxAssistantMessage([fauxText("The script reached an unexpected state.")]);
+	};
+	const { bundle } = scriptedBundle(warnScript);
+	const agent = await stagedFixture("citation-judge-2-", bundle, { judge, mode: "warn" });
+
+	const result = (await agent.prompt("Quando va comunicata la disdetta?", "req-judge-2", "required")) as PromptResult;
+	assert.equal(result.status, "done");
+	assert.equal(result.evidence, "cited", "warn never rejects");
+
+	const report = (await agent.inspect({ limit: 50, report: "citations" })) as CitationsTraceReport;
+	const run = report.runs.find((candidate) => candidate.runId === "req-judge-2");
+	assert.notEqual(run, undefined);
+	assert.equal(run?.judge?.mode, "warn");
+	assert.equal(run?.judge?.judgeVerdicts, 1);
+	assert.equal(run?.judge?.unsupported, 1);
+	assert.equal(run?.judge?.judgeRejections, 0);
+	assert.equal(run?.publishRejected.incoherent_citation, undefined);
+	await agent.close();
+});
+
+test("a judge that fails in enforce mode rejects with judge_unavailable and nothing is published", async () => {
+	const judge: CitationJudge = new ScriptedJudge(() => {
+		throw new Error("session gone");
+	});
+	const script: FauxResponseFactory = (transcript) => {
+		const tool = lastToolResult(transcript.messages);
+		if (tool === undefined) return call("corpus_grep", { pattern: "rinnova" });
+		if (tool.name === "corpus_grep" && !tool.isError) {
+			const hit = (JSON.parse(tool.text) as { hits: { docId: string; text: string }[] }).hits[0];
+			if (hit !== undefined) return call("corpus_read", { docId: hit.docId, needle: hit.text });
+		}
+		if (tool.name === "corpus_read" && !tool.isError) {
+			const args = lastToolArgs(transcript.messages, "corpus_read");
+			if (typeof args?.docId === "string" && typeof args?.needle === "string") {
+				return call("corpus_annotate", { docId: args.docId, docVersion: 1, kind: "quote", citation: { text: args.needle } });
+			}
+		}
+		if (tool.name === "corpus_annotate" && !tool.isError) {
+			const citationId = (JSON.parse(tool.text) as { citationId: string }).citationId;
+			return call("answer_publish", { markdown: `## Rinnovo\n\n${COHERENT} [${citationId}].\n`, citationIds: [citationId] });
+		}
+		if (tool.name === "answer_publish" && tool.isError) {
+			// No coherent retry exists while the judge is down: the model gives
+			// up in prose; the bounce cap ends the run unpublished, visibly.
+			return fauxAssistantMessage([fauxText("Cannot publish while the judge is down.")]);
+		}
+		return fauxAssistantMessage([fauxText("The script reached an unexpected state.")]);
+	};
+	const { bundle } = scriptedBundle(script);
+	const agent = await stagedFixture("citation-judge-3-", bundle, { judge, mode: "enforce" });
+
+	const result = (await agent.prompt("Quando va comunicata la disdetta?", "req-judge-3", "required")) as PromptResult;
+	assert.equal(result.status, "done");
+	assert.equal(result.evidence, "none", "no publish without a pass; the run ends unpublished and visible");
+
+	const report = (await agent.inspect({ limit: 50, report: "citations" })) as CitationsTraceReport;
+	const run = report.runs.find((candidate) => candidate.runId === "req-judge-3");
+	assert.notEqual(run, undefined);
+	// The prose give-ups are bounced until the cap, so the model re-runs
+	// grep -> read -> annotate -> publish at least twice; every attempt is
+	// refused with the named reason and nothing is ever published. The exact
+	// attempt count depends on the bounce cap, so only the invariants: every
+	// refusal counted, every judge call errored, no verdict recorded.
+	const refusals = run?.publishRejected.judge_unavailable ?? 0;
+	assert.ok(refusals >= 2, `expected at least two refusals, got ${refusals}`);
+	assert.equal(run?.judge?.judgeErrors, refusals);
+	assert.equal(run?.judge?.judgeVerdicts, 0);
+	assert.equal(run?.judge?.judgeRejections, refusals);
 	await agent.close();
 });

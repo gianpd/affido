@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Can a zero-shot judge keep citations honest?</title>
+<style>
+	:root{
+		--ink:#16181d; --muted:#6b7280; --line:#e6e8ec; --bg:#fff; --soft:#f6f7f9;
+		--accent:#1d4ed8; --ok:#0a7d33; --bad:#c2313a; --warn:#b45309;
+		--v-supp:#0a7d33; --v-unre:#6b7280; --v-contr:#c2313a;
+	}
+	*{box-sizing:border-box}
+	body{margin:0;background:var(--bg);color:var(--ink);
+		font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+	.wrap{max-width:880px;margin:0 auto;padding:48px 24px 72px}
+	.kicker{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+	h1{font-size:34px;line-height:1.2;margin:0 0 12px;letter-spacing:-.02em}
+	.lede{font-size:18px;color:#3f4550;margin:0 0 8px}
+	.lede b{color:var(--ink)}
+	h2{font-size:15px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+		margin:48px 0 16px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+	footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--line);
+		font-size:12.5px;color:var(--muted);line-height:1.7}
+	code{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--soft);
+		border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+	.chip{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+		padding:2px 9px;border-radius:99px;border:1px solid}
+	.chip.pass{color:var(--ok);border-color:var(--ok);background:#f0faf3}
+	.chip.fail{color:var(--bad);border-color:var(--bad);background:#fdf1f1}
+	.chip.neutral{color:var(--muted);border-color:var(--line);background:var(--soft)}
+
+	/* the problem card */
+	.case{border:1px solid var(--line);border-radius:10px;padding:18px 20px;background:var(--soft)}
+	.case .line{font-size:16.5px}
+	.case .tok{font:12.5px ui-monospace,Menlo,monospace;color:var(--accent);background:#eef2ff;
+		border-radius:4px;padding:0 4px}
+	.case .arrow{color:var(--muted);font-size:13px;margin:10px 0 6px}
+	.case .quote{font-size:15px;color:#3f4550;border-left:3px solid var(--v-contr);padding-left:12px}
+	.verdict{font-size:12px;font-weight:700;letter-spacing:.05em}
+	.v-supported{color:var(--v-supp)} .v-unrelated,.v-unsupported{color:var(--v-unre)} .v-contradicted{color:var(--v-contr)}
+
+	/* task strip */
+	.pipes{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap}
+	.pipe{flex:1 1 200px;border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fff}
+	.pipe h3{margin:0 0 6px;font-size:13px;color:var(--muted);font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+	.pipe p{margin:0;font-size:14px}
+
+	/* contender cards */
+	.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+	.card{border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+	.card h3{margin:0;font-size:16px}
+	.card .sub{font-size:12.5px;color:var(--muted);margin:2px 0 10px}
+	.card ul{margin:0;padding-left:16px;font-size:13.5px;color:#3f4550}
+	.card li{margin:3px 0}
+
+	/* big numbers */
+	.nums{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
+	.num{border:1px solid var(--line);border-radius:10px;padding:16px 18px;position:relative}
+	.num .model{font-size:13px;font-weight:600;color:var(--muted)}
+	.num .big{font-size:44px;font-weight:700;letter-spacing:-.03em;line-height:1.15;margin:2px 0}
+	.num .err{font-size:12.5px;color:var(--muted)}
+	.num.hl{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+	.num.bad .big{color:var(--bad)}
+
+	/* dot strip */
+	.strip-row{display:flex;align-items:center;gap:12px;margin:10px 0;flex-wrap:wrap}
+	.strip-label{width:130px;font-size:13px;font-weight:600}
+	.dots{display:flex;gap:3px;flex-wrap:wrap}
+	.dot{width:11px;height:11px;border-radius:3px;background:#d7dde5}
+	.dot.ok{background:var(--ok)} .dot.bad{background:var(--bad)}
+	.strip-note{font-size:12px;color:var(--muted);width:70px}
+
+	/* bars */
+	.bar-row{display:grid;grid-template-columns:150px 1fr 110px;gap:12px;align-items:center;margin:12px 0;font-size:13.5px}
+	.bar-row .name{font-weight:600;text-align:right}
+	.track{position:relative;height:20px;background:var(--soft);border:1px solid var(--line);border-radius:5px}
+	.fill{position:absolute;inset:0 auto 0 0;border-radius:4px 0 0 4px;background:var(--accent)}
+	.fill.g{background:var(--bad)} .fill.o{background:var(--ok)}
+	.limit{position:absolute;top:-4px;bottom:-4px;width:0;border-left:2px dashed var(--ink)}
+	.bar-row .val{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12.5px}
+
+	table{border-collapse:collapse;width:100%;font-size:13.5px}
+	th{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+		text-align:left;padding:8px 10px;border-bottom:2px solid var(--line)}
+	td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+	td .claim{font-weight:600}
+	td .quote{color:var(--muted);font-size:12.5px}
+	.mark{font-size:15px;font-weight:700}
+	.mark.y{color:var(--ok)} .mark.n{color:var(--bad)}
+	.center{text-align:center}
+
+	.callout{border:1px solid var(--line);border-left:4px solid var(--warn);border-radius:8px;
+		padding:14px 18px;background:#fffaf3;font-size:14px}
+	.caveats{border:1px solid var(--line);border-radius:10px;padding:16px 20px;background:var(--soft)}
+	.caveats ul{margin:8px 0 0;padding-left:18px;font-size:13.5px;color:#3f4550}
+	.caveats li{margin:5px 0}
+	.concl{border:1px solid var(--accent);box-shadow:0 0 0 1px var(--accent);border-radius:10px;padding:18px 20px}
+	.concl p{margin:0 0 8px} .concl p:last-child{margin:0}
+	@media print{.wrap{max-width:none;padding:12mm}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+	<p class="kicker">Experiment report &middot; 3 November 2026 &middot; affido / RFC 0017 follow-up</p>
+	<h1>Can a zero-shot judge keep a model honest with its citations?</h1>
+	<p class="lede">We asked ourselves whether a <b>System&nbsp;One zero-shot classifier</b> could be useful to control
+	LLM behaviour &mdash; in particular, its <b>coherence with the citations</b> it publishes. We scored the same
+	74 hand-labeled claim/quote pairs through four zero-shot judges. The System&nbsp;One judge read coherence
+	where the shipped encoder judge could not, and LiquidAI&rsquo;s hosted d1.1 matched it pair for pair.</p>
+
+	<h2>The problem</h2>
+	<p>The deterministic publish gate (RFC 0006) is mechanical: every cited line carries a token, every token is a
+	verified annotation of this run. It checks <b>provenance, not meaning</b> &mdash; so this publish is accepted today:</p>
+	<div class="case">
+		<div class="line">&ldquo;L&rsquo;assistenza &egrave; inclusa nel canone annuo <span class="tok">[cit_9f2a]</span>.&rdquo;
+			<span class="chip neutral" style="margin-left:8px">gate: PASS</span></div>
+		<div class="arrow">&darr;&nbsp; the token points at this verified quote from the same document</div>
+		<div class="quote">&ldquo;La disdetta deve essere comunicata 90 giorni prima.&rdquo;</div>
+	</div>
+	<p style="margin-bottom:0">A real quote, a different clause. RFC 0017 added a probabilistic coherence layer behind an
+	off-by-default flag &mdash; and measured that the chosen encoder model <b>failed the enforcement bar</b>: it would
+	reject half of the <i>correct</i> publishes (50% false rejects, bar &le;&nbsp;10%). This experiment re-runs that
+	benchmark with three System&nbsp;One-family decision models: the hosted Typesafe API, the local d1-2B, and d1.1
+	hosted on OpenRouter.</p>
+
+	<h2>The task &mdash; identical for every judge</h2>
+	<div class="pipes">
+		<div class="pipe"><h3>Input</h3><p>One pair: the published line (token stripped) + the verified quote behind it.</p></div>
+		<div class="pipe"><h3>Question</h3><p>&ldquo;How does the evidence relate to the claim?&rdquo; &mdash; same state text, same three options.</p></div>
+		<div class="pipe"><h3>Output</h3><p><span class="verdict v-supported">supported</span> &nbsp;/&nbsp;
+			<span class="verdict v-unrelated">unrelated</span> &nbsp;/&nbsp; <span class="verdict v-contradicted">contradicted</span></p></div>
+		<div class="pipe"><h3>Dataset</h3><p>74 hand-labeled pairs (41 Italian), 44 dev / 30 test. Same truncation, same aggregation as RFC 0017.</p></div>
+	</div>
+	<p style="font-size:13.5px;color:var(--muted)">Enforcement bar (fixed before any run): false accepts cut by &ge;&nbsp;60% vs the gate-only baseline, false rejects on supported pairs &le;&nbsp;10%.</p>
+
+	<h2>The contenders</h2>
+	<div class="cards">
+		<div class="card"><h3>GLiNER2.5-Decide</h3><div class="sub">encoder &middot; 345 MB ONNX &middot; local CPU &middot; shipped in RFC 0017</div>
+			<ul><li>fine-tuned routing/decision head</li><li>frozen bare-label three-way form</li><li>no calibrated entailment training</li></ul></div>
+		<div class="card"><h3>System One <span style="color:var(--muted);font-weight:400">(jev-latest)</span></h3><div class="sub">hosted decision API &middot; typed choice question &middot; remote</div>
+			<ul><li>one typed question, one forward pass</li><li>calibrated probabilities + confidence</li><li>identical outcomes across two runs</li></ul></div>
+		<div class="card"><h3>LiquidAI d1-2B</h3><div class="sub">lfm2-d1 decision model &middot; GGUF Q4_K_M &middot; local GPU via llama.cpp</div>
+			<ul><li>no text generation at all</li><li>same typed-choice API shape as System One</li><li>calibrated softmax, 22 ms/pair</li></ul></div>
+		<div class="card"><h3>LiquidAI d1.1 <span style="color:var(--muted);font-weight:400">(liquid/d1.1)</span></h3><div class="sub">hosted decision model &middot; OpenRouter decisions endpoint &middot; remote</div>
+			<ul><li>same typed-choice request/response shape</li><li>zero local serving, no weights to ship</li><li>~138 input tokens per pair, no output tokens</li></ul></div>
+	</div>
+
+	<h2>Results &mdash; held-out test split (30 pairs)</h2>
+	<div class="nums">
+		<div class="num bad"><div class="model">GLiNER2.5-Decide</div><div class="big">0.53</div><div class="err">accuracy &middot; 14 errors of 30</div></div>
+		<div class="num hl"><div class="model">System One (jev-latest)</div><div class="big">1.00</div><div class="err">accuracy &middot; 0 errors of 30</div></div>
+		<div class="num"><div class="model">d1-2B (local)</div><div class="big">0.97</div><div class="err">accuracy &middot; 1 error of 30</div></div>
+		<div class="num hl"><div class="model">d1.1 (OpenRouter)</div><div class="big">1.00</div><div class="err">accuracy &middot; 0 errors of 30</div></div>
+	</div>
+	<p style="margin:26px 0 6px;font-size:13px;font-weight:600;color:var(--muted)">Every fixture, in order &mdash; green = verdict matches gold</p>
+	<div class="strip-row"><div class="strip-label">GLiNER</div><div class="dots">
+		<span class="dot bad"></span><span class="dot bad"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot bad"></span><span class="dot bad"></span><span class="dot ok"></span><span class="dot bad"></span><span class="dot ok"></span><span class="dot bad"></span><span class="dot bad"></span><span class="dot bad"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot bad"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot bad"></span><span class="dot ok"></span><span class="dot bad"></span><span class="dot bad"></span><span class="dot ok"></span><span class="dot bad"></span><span class="dot bad"></span>
+		</div><div class="strip-note">16 / 30 correct</div></div>
+	<div class="strip-row"><div class="strip-label">System One</div><div class="dots">
+		<span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span>
+		</div><div class="strip-note">30 / 30 correct</div></div>
+	<div class="strip-row"><div class="strip-label">d1-2B</div><div class="dots">
+		<span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot bad"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span>
+		</div><div class="strip-note">29 / 30 correct</div></div>
+	<div class="strip-row"><div class="strip-label">d1.1 (OR)</div><div class="dots">
+		<span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span><span class="dot ok"></span>
+		</div><div class="strip-note">30 / 30 correct</div></div>
+
+	<h2>Against the enforcement bar</h2>
+	<p style="font-size:13.5px;margin-top:0"><b>False rejects on supported pairs</b> (correct publishes refused) &mdash; the number that killed RFC 0017&rsquo;s <code>enforce</code> mode. Dashed line = 10% bar.</p>
+	<div class="bar-row"><div class="name">GLiNER</div><div class="track"><span class="fill g" style="width:100%"></span><span class="limit" style="left:20%"></span></div><div class="val"><b style="color:var(--bad)">50%</b> (7/14) &middot; fail</div></div>
+	<div class="bar-row"><div class="name">System One</div><div class="track"><span class="fill o" style="width:0%"></span><span class="limit" style="left:20%"></span></div><div class="val"><b style="color:var(--ok)">0%</b> (0/14) &middot; pass</div></div>
+	<div class="bar-row"><div class="name">d1-2B</div><div class="track"><span class="fill o" style="width:14%"></span><span class="limit" style="left:20%"></span></div><div class="val"><b style="color:var(--ok)">7%</b> (1/14) &middot; pass</div></div>
+	<div class="bar-row"><div class="name">d1.1 (OR)</div><div class="track"><span class="fill o" style="width:0%"></span><span class="limit" style="left:20%"></span></div><div class="val"><b style="color:var(--ok)">0%</b> (0/14) &middot; pass</div></div>
+	<p style="font-size:13.5px"><b>False accepts</b> (incoherent lines published) vs the gate-only baseline (100% by construction). Dashed line = 40%, i.e. the &ge;&nbsp;60% cut.</p>
+	<div class="bar-row"><div class="name">Gate only</div><div class="track"><span class="fill g" style="width:100%"></span><span class="limit" style="left:40%"></span></div><div class="val">100% (16/16)</div></div>
+	<div class="bar-row"><div class="name">GLiNER</div><div class="track"><span class="fill g" style="width:25%"></span><span class="limit" style="left:40%"></span></div><div class="val">25% (4/16)</div></div>
+	<div class="bar-row"><div class="name">System One</div><div class="track"><span class="fill o" style="width:0%"></span><span class="limit" style="left:40%"></span></div><div class="val"><b style="color:var(--ok)">0%</b> (0/16)</div></div>
+	<div class="bar-row"><div class="name">d1-2B</div><div class="track"><span class="fill o" style="width:0%"></span><span class="limit" style="left:40%"></span></div><div class="val"><b style="color:var(--ok)">0%</b> (0/16)</div></div>
+	<div class="bar-row"><div class="name">d1.1 (OR)</div><div class="track"><span class="fill o" style="width:0%"></span><span class="limit" style="left:40%"></span></div><div class="val"><b style="color:var(--ok)">0%</b> (0/16)</div></div>
+
+	<h2>The cases that decide it</h2>
+	<table>
+		<thead><tr><th>Fixture (test split)</th><th class="center">Gold</th><th class="center">GLiNER</th><th class="center">System One</th><th class="center">d1-2B</th><th class="center">d1.1</th></tr></thead>
+		<tbody>
+			<tr><td><span class="claim">&ldquo;L&rsquo;assistenza &egrave; inclusa nel canone annuo&rdquo;</span><br>
+				<span class="quote">vs &ldquo;La disdetta deve essere comunicata 90 giorni prima.&rdquo;</span></td>
+				<td class="center verdict v-unrelated">unrelated</td><td class="center mark n">&times;</td><td class="center mark y">&#10003;</td><td class="center mark y">&#10003;</td><td class="center mark y">&#10003;</td></tr>
+			<tr><td><span class="claim">&ldquo;Il contratto si rinnova tacitamente il 1 marzo 2027.&rdquo;</span><br>
+				<span class="quote">vs the same sentence, verbatim &mdash; GLiNER: contradicted</span></td>
+				<td class="center verdict v-supp">supported</td><td class="center mark n">&times;</td><td class="center mark y">&#10003;</td><td class="center mark y">&#10003;</td><td class="center mark y">&#10003;</td></tr>
+			<tr><td><span class="claim">&ldquo;The deposit is non-refundable.&rdquo;</span><br>
+				<span class="quote">vs &ldquo;The deposit is refunded within 30 days of the check-out.&rdquo; (negation flip)</span></td>
+				<td class="center verdict v-contr">contradicted</td><td class="center mark n">&times;</td><td class="center mark y">&#10003;</td><td class="center mark y">&#10003;</td><td class="center mark y">&#10003;</td></tr>
+			<tr><td><span class="claim">&ldquo;&hellip;si rinnova il 1 marzo 2027 <b>e</b> la disdetta va comunicata 90 giorni prima&rdquo;</span><br>
+				<span class="quote">two citations, each supports its half (split support)</span></td>
+				<td class="center verdict v-supp">supported</td><td class="center mark n">&times;</td><td class="center mark y">&#10003;</td><td class="center mark n">&times;</td><td class="center mark y">&#10003;</td></tr>
+		</tbody>
+	</table>
+	<div class="callout" style="margin-top:16px"><b>d1&rsquo;s only miss, in full:</b> on the split-support line above, the first half scored
+	<span class="verdict v-contradicted">contradicted 0.493</span> vs <span class="verdict v-supported">supported 0.312</span> (the second half: supported 0.500).
+	The contradiction-override rule rejects for a margin of 0.007 &mdash; a coin-flip boundary, not a comprehension failure.
+	d1.1 lands on the correct side of the same boundary &mdash; first half <span class="verdict v-supported">supported 0.515</span>
+	vs unrelated 0.463 &mdash; so the line publishes, but the margin is thin there too.</div>
+
+	<h2>Cost of the judgment</h2>
+	<table>
+		<thead><tr><th></th><th>GLiNER2.5-Decide</th><th>System One (jev-latest)</th><th>d1-2B Q4_K_M</th><th>d1.1 (OpenRouter)</th></tr></thead>
+		<tbody>
+			<tr><td><b>Where it runs</b></td><td>local, CPU (ONNX)</td><td>hosted API</td><td>local, GPU (llama.cpp)</td><td>hosted API (decisions endpoint)</td></tr>
+			<tr><td><b>Latency p50/p95</b></td><td>228 / 501 ms</td><td>193 / 362 ms</td><td>22 / 44 ms</td><td>217 / 431 ms</td></tr>
+			<tr><td><b>Cost per pair</b></td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>~$0.000003 (input only)</td></tr>
+			<tr><td><b>Fits a sandbox?</b></td><td>yes, but 930 MB RSS</td><td>no (egress + key)</td><td>yes (1.4 GB weights)</td><td>no (egress + key)</td></tr>
+			<tr><td><b>Verdict</b></td><td><span class="chip fail">below bar</span></td><td><span class="chip pass">passes bar</span></td><td><span class="chip pass">passes bar</span></td><td><span class="chip pass">passes bar</span></td></tr>
+		</tbody>
+	</table>
+
+	<h2>Read with these caveats</h2>
+	<div class="caveats">
+		<ul>
+			<li><b>Prompt-specified vs label-only zero-shot.</b> GLiNER ran with its RFC-frozen bare labels; System One, d1 and d1.1 received a one-line definition per label (numeric paraphrase = supported; different value or negation = contradicted). The definitions encode the benchmark&rsquo;s gold semantics &mdash; written by us, knowing the documented failure modes.</li>
+			<li><b>74 pairs, one domain</b> (Italian/English contract clauses). Perfect scores on this set do not guarantee generalization.</li>
+			<li><b>Remote determinism</b> for System One was checked over two runs (identical outcomes), not guaranteed. d1.1 ran once (served snapshot <code>liquid/d1.1-20261027</code>, an alpha endpoint).</li>
+			<li><b>Harness validity:</b> the GLiNER column reproduces the recorded RFC 0017 evaluation exactly (0.68 / 0.53 accuracy, FA 24/25%, FR 21/50%) &mdash; same fixtures, same truncation, same aggregation.</li>
+		</ul>
+	</div>
+
+	<h2>Conclusion</h2>
+	<div class="concl">
+		<p><b>Yes &mdash; as a reader of citation coherence, the System One judge is exactly what the encoder judge was not.</b>
+		On the benchmark that rejected RFC 0017&rsquo;s enforcement mode, the hosted System One judge is perfect (74/74),
+		LiquidAI&rsquo;s hosted d1.1 matches it pair for pair through OpenRouter&rsquo;s decisions endpoint (74/74, ~$0.000003 per pair),
+		and its local sibling, the d1-2B decision model, misses one pair by a 0.007 margin &mdash;
+		0% false accepts, 7% false rejects, inside both bar criteria, at 22&nbsp;ms per pair on a laptop GPU.</p>
+		<p>The failure that motivated the experiment &mdash; a line about <i>assistenza nel canone</i> passing the gate on a quote about
+		<i>disdetta</i> &mdash; is caught by all of them. A zero-shot System One judge is a viable coherence control for cited publishing;
+		d1-2B makes it deployable inside a sandbox with no egress and no key, and d1.1 makes it available as a
+		plain hosted API wherever an OpenRouter key already exists.</p>
+	</div>
+
+	<footer>
+		<b>Provenance.</b> Dataset: RFC 0017 fixtures &mdash; 74 hand-labeled (claim, quote) pairs, no LLM labeling
+		(<code>agent/scripts/judge-eval-fixtures.json</code>). Harness: <code>agent/scripts/eval-zero-shot-judges.mjs</code>
+		(same state text, question, truncation and aggregation as RFC 0017; GLiNER via pinned ONNX cache, System One via the
+		hosted typed-choice API, d1-2B via llama.cpp&rsquo;s native <code>/v1/systemone</code>, d1.1 via OpenRouter&rsquo;s
+		<code>/api/alpha/decisions</code> with <code>liquid/d1.1</code>).
+		Runs of 2026-11-03 &mdash; raw per-fixture outcomes in <code>agent/judge-eval/zero-shot-2026-11-03T10-30-41-324Z/</code>
+		and <code>agent/judge-eval/zero-shot-d1or/</code>.<br>
+		Enforcement bar and baseline numbers: <code>docs/rfc/0017-citation-coherence-judge.md</code>.
+	</footer>
+
+</div>
+</body>
+</html>

@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Judge audit in the traces UI: `GET /inspect?report=citations` now returns the
+  per-pair `verdicts` of each judged run, and the traces page renders them as
+  summary badges plus a line/citation/verdict/score/latency/truncated table.
+  The trace detail's Judge tab reads the conversation's stored citation runs on
+  demand, so browsing a captured snapshot never activates a paused sandbox.
+
 - Web search as an isolated node (RFC 0016). Each sandbox now gets a third
   container, `u<slug>-websearch`, created by the manager beside the agent and
   its key sidecar. It owns no writable volume, runs no user code, and has no

@@ -378,6 +378,27 @@ class CreateArgsTest(unittest.TestCase):
         env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
         self.assertIn(f"SIDECAR_URL=http://{sm.sidecar_name('user-sc')}:{sm.SIDECAR_PORT}", env)
 
+    def test_create_args_forward_the_citation_judge_flag(self) -> None:
+        # RFC 0017 §3 / RFC 0018 §5: the mode override reaches the agent only
+        # through create args; unset means the agent default (enforce). The
+        # judge model is resolved at runtime from the run's provider, so no
+        # model path or backend ever travels here.
+        saved = sm.AGENT_CITATION_JUDGE
+        try:
+            sm.AGENT_CITATION_JUDGE = ""
+            args = sm.create_args("user-j")
+            env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+            self.assertFalse(any(e.startswith("CITATION_JUDGE") for e in env))
+
+            sm.AGENT_CITATION_JUDGE = "warn"
+            args = sm.create_args("user-j")
+            env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+            self.assertIn("CITATION_JUDGE=warn", env)
+            self.assertFalse(any(e.startswith("CITATION_JUDGE_MODEL_DIR") for e in env))
+            self.assertFalse(any(e.startswith("CITATION_JUDGE_BACKEND") for e in env))
+        finally:
+            sm.AGENT_CITATION_JUDGE = saved
+
     def test_create_args_bakes_the_websearch_url(self) -> None:
         # RFC 0016 §5: the web tools resolve the node through this env; the
         # hostname is a baked /etc/hosts entry added at create time.

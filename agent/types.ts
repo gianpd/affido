@@ -5,6 +5,7 @@ import type { Context } from "@earendil-works/chord";
 import type { AgentChange, EntryId, HarnessOptions, ModelRef } from "@earendil-works/pi-durable";
 import type { CredentialStore, ModelThinkingLevel, MutableModels } from "@earendil-works/pi-ai";
 import type { HarnessLifecycle } from "./harness.ts";
+import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import type { CitationRunReport, CitationsTraceReport } from "./citation-report.ts";
 import type { ArtifactView } from "./artifacts.ts";
 import type { TraceEntryDetail, TraceQuery, TraceReport } from "./trace.ts";
@@ -49,6 +50,10 @@ export type AgentOptions = {
 	readonly thinkingLevel?: ModelThinkingLevel;
 	/** Mode for submissions that omit the `citations` field (RFC 0006 §5.9). */
 	readonly citationsDefault?: CitationMode;
+	/** RFC 0017: the post-gate coherence judge and its mode. `judge: null`
+	 * (default) leaves the layer absent; the deterministic gate is unchanged. */
+	readonly judge?: CitationJudge | null;
+	readonly judgeMode?: JudgeMode;
 	readonly context: Context;
 	readonly log: Log;
 	/** Lifecycle to run on; defaults to a DurableHarness built from these options. */

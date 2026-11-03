@@ -4,6 +4,7 @@
 // cost visible per reason so prompt regressions show up after every session.
 
 import type { ConversationId } from "@earendil-works/pi-durable";
+import type { JudgePairRecord } from "./citation-judge.ts";
 import type { CitationRunState } from "./citation-run.ts";
 
 export type CitationRunReport = {
@@ -27,6 +28,24 @@ export type CitationRunReport = {
 	readonly annotateRejected: Readonly<Record<string, number>>;
 	readonly publishRejected: Readonly<Record<string, number>>;
 	readonly corpusCalls: number;
+	/** RFC 0017 §6: the coherence judge's trace of this run; null when the
+	 * judge never ran (mode off, or no credential backed it). */
+	readonly judge: {
+		readonly mode: "warn" | "enforce";
+		/** Judged (line, citation) pairs, in call order. Stored state only:
+		 * line, citation id, verdict, score, latency and the truncation flag. */
+		readonly verdicts: readonly JudgePairRecord[];
+		/** Judged (line, citation) pairs. */
+		readonly judgeVerdicts: number;
+		readonly judgeRejections: number;
+		readonly judgeTruncated: number;
+		readonly judgeErrors: number;
+		readonly supported: number;
+		readonly unsupported: number;
+		readonly contradicted: number;
+		/** Per-pair latency in ms; null when nothing was judged. */
+		readonly latencyMs: { readonly p50: number; readonly p95: number } | null;
+	} | null;
 };
 
 export type CitationsTraceReport = {
@@ -45,6 +64,7 @@ export const runReportOf = (state: CitationRunState): CitationRunReport => {
 	const reported = state.published?.citationIds ?? [];
 	const usedSet = new Set(used);
 	const reportedSet = new Set(reported);
+	const judge = judgeReportOf(state.judge);
 	return {
 		runId: state.runId,
 		strict: state.strict,
@@ -60,6 +80,34 @@ export const runReportOf = (state: CitationRunState): CitationRunReport => {
 		annotateRejected: state.annotateRejections,
 		publishRejected: state.publishRejections,
 		corpusCalls: state.corpusCalls,
+		judge,
+	};
+};
+
+const percentile = (sorted: readonly number[], fraction: number): number => {
+	if (sorted.length === 0) return 0;
+	const index = Math.min(sorted.length - 1, Math.floor(fraction * sorted.length));
+	return sorted[index] ?? 0;
+};
+
+/** RFC 0017 §6: the stored judge trace as the report shows it. Runs stored
+ * before the field existed read as `undefined`; both mean "no judge ran". */
+const judgeReportOf = (
+	judge: CitationRunState["judge"],
+): CitationRunReport["judge"] => {
+	if (judge === undefined || judge === null) return null;
+	const sorted = [...judge.verdicts].map((record) => record.ms).sort((a, b) => a - b);
+	return {
+		mode: judge.mode,
+		verdicts: judge.verdicts,
+		judgeVerdicts: judge.verdicts.length,
+		judgeRejections: judge.rejections,
+		judgeTruncated: judge.truncated,
+		judgeErrors: judge.errors,
+		supported: judge.verdicts.filter((record) => record.verdict === "supported").length,
+		unsupported: judge.verdicts.filter((record) => record.verdict === "unsupported").length,
+		contradicted: judge.verdicts.filter((record) => record.verdict === "contradicted").length,
+		latencyMs: sorted.length === 0 ? null : { p50: percentile(sorted, 0.5), p95: percentile(sorted, 0.95) },
 	};
 };
 

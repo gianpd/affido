@@ -26,6 +26,9 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { ContainerAgent } from "./agent.ts";
 import { json, HttpError, RawResponse } from "./http.ts";
 import { createModel } from "./model.ts";
+import { Judge, type JudgeTarget } from "./judge.ts";
+import { registerJudgeProvider } from "./judge-model.ts";
+import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import { IngestPipeline } from "./ingest.ts";
 import {
 	ArtifactTool,
@@ -86,9 +89,41 @@ const parseCitationsDefault = (raw: string | undefined): CitationMode => {
 	return raw;
 };
 
-const log: Log = (...args) => console.log(`[${AGENT}]`, ...args);
+/** RFC 0017 §3 / RFC 0018 §5: the coherence layer's mode. The default is
+ * `enforce` with the d1.1 judge: on the frozen fixtures it passes both bar
+ * criteria (FA 0%, FR 0%), and a judge that cannot run (no OpenRouter
+ * credential) is absent — the layer never rejects for lack of a key. */
+const parseJudgeMode = (raw: string | undefined): JudgeMode => {
+	if (raw === undefined || raw === "") return "enforce";
+	if (raw !== "off" && raw !== "warn" && raw !== "enforce") {
+		throw new Error('CITATION_JUDGE must be "off", "warn" or "enforce"');
+	}
+	return raw;
+};
+
+const JUDGE_MODE = parseJudgeMode(process.env.CITATION_JUDGE);
 
 const { models, credentials, model } = await createModel();
+// The judge runs on pi-ai's classifier contract (RFC 0018 amendment): its
+// own provider entry, no relation to the selected chat provider, and a target
+// resolved per call (absence = layer absent, not an error).
+if (JUDGE_MODE !== "off") registerJudgeProvider(models);
+
+/** The judge target resolves from the agent's live provider state; until the
+ * agent exists the resolver answers null. */
+let judgeTargetOfRun: () => Promise<JudgeTarget | null> = async () => null;
+const judge: CitationJudge | null =
+	JUDGE_MODE === "off" ? null : new Judge(models, () => judgeTargetOfRun());
+
+const log: Log = (...args) => console.log(`[${AGENT}]`, ...args);
+
+if (JUDGE_MODE !== "off") {
+	log(
+		`coherence judge ${JUDGE_MODE}: pi-ai classifier contract, target resolved per call; ` +
+			"active while an OpenRouter selection backs the run, absent otherwise",
+	);
+}
+
 const agent = new ContainerAgent({
 	name: AGENT,
 	workspace: WORKSPACE,
@@ -99,9 +134,12 @@ const agent = new ContainerAgent({
 	model,
 	thinkingLevel: parseThinkingLevel(process.env.THINKING_LEVEL),
 	citationsDefault: parseCitationsDefault(process.env.CITATIONS_DEFAULT),
+	judge,
+	judgeMode: JUDGE_MODE,
 	context,
 	log,
 });
+judgeTargetOfRun = () => agent.judgeTarget();
 
 // One pipeline for every staging and deletion entry point (RFC 0014 R1).
 const pipeline = new IngestPipeline(WORKSPACE);
