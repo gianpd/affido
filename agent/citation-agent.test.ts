@@ -549,6 +549,49 @@ test("enforce rejects an incoherent line with incoherent_citation, records it, a
 	await agent.close();
 });
 
+test("enforce with an unavailable judge publishes: the layer is absent, not erroring (RFC 0018)", async () => {
+	// A judge with no endpoint behind it (no OpenRouter credential backs the
+	// run) must never reject a publish: the keyless stack behaves exactly as
+	// RFC 0006. The script publishes the incoherent line once and is done.
+	const judge: CitationJudge = new (class extends ScriptedJudge {
+		async available() {
+			return false;
+		}
+	})(() => ({ verdict: "contradicted", score: 0.99 }));
+	const publishIncoherentOnce: FauxResponseFactory = (transcript) => {
+		const tool = lastToolResult(transcript.messages);
+		if (tool === undefined) return call("corpus_grep", { pattern: "disdetta" });
+		if (tool.name === "corpus_grep" && !tool.isError) {
+			const hit = (JSON.parse(tool.text) as { hits: { docId: string; text: string }[] }).hits[0];
+			if (hit !== undefined) return call("corpus_read", { docId: hit.docId, needle: hit.text });
+		}
+		if (tool.name === "corpus_read" && !tool.isError) {
+			const args = lastToolArgs(transcript.messages, "corpus_read");
+			if (typeof args?.docId === "string" && typeof args?.needle === "string") {
+				return call("corpus_annotate", { docId: args.docId, docVersion: 1, kind: "quote", citation: { text: args.needle } });
+			}
+		}
+		if (tool.name === "corpus_annotate" && !tool.isError) {
+			const citationId = (JSON.parse(tool.text) as { citationId: string }).citationId;
+			return call("answer_publish", { markdown: `## Rinnovo\n\n${INCOHERENT} [${citationId}].\n`, citationIds: [citationId] });
+		}
+		return fauxAssistantMessage([fauxText("The script reached an unexpected state.")]);
+	};
+	const { bundle } = scriptedBundle(publishIncoherentOnce);
+	const agent = await stagedFixture("citation-judge-absent-", bundle, { judge, mode: "enforce" });
+
+	const result = (await agent.prompt("Quando va comunicata la disdetta?", "req-judge-absent", "required")) as PromptResult;
+	assert.equal(result.status, "done");
+	assert.equal(result.evidence, "cited", "the publish stands: an unavailable judge is absent, never a rejection");
+
+	const report = (await agent.inspect({ limit: 50, report: "citations" })) as CitationsTraceReport;
+	const run = report.runs.find((candidate) => candidate.runId === "req-judge-absent");
+	assert.notEqual(run, undefined);
+	assert.equal(run?.publishRejected.incoherent_citation, undefined, "no judge rejection was recorded");
+	assert.equal(run?.judge, null, "the layer never ran");
+	await agent.close();
+});
+
 test("warn records the incoherent verdict and publishes anyway", async () => {
 	const judge: CitationJudge = new ScriptedJudge(({ claim }) =>
 		claim.includes("assistenza") ? { verdict: "unsupported", score: 0.81 } : { verdict: "supported", score: 0.9 },

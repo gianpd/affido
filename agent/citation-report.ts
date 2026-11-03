@@ -28,7 +28,7 @@ export type CitationRunReport = {
 	readonly publishRejected: Readonly<Record<string, number>>;
 	readonly corpusCalls: number;
 	/** RFC 0017 §6: the coherence judge's trace of this run; null when the
-	 * judge never ran (`CITATION_JUDGE=off`, the default). */
+	 * judge never ran (mode off, or no credential backed it). */
 	readonly judge: {
 		readonly mode: "warn" | "enforce";
 		/** Judged (line, citation) pairs. */

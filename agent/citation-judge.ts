@@ -20,6 +20,13 @@ export type JudgeVerdict = {
  * must not read the corpus and must not re-locate any span. */
 export interface CitationJudge {
 	judge(input: { readonly claim: string; readonly quote: string }): Promise<JudgeVerdict>;
+	/** RFC 0018: whether the runtime can currently judge at all. Absent means
+	 * always available (ScriptedJudge, GlinerDecideJudge — whose boot check
+	 * already fails loudly). A judge that is not available is *absent*, not
+	 * erroring: the publish path skips the layer, so `enforce` never rejects
+	 * a publish merely because no credential backs the judge. A judge that is
+	 * available and then fails still rejects under `enforce` (`judge_error`). */
+	available?(): Promise<boolean>;
 }
 
 /** RFC 0017 §3: the deployment mode of the coherence check.

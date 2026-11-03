@@ -478,3 +478,86 @@ test("ConfigTool accepts viaSidecar deliveries and refuses one that carries a ke
 		},
 	);
 });
+
+// ── RFC 0018 §4: the fixed /judge/decisions route ─────────────────────────
+
+/** A sidecar whose catalog pins an openrouter entry (chat base and decisions
+ * URL both at the fake upstream), plus helpers to drive the route. */
+const withJudgeRoute = async (test: (fixture: {
+	upstream: FakeUpstream;
+	sidecarBase: string;
+	catalogPath: string;
+	decisionsPath: string;
+}) => Promise<void>): Promise<void> => {
+	const upstream = await startFakeUpstream();
+	const decisionsPath = "/alpha/decisions";
+	const catalog = await mkdtemp(join(tmpdir(), "sidecar-judge-"));
+	await writeFile(
+		join(catalog, "catalog.json"),
+		JSON.stringify({
+			version: 1,
+			providers: [
+				{
+					id: "openrouter",
+					name: "OpenRouter",
+					baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+					decisionsUrl: `http://127.0.0.1:${upstream.port}${decisionsPath}`,
+					builtin: true,
+					models: [{ id: "liquid/d1.1", name: "d1.1" }],
+				},
+			],
+		}),
+	);
+	const sidecar = await createSidecarServer({ port: 0, catalogPath: join(catalog, "catalog.json") });
+	const catalogPath = join(catalog, "catalog.json");
+	try {
+		await test({ upstream, sidecarBase: `http://127.0.0.1:${sidecar.port}`, catalogPath, decisionsPath });
+	} finally {
+		resetSidecarState();
+		await sidecar.close();
+		upstream.close();
+	}
+};
+
+test("POST /judge/decisions relays the typed-choice body to the catalog-pinned URL with the stamped key", async () => {
+	await withJudgeRoute(async ({ upstream, sidecarBase, catalogPath, decisionsPath }) => {
+		upstream.once((record, res) => {
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(JSON.stringify({ answers: { relation: { choice: "supported", probabilities: { supported: 0.9 }, confidence: 0.88 } } }));
+		});
+		const applied = await configureSlot({ provider: "openrouter", modelId: "liquid/d1.1", apiKey: KEY }, catalogPath);
+		assert.equal(applied.provider, "openrouter");
+		const payload = {
+			model: "liquid/d1.1",
+			state: "CLAIM:\na\n\nEVIDENCE:\nb",
+			questions: { relation: { type: "choice", instructions: "q", criteria: { supported: "s", unrelated: "u", contradicted: "c" } } },
+		};
+		// An inbound Authorization (a suborned agent trying to stamp its own key)
+		// must be stripped; the slot's key is what reaches the upstream.
+		const response = await post(sidecarBase, "/judge/decisions", payload, { authorization: "Bearer agent-forged" });
+		assert.equal(response.status, 200);
+		assert.match(response.text, /supported/);
+		assert.equal(upstream.seen.length, 1);
+		const seen = upstream.seen[0];
+		if (seen === undefined) throw new Error("the upstream saw no judge request");
+		assert.equal(seen.method, "POST");
+		assert.equal(seen.path, decisionsPath, "the catalog-pinned decisions URL, not the chat base");
+		assert.equal(seen.auth, `Bearer ${KEY}`);
+		assert.deepEqual(JSON.parse(seen.body), payload, "the body rides through verbatim");
+	});
+});
+
+test("POST /judge/decisions answers 404 for a provider without a pinned decisions endpoint, 503 unconfigured", async () => {
+	await withJudgeRoute(async ({ sidecarBase, catalogPath }) => {
+		// faux pins no decisions endpoint anywhere: the route refuses, not 503s.
+		await configureSlot({ provider: "faux", modelId: "faux-1" }, catalogPath);
+		const faux = await post(sidecarBase, "/judge/decisions", { model: "liquid/d1.1", state: "x", questions: {} });
+		assert.equal(faux.status, 404);
+		assert.match(faux.text, /no_decisions_endpoint/);
+		// no slot at all: the same not_configured every other route answers
+		resetSidecarState();
+		const bare = await post(sidecarBase, "/judge/decisions", { model: "liquid/d1.1", state: "x", questions: {} });
+		assert.equal(bare.status, 503);
+		assert.match(bare.text, /not_configured/);
+	});
+});

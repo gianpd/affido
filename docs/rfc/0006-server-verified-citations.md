@@ -443,16 +443,18 @@ explicit choice on the request always wins.
 ### 5.10 Post-gate coherence check (RFC 0017, off by default)
 
 The gate of §5.4 verifies attribution, not meaning: a line citing a verified
-quote about a different clause passes. RFC 0017 layers an optional
+quote about a different clause passes. RFC 0017 layered an optional
 probabilistic check on top — after `evaluatePublish` accepts and before the
-publish exists, a local GLiNER2.5-Decide classifier judges each (line, quote)
-pair as `supported`/`unsupported`/`contradicted` behind
-`CITATION_JUDGE=off|warn|enforce` (default `off`, the behavior of this RFC
-unchanged). The check is probabilistic: it neither weakens nor replaces any
-check of §5.4, all of which run first and unchanged. Measured on the RFC 0017
-eval (2026-11-03), the judge cuts unrelated-quote false accepts by ~75% but
-falsely rejects 50% of supported pairs on the held-out set — including
-verbatim repeats of the quote — so the shipped recommendation is `off`.
+publish exists, a classifier judges each (line, quote) pair as
+`supported`/`unsupported`/`contradicted` behind
+`CITATION_JUDGE=off|warn|enforce`. RFC 0018 made that check default-on
+(`enforce`) with LiquidAI d1.1 via OpenRouter, which scores 100% on the RFC
+0017 fixtures; the original GLiNER artifact (0.53 accuracy, 50% false rejects
+on the held-out set) stays selectable as `CITATION_JUDGE_BACKEND=gliner`. The
+check is probabilistic: it neither weakens nor replaces any check of §5.4,
+all of which run first and unchanged — and when no OpenRouter credential
+backs the run the layer is absent entirely, so this RFC's behavior stands
+on its own.
 Details, artifact decision record and measurements: RFC 0017.
 
 ## 6. Interaction with RFC 0005

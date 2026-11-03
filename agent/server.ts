@@ -27,6 +27,7 @@ import { ContainerAgent } from "./agent.ts";
 import { json, HttpError, RawResponse } from "./http.ts";
 import { createModel } from "./model.ts";
 import { GlinerDecideJudge } from "./gliner-decide-judge.ts";
+import { OpenRouterDecideJudge, type JudgeEndpoint } from "./openrouter-decide-judge.ts";
 import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import { IngestPipeline } from "./ingest.ts";
 import {
@@ -88,27 +89,43 @@ const parseCitationsDefault = (raw: string | undefined): CitationMode => {
 	return raw;
 };
 
-/** RFC 0017 §3: the coherence layer's mode. `off` (default) keeps the layer
- * absent — the deterministic gate of RFC 0006 runs exactly as before. */
+/** RFC 0017 §3 / RFC 0018 §5: the coherence layer's mode. The default is
+ * `enforce` with the d1.1 judge: on the frozen fixtures it passes both bar
+ * criteria (FA 0%, FR 0%), and a judge that cannot run (no OpenRouter
+ * credential) is absent — the layer never rejects for lack of a key. */
 const parseJudgeMode = (raw: string | undefined): JudgeMode => {
-	if (raw === undefined || raw === "") return "off";
+	if (raw === undefined || raw === "") return "enforce";
 	if (raw !== "off" && raw !== "warn" && raw !== "enforce") {
 		throw new Error('CITATION_JUDGE must be "off", "warn" or "enforce"');
 	}
 	return raw;
 };
 
+/** RFC 0018 §5: the judge runtime. `d1` (default) is LiquidAI d1.1 via
+ * OpenRouter's decisions endpoint; `gliner` keeps RFC 0017's local artifact
+ * (weights baked into a derived image, boot-time cache check). */
+const parseJudgeBackend = (raw: string | undefined): "d1" | "gliner" => {
+	if (raw === undefined || raw === "" || raw === "d1") return "d1";
+	if (raw === "gliner") return "gliner";
+	throw new Error('CITATION_JUDGE_BACKEND must be "d1" or "gliner"');
+};
+
 const JUDGE_MODE = parseJudgeMode(process.env.CITATION_JUDGE);
-/** Built once; loads lazily on the first judged publish and refuses to run
- * without the pinned local cache (remote models disabled up front). */
+const JUDGE_BACKEND = parseJudgeBackend(process.env.CITATION_JUDGE_BACKEND);
+
+/** The d1.1 judge resolves its endpoint per call from the agent's live
+ * provider state; until the agent exists the resolver answers null. */
+let judgeEndpointOf: () => Promise<JudgeEndpoint | null> = async () => null;
 const judge: CitationJudge | null =
 	JUDGE_MODE === "off"
 		? null
-		: new GlinerDecideJudge(process.env.CITATION_JUDGE_MODEL_DIR ?? "/app/judge-models");
+		: JUDGE_BACKEND === "gliner"
+			? new GlinerDecideJudge(process.env.CITATION_JUDGE_MODEL_DIR ?? "/app/judge-models")
+			: new OpenRouterDecideJudge(() => judgeEndpointOf());
 
 const log: Log = (...args) => console.log(`[${AGENT}]`, ...args);
 
-if (JUDGE_MODE !== "off") {
+if (JUDGE_MODE !== "off" && JUDGE_BACKEND === "gliner") {
 	// Fail loudly at boot, not at the first publish: a judge that cannot run
 	// would otherwise surface as judge_unavailable rejections mid-conversation.
 	const cached = await (judge as GlinerDecideJudge).cached();
@@ -118,6 +135,11 @@ if (JUDGE_MODE !== "off") {
 		);
 	}
 	log(`coherence judge ${JUDGE_MODE}: GLiNER2.5-Decide q4f16, local cache verified`);
+} else if (JUDGE_MODE !== "off") {
+	log(
+		`coherence judge ${JUDGE_MODE}: LiquidAI d1.1 via OpenRouter (decisions endpoint); ` +
+			"active while an OpenRouter selection backs the run, absent otherwise",
+	);
 }
 
 const { models, credentials, model } = await createModel();
@@ -136,6 +158,7 @@ const agent = new ContainerAgent({
 	context,
 	log,
 });
+judgeEndpointOf = () => agent.judgeEndpoint();
 
 // One pipeline for every staging and deletion entry point (RFC 0014 R1).
 const pipeline = new IngestPipeline(WORKSPACE);

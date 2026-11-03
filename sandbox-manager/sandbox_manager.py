@@ -55,13 +55,16 @@ AGENT_IMAGE     = os.getenv("AGENT_IMAGE", "affido-agent:latest")
 AGENT_PORT      = int(os.getenv("AGENT_PORT", "8080"))
 AGENT_IDLE_MS   = int(os.getenv("AGENT_IDLE_MS", "5000"))
 AGENT_CITATIONS_DEFAULT = os.getenv("AGENT_CITATIONS_DEFAULT", "")
-# RFC 0017 §3: the post-gate coherence judge. off (default) keeps the layer
-# absent; warn/enforce require the model cache inside the agent image
-# (CITATION_JUDGE_MODEL_DIR, default /app/judge-models) and a memory cap the
-# judge fits in (measured peak RSS ~930 MB on 20 CPUs; AGENT_MEMORY 512m will
-# OOM an enforcing sandbox).
+# RFC 0017 §3 / RFC 0018 §5: the post-gate coherence judge's mode and runtime.
+# The agent's defaults are enforce + d1 (LiquidAI d1.1 via OpenRouter's
+# decisions endpoint), which needs no weights and no memory cap: it rides the
+# run's OpenRouter credential (BYOK sidecar) and is simply absent when no such
+# credential backs the run. gliner (RFC 0017's local encoder) keeps its cache
+# and memory requirements (CITATION_JUDGE_MODEL_DIR, AGENT_MEMORY >= 1g).
+# These envs exist to override that default, not to enable it.
 AGENT_CITATION_JUDGE = os.getenv("AGENT_CITATION_JUDGE", "")
 AGENT_CITATION_JUDGE_MODEL_DIR = os.getenv("AGENT_CITATION_JUDGE_MODEL_DIR", "")
+AGENT_CITATION_JUDGE_BACKEND = os.getenv("AGENT_CITATION_JUDGE_BACKEND", "")
 # `off` (default): per-user networks are created without NAT egress, so a
 # sandbox can talk to its guests (caddy, manager, web) on its own subnet and
 # nothing else. `open` keeps the plain-bridge behaviour (internet egress) for
@@ -1037,9 +1040,11 @@ def create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
         # field. Sandbox env is fixed at create; the per-request field always wins.
         args += ["-e", f"CITATIONS_DEFAULT={AGENT_CITATIONS_DEFAULT}"]
     if AGENT_CITATION_JUDGE:
-        # RFC 0017 §3: the coherence layer's mode and, optionally, its model
-        # cache directory. No secret ever travels here; unset means off.
+        # RFC 0017 §3 / RFC 0018 §5: the coherence layer's mode and, optionally,
+        # its runtime and model cache directory. No secret ever travels here.
         args += ["-e", f"CITATION_JUDGE={AGENT_CITATION_JUDGE}"]
+        if AGENT_CITATION_JUDGE_BACKEND:
+            args += ["-e", f"CITATION_JUDGE_BACKEND={AGENT_CITATION_JUDGE_BACKEND}"]
         if AGENT_CITATION_JUDGE_MODEL_DIR:
             args += ["-e", f"CITATION_JUDGE_MODEL_DIR={AGENT_CITATION_JUDGE_MODEL_DIR}"]
     for name, ip in sorted((hosts or {}).items()):

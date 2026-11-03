@@ -23,7 +23,7 @@ RUN rm -rf /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
 
 COPY server.ts types.ts harness.ts model.ts tools.ts agent.ts http.ts trace.ts corpus.ts sidecar.ts \
      websearch.ts web-tools.ts uploads.ts skills.ts artifacts.ts citation-store.ts citation-judge.ts \
-     gliner-decide-judge.ts workspace-store.ts \
+     gliner-decide-judge.ts openrouter-decide-judge.ts workspace-store.ts \
      citation-run.ts citation-tools.ts citation-report.ts citation-gate-demo.ts ingest.ts \
      scripts/gen-provider-catalog.mjs ./
 

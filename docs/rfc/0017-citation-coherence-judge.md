@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Implemented, rejected for enforcement (`CITATION_JUDGE=off` stays the default) |
+| Status | Implemented; enforcement superseded by RFC 0018 (default judge: d1.1 via OpenRouter, default mode `enforce`). This document records the layer's contract, the GLiNER artifact and the eval that rejected it |
 | Author | Affido maintainers |
 | Date | 2026-11-03 |
 | Target | `agent/`, `sandbox-manager/` (env forwarding only) |
@@ -89,7 +89,8 @@ words only, and every cut pair is counted (`judgeTruncated`).
 
 ## 3. Flag
 
-`CITATION_JUDGE=off|warn|enforce`, default `off`, read once at agent boot:
+`CITATION_JUDGE=off|warn|enforce`, default `off` at the time of this RFC —
+flipped to `enforce` (d1.1 judge) by RFC 0018 — read once at agent boot:
 
 - **off** — the layer is absent. The registry is built without a judge and the
   deterministic gate runs exactly as RFC 0006 specifies.
@@ -252,7 +253,9 @@ quotes well.
 
 ## 9. Recommendation
 
-- `CITATION_JUDGE=off` (the shipped default). `enforce` would reject half of
+- `CITATION_JUDGE=off` (the recommendation of this RFC's eval; superseded by
+  RFC 0018: the d1.1 judge passes both bar criteria and `enforce` is the
+  default). Against the GLiNER artifact, `enforce` would reject half of
   correct publishes; that is a worse product than the unchecked false accept.
 - `warn` is safe to run for observability (records only) but costs ≈1 GB of
   image, ≈930 MB RSS and ≈250 ms per pair, and nothing acts on the data yet.

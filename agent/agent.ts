@@ -21,6 +21,7 @@ import { describeArtifacts, snapshotArtifacts } from "./artifacts.ts";
 import { TraceReader, type TraceEntryDetail, type TraceQuery, type TraceReport, type TraceSource } from "./trace.ts";
 import type { CitationsTraceReport } from "./citation-report.ts";
 import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
+import { resolveJudgeEndpoint, type JudgeEndpoint } from "./openrouter-decide-judge.ts";
 import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, PromptResult, ProviderConfig, RunCitations, WebMode } from "./types.ts";
 import { configureProvider } from "./model.ts";
 import { IngestPipeline } from "./ingest.ts";
@@ -46,7 +47,9 @@ export const createAgentRegistry = (options: {
 	readonly workspace: string;
 	readonly store: WorkspaceCitationStore;
 	readonly onWebTaint?: () => void;
-	/** RFC 0017: the coherence judge behind `CITATION_JUDGE` (off by default). */
+	/** RFC 0017/0018: the coherence judge (d1.1 via OpenRouter by default),
+	 * absent when `CITATION_JUDGE=off` or no OpenRouter credential backs
+	 * the run. */
 	readonly judge?: CitationJudge | null;
 	readonly judgeMode?: JudgeMode;
 }) => {
@@ -82,7 +85,7 @@ export class ContainerAgent implements AgentApi {
 	#apiEnv: NodeExecutionEnv;
 	#harness: HarnessLifecycle;
 	#citationsDefault: CitationMode;
-	/** RFC 0017: the judge instance (null when `CITATION_JUDGE=off`, the default). */
+	/** RFC 0017/0018: the judge instance (null when `CITATION_JUDGE=off`). */
 	#judge: CitationJudge | null;
 	#judgeMode: JudgeMode;
 	#store: WorkspaceCitationStore;
@@ -488,6 +491,13 @@ export class ContainerAgent implements AgentApi {
 		this.#webControl = controlToken;
 		// Never echo the token: only the fact that the delivery landed.
 		return { agent: this.#name, webControl: true };
+	}
+
+	/** RFC 0018 §3: where the coherence judge calls d1.1, resolved from the
+	 * live provider selection per call — direct key, sidecar route, or null
+	 * (no OpenRouter credential backs the run: the layer is absent). */
+	async judgeEndpoint(): Promise<JudgeEndpoint | null> {
+		return resolveJudgeEndpoint({ provider: this.#model.provider, keyVia: this.#keyVia, credentials: this.#credentials });
 	}
 
 	async configureModel({ provider, modelId, apiKey, baseUrl, viaSidecar }: ProviderConfig) {

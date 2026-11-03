@@ -47,6 +47,12 @@ const VALIDATE_PATHS = { openrouter: "/key" };
 // file (no drift: one generator, one image).
 const AUTH_HEADERS = {}; // id -> "x-api-key"; absent means bearer
 
+// RFC 0018 §4: the catalog-pinned typed-choice endpoint of a decisions model,
+// served by the sidecar on its fixed /judge/decisions route. OpenRouter's
+// decisions endpoint lives outside the /api/v1 chat base the proxy pins, so
+// it needs its own pin; no other provider has one today.
+const DECISIONS_URLS = { openrouter: "https://openrouter.ai/api/alpha/decisions" };
+
 const providers = BUILTINS.map(([id, name, catalog, pinnedBaseUrl]) => {
 	const models = Object.values(catalog)
 		.filter((model) => model.type === undefined || model.type === "chat")
@@ -58,6 +64,7 @@ const providers = BUILTINS.map(([id, name, catalog, pinnedBaseUrl]) => {
 	const entry = { id, name, baseUrl: pinnedBaseUrl ?? Object.values(catalog)[0].baseUrl, builtin: true, models };
 	if (VALIDATE_PATHS[id] !== undefined) entry.validatePath = VALIDATE_PATHS[id];
 	if (AUTH_HEADERS[id] !== undefined) entry.auth = AUTH_HEADERS[id];
+	if (DECISIONS_URLS[id] !== undefined) entry.decisionsUrl = DECISIONS_URLS[id];
 	return entry;
 });
 

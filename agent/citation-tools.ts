@@ -297,8 +297,10 @@ const publishTool = ({ store: _store, judge, judgeMode }: CitationToolDeps) =>
 				// the quote behind its id. `answer_publish` terminates the turn on
 				// success, so this is the only place a rejected line can retry; there is
 				// no post-hoc audit once published. Input is stored state alone: the
-				// annotation quotes and the line with tokens stripped.
-				if (judge !== null && judge !== undefined && judgeMode !== undefined && judgeMode !== "off") {
+				// annotation quotes and the line with tokens stripped. RFC 0018: a judge
+				// that is not *available* (no OpenRouter credential backs the run) is
+				// absent, not erroring — `enforce` never rejects for lack of a key.
+				if (judge !== null && judge !== undefined && judgeMode !== undefined && judgeMode !== "off" && (await judge.available?.()) !== false) {
 					const coherence = await coherenceOf({
 						markdown: args.markdown,
 						quoteOf: (citationId) => state.annotations[citationId]?.quote,
