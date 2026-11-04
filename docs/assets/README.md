@@ -49,3 +49,33 @@ frames: the value of this asset is that nothing in it was staged by hand.
 The end card carries `github.com/gianpd/affido`. If the public repository moves,
 change `REPO=` in that `encode.sh` and re-encode (≈20 s) — the takes do not
 change.
+
+## `judge-eval.mp4` / `judge-eval-poster.png`
+
+A 2:27 English motion-graphic explainer on the citation coherence check. It is
+not a screen recording: the renderer is a deterministic HTML timeline, recorded
+frame by frame with Playwright and encoded with ffmpeg. 1920x1080, 30 fps,
+synthetic English voiceover, burned-in captions; `judge-eval.srt` carries the
+same captions as a soft track for players that want them.
+
+The argument, in order: a quote can be an exact, hash-verified span of the
+document and still be attached to a sentence it does not support → resolving
+`[cit_7]` shows the span is byte-identical to the stored document while the
+sentence is about the annual fee and the span about terminating the lease → the
+check therefore asks one typed question (`supported` / `unrelated` /
+`contradicted`) → 150 hand-labelled pairs (60 Italian, 60 dev, 30 test), with
+false accepts and false rejects measured against a fixed bar → the local encoder
+cuts false accepts but rejects half of the supported pairs, while the decision
+model reaches 30/30 with 0% / 0% and ~200 ms per pair → the consequence is
+claim-level faithfulness at write time, not a score computed after the answer
+exists → the comparison with LAQuer is a comparison of moments (control vs
+post-hoc measurement), so the numbers are not comparable.
+
+There is no RFC jargon in the video, by design; the design record is
+`docs/rfc/0017-citation-coherence-judge.md` and
+`docs/rfc/0018-d1-openrouter-judge.md`. The source, narration, fonts and rebuild
+commands live in [`judge-eval/`](judge-eval/README.md).
+
+The eval numbers are the 2026-11-03 run on the 150-row set (60 Italian, 60 dev,
+30 test); the 30/30 is the held-out slice, and a perfect held-out score does not
+claim generalization. The video says so on screen.
