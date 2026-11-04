@@ -5,7 +5,13 @@ import {
 	SANDBOX_REQUEST_TIMEOUT_MS
 } from '$app/env/private';
 import type { RequestEvent } from '@sveltejs/kit';
-import type { PromptResult, SandboxStatus, TraceEntryDetail, TraceReport } from '#lib/types';
+import type {
+	CitationsReport,
+	PromptResult,
+	SandboxStatus,
+	TraceEntryDetail,
+	TraceReport
+} from '#lib/types';
 
 /**
  * One place that knows how to talk to a user's sandbox.
@@ -151,42 +157,22 @@ export const inspectSandbox = (
 	return sandboxFetch<TraceReport>(event, `/inspect${query}`);
 };
 
-/** One strict-citations run, as `GET /inspect?report=citations` reports it (RFC 0006 §5.8). */
-export type CitationRunReportView = {
-	runId: string;
-	strict: boolean;
-	prompt: string;
-	published: boolean;
-	plain: boolean;
-	used: string[];
-	reported: string[];
-	exact: boolean;
-	unreportedUsed: string[];
-	padded: string[];
-	repliedWithoutCitations: boolean;
-	annotateRejected: Record<string, number>;
-	publishRejected: Record<string, number>;
-	corpusCalls: number;
-};
-
-export type CitationsReport = {
-	agent: string;
-	conversationId: number;
-	runs: CitationRunReportView[];
-	gatedReplies: number;
-	exactReplies: number;
-	citationExactness: number | null;
-};
-
 /**
  * The trace-only citation measurement of the user's sandbox, or null when the
  * sandbox does not serve it: an older image ignores `report=citations` and
  * answers 200 with the plain trace report, which has no `runs`.
  */
 export const citationsReportSandbox = async (
-	event: RequestEvent
+	event: RequestEvent,
+	options: { conversationId?: number } = {}
 ): Promise<CitationsReport | null> => {
-	const payload = await sandboxFetch<CitationsReport | null>(event, '/inspect?report=citations');
+	const params = new URLSearchParams({ report: 'citations' });
+	if (options.conversationId !== undefined)
+		params.set('conversation', String(options.conversationId));
+	const payload = await sandboxFetch<CitationsReport | null>(
+		event,
+		`/inspect?${params.toString()}`
+	);
 	return payload !== null && Array.isArray(payload.runs) ? payload : null;
 };
 
