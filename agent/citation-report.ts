@@ -4,7 +4,9 @@
 // cost visible per reason so prompt regressions show up after every session.
 
 import type { ConversationId } from "@earendil-works/pi-durable";
-import type { JudgePairRecord } from "./citation-judge.ts";
+import { judgeLatencyOf } from "./citation-judge.ts";
+import type { JudgeOutcome, JudgePairRecord } from "./citation-judge.ts";
+import { isLegacyJudgeState } from "./citation-run.ts";
 import type { CitationRunState } from "./citation-run.ts";
 
 export type CitationRunReport = {
@@ -28,24 +30,48 @@ export type CitationRunReport = {
 	readonly annotateRejected: Readonly<Record<string, number>>;
 	readonly publishRejected: Readonly<Record<string, number>>;
 	readonly corpusCalls: number;
-	/** RFC 0017 §6: the coherence judge's trace of this run; null when the
-	 * judge never ran (mode off, or no credential backed it). */
+	/** RFC 0017 §6 / RFC 0020 §4.1: the coherence judge's trace of this run;
+	 * null when the judge never ran (mode off, or no credential backed it).
+	 * The run-level counts describe the attempt that published — never a sum
+	 * over attempts, which would judge a document that does not exist (R1). */
 	readonly judge: {
 		readonly mode: "warn" | "enforce";
-		/** Judged (line, citation) pairs, in call order. Stored state only:
-		 * line, citation id, verdict, score, latency and the truncation flag. */
+		/** One summary per judge attempt, in publish-attempt order. */
+		readonly attempts: readonly JudgeAttemptSummary[];
+		/** The attempt that published, or the last attempt of an unpublished run. */
+		readonly published: JudgeAttemptSummary | null;
+		/** Per-pair verdicts of `published`, in call order. Absent from agents
+		 * that predate the field. */
 		readonly verdicts: readonly JudgePairRecord[];
-		/** Judged (line, citation) pairs. */
 		readonly judgeVerdicts: number;
+		/** Attempts the judge rejected (run-level: it counts attempts, not pairs). */
 		readonly judgeRejections: number;
 		readonly judgeTruncated: number;
 		readonly judgeErrors: number;
 		readonly supported: number;
 		readonly unsupported: number;
 		readonly contradicted: number;
-		/** Per-pair latency in ms; null when nothing was judged. */
-		readonly latencyMs: { readonly p50: number; readonly p95: number } | null;
+		readonly latencyMs: { readonly p50: number; readonly p95: number; readonly max: number } | null;
 	} | null;
+};
+
+/** One judge attempt as the report summarises it (RFC 0020 §4.1): index,
+ * outcome, counts, error causes. Per-pair verdicts exist only for `published`. */
+export type JudgeAttemptSummary = {
+	readonly attempt: number;
+	readonly at: number;
+	readonly lines: number;
+	readonly pairs: number;
+	readonly supported: number;
+	readonly unsupported: number;
+	readonly contradicted: number;
+	readonly errors: number;
+	/** cause → count, the named failures of §4.2. */
+	readonly errorCauses: Readonly<Record<string, number>>;
+	readonly truncated: number;
+	readonly outcome: JudgeOutcome;
+	readonly legacy: boolean;
+	readonly latencyMs: { readonly p50: number; readonly p95: number; readonly max: number } | null;
 };
 
 export type CitationsTraceReport = {
@@ -64,7 +90,7 @@ export const runReportOf = (state: CitationRunState): CitationRunReport => {
 	const reported = state.published?.citationIds ?? [];
 	const usedSet = new Set(used);
 	const reportedSet = new Set(reported);
-	const judge = judgeReportOf(state.judge);
+	const judge = judgeReportOf(state);
 	return {
 		runId: state.runId,
 		strict: state.strict,
@@ -83,31 +109,81 @@ export const runReportOf = (state: CitationRunState): CitationRunReport => {
 		judge,
 	};
 };
+const summarizeVerdicts = (verdicts: readonly JudgePairRecord[]): Pick<JudgeAttemptSummary, "pairs" | "supported" | "unsupported" | "contradicted"> => ({
+	pairs: verdicts.length,
+	supported: verdicts.filter((record) => record.verdict === "supported").length,
+	unsupported: verdicts.filter((record) => record.verdict === "unsupported").length,
+	contradicted: verdicts.filter((record) => record.verdict === "contradicted").length,
+});
 
-const percentile = (sorted: readonly number[], fraction: number): number => {
-	if (sorted.length === 0) return 0;
-	const index = Math.min(sorted.length - 1, Math.floor(fraction * sorted.length));
-	return sorted[index] ?? 0;
-};
-
-/** RFC 0017 §6: the stored judge trace as the report shows it. Runs stored
- * before the field existed read as `undefined`; both mean "no judge ran". */
+/** RFC 0020 §4.1: the stored judge trace as the report shows it. A version-1
+ * flat state reads as one attempt with `legacy: true` and the outcome derived
+ * from the run (`published` when the run published, `incoherent_citation`
+ * otherwise) — same counts as today, no migration. Runs stored before the
+ * field existed read as `undefined`; both mean "no judge ran". */
 const judgeReportOf = (
-	judge: CitationRunState["judge"],
+	state: CitationRunState,
 ): CitationRunReport["judge"] => {
+	const judge = state.judge;
 	if (judge === undefined || judge === null) return null;
-	const sorted = [...judge.verdicts].map((record) => record.ms).sort((a, b) => a - b);
+	if (isLegacyJudgeState(judge)) {
+		const counts = summarizeVerdicts(judge.verdicts);
+		const latencyMs = judgeLatencyOf(judge.verdicts);
+		const legacy: JudgeAttemptSummary = {
+			attempt: 1,
+			at: 0,
+			lines: 0,
+			...counts,
+			errors: judge.errors,
+			errorCauses: {},
+			truncated: judge.truncated,
+			outcome: state.published !== null ? "published" : "incoherent_citation",
+			legacy: true,
+			latencyMs,
+		};
+		return {
+			mode: judge.mode,
+			attempts: [legacy],
+			published: legacy,
+			verdicts: judge.verdicts,
+			judgeVerdicts: judge.verdicts.length,
+			judgeRejections: judge.rejections,
+			judgeTruncated: judge.truncated,
+			judgeErrors: judge.errors,
+			...counts,
+			latencyMs,
+		};
+	}
+	const attempts: JudgeAttemptSummary[] = judge.attempts.map((record) => ({
+		attempt: record.attempt,
+		at: record.at,
+		lines: record.lines,
+		...summarizeVerdicts(record.verdicts),
+		errors: record.errors.length,
+		errorCauses: record.errors.reduce<Record<string, number>>((causes, error) => {
+			causes[error.cause] = (causes[error.cause] ?? 0) + 1;
+			return causes;
+		}, {}),
+		truncated: record.truncated,
+		outcome: record.outcome,
+		legacy: record.legacy === true,
+		latencyMs: record.latencyMs,
+	}));
+	const publishedRecord =
+		judge.attempts.find((record) => record.outcome === "published") ?? judge.attempts.at(-1) ?? null;
+	const published = publishedRecord === null ? null : (attempts.find((summary) => summary.attempt === publishedRecord?.attempt) ?? null);
+	const publishedVerdicts = publishedRecord?.verdicts ?? [];
 	return {
 		mode: judge.mode,
-		verdicts: judge.verdicts,
-		judgeVerdicts: judge.verdicts.length,
-		judgeRejections: judge.rejections,
-		judgeTruncated: judge.truncated,
-		judgeErrors: judge.errors,
-		supported: judge.verdicts.filter((record) => record.verdict === "supported").length,
-		unsupported: judge.verdicts.filter((record) => record.verdict === "unsupported").length,
-		contradicted: judge.verdicts.filter((record) => record.verdict === "contradicted").length,
-		latencyMs: sorted.length === 0 ? null : { p50: percentile(sorted, 0.5), p95: percentile(sorted, 0.95) },
+		attempts,
+		published,
+		verdicts: publishedVerdicts,
+		judgeVerdicts: publishedVerdicts.length,
+		judgeRejections: attempts.filter((summary) => summary.outcome !== "published").length,
+		judgeTruncated: publishedRecord?.truncated ?? 0,
+		judgeErrors: publishedRecord?.errors.length ?? 0,
+		...summarizeVerdicts(publishedVerdicts),
+		latencyMs: publishedRecord?.latencyMs ?? null,
 	};
 };
 

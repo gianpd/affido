@@ -20,6 +20,7 @@ import type {
 	ProviderClassifier,
 } from "@earendil-works/pi-ai";
 import type { JudgeTarget } from "./judge.ts";
+import { JUDGE_BUDGET, JUDGE_LADDER } from "./citation-judge.ts";
 import { SIDECAR_PLACEHOLDER_KEY, sidecarUrl } from "./model.ts";
 
 /** The pinned model id (RFC 0018 §5): the eval numbers are for this model; no
@@ -67,15 +68,18 @@ export const registerJudgeProvider = (models: MutableModels): void => {
 	);
 };
 
-/** Retry budget inside RFC 0017's 5 s per-pair envelope: two attempts, one
- * quick backoff; 4xx answers fail immediately (retrying an auth or payload
- * error only burns the budget). */
-const ATTEMPTS = 2;
-const ATTEMPT_TIMEOUT_MS = 2_200;
-const BACKOFF_MS = 300;
-
-/** HTTP statuses worth one retry: 408/425/429 and every 5xx. */
+/** RFC 0020 §4.3: the retry ladder and its per-attempt deadline are derived
+ * in one place (`citation-judge.ts`) from the per-pair envelope, so the two can
+ * no longer drift apart (that drift was defect R3: a 4.4 s ladder under a
+ * 4.7 s envelope while the measured cold path was 5.65 s). Timeouts are worth
+ * the one retry — the cold start the first attempt absorbs is exactly the
+ * case the second, warm attempt answers — and 4xx answers still fail
+ * immediately (retrying an auth or payload error only burns the budget). */
 const RETRIABLE = /HTTP (408|425|429|5\d\d):/;
+
+const isTimeoutAbort = (error: unknown): boolean =>
+	error instanceof Error &&
+	(error.name === "TimeoutError" || (error.name === "AbortError" && /timeout/i.test(error.message)));
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -143,7 +147,7 @@ const post = async (model: ClassifierModel<ClassifierApi>, body: string, options
 			else headers[name] = value;
 		}
 	}
-	const timeout = AbortSignal.timeout(options?.timeoutMs ?? ATTEMPT_TIMEOUT_MS);
+	const timeout = AbortSignal.timeout(options?.timeoutMs ?? JUDGE_BUDGET.attemptDeadlineMs);
 	const signal = options?.signal === undefined ? timeout : AbortSignal.any([options.signal, timeout]);
 	const request = options?.fetch ?? fetch;
 	const response = await request(url, { method: "POST", headers, body, signal });
@@ -156,13 +160,13 @@ const post = async (model: ClassifierModel<ClassifierApi>, body: string, options
 
 const withRetry = async (attempt: () => Promise<unknown>): Promise<unknown> => {
 	let lastError = new Error("decisions endpoint: unreachable");
-	for (let index = 0; index < ATTEMPTS; index++) {
+	for (let index = 0; index < JUDGE_LADDER.attempts; index++) {
 		try {
 			return await attempt();
 		} catch (error) {
 			lastError = error instanceof Error ? error : new Error(String(error));
-			if (!RETRIABLE.test(lastError.message) || index === ATTEMPTS - 1) break;
-			await sleep(BACKOFF_MS);
+			if ((!isTimeoutAbort(error) && !RETRIABLE.test(lastError.message)) || index === JUDGE_LADDER.attempts - 1) break;
+			await sleep(JUDGE_LADDER.backoffMs);
 		}
 	}
 	throw lastError;

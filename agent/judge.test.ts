@@ -27,15 +27,16 @@ type FakeDecisionsApi = {
 	readonly seen: Seen[];
 	readonly port: number;
 	/** Queue one response for the next request (consumed in order; when the
-	 * queue runs dry the last response repeats). */
-	enqueue: (status: number, body: unknown) => void;
+	 * queue runs dry the last response repeats). A `delayMs` stalls the
+	 * response past the caller's per-attempt deadline (RFC 0020 §4.3). */
+	enqueue: (status: number, body: unknown, delayMs?: number) => void;
 	close: () => void;
 };
 
 const startDecisionsApi = async (): Promise<FakeDecisionsApi> => {
 	const seen: Seen[] = [];
-	const queue: { status: number; body: unknown }[] = [];
-	let last: { status: number; body: unknown } = {
+	const queue: { status: number; body: unknown; delayMs?: number }[] = [];
+	let last: { status: number; body: unknown; delayMs?: number } = {
 		status: 200,
 		body: { answers: { relation: { choice: "supported", probabilities: { supported: 0.9, unrelated: 0.07, contradicted: 0.03 }, confidence: 0.85 } } },
 	};
@@ -52,6 +53,14 @@ const startDecisionsApi = async (): Promise<FakeDecisionsApi> => {
 				contentType: String(req.headers["content-type"] ?? ""),
 			});
 			const next = queue.length > 0 ? (last = queue.shift() ?? last) : last;
+			if ((next.delayMs ?? 0) > 0) {
+				const timer = setTimeout(() => {
+					res.writeHead(next.status, { "content-type": "application/json" });
+					res.end(JSON.stringify(next.body));
+				}, next.delayMs);
+				req.on("close", () => clearTimeout(timer));
+				return;
+			}
 			res.writeHead(next.status, { "content-type": "application/json" });
 			res.end(JSON.stringify(next.body));
 		});
@@ -66,7 +75,7 @@ const startDecisionsApi = async (): Promise<FakeDecisionsApi> => {
 	return {
 		seen,
 		port,
-		enqueue: (status, body) => queue.push({ status, body }),
+		enqueue: (status, body, delayMs) => queue.push({ status, body, delayMs }),
 		close: () => {
 			server.closeIdleConnections();
 			server.closeAllConnections();
@@ -237,5 +246,80 @@ test("judgeTargetOf follows the live provider state (RFC 0018 §3)", async () =>
 	} finally {
 		if (savedSidecar === undefined) delete process.env.SIDECAR_URL;
 		else process.env.SIDECAR_URL = savedSidecar;
+	}
+});
+
+// ── RFC 0020: the distribution record, the cache's model id, the ladder ─────
+
+test("the verdict carries the full label distribution alongside the endpoint confidence (R5)", async () => {
+	const api = await startDecisionsApi();
+	const models = judgeModels();
+	const judge = new Judge(models, () => ({
+		model: classifierModel({ provider: JUDGE_PROVIDER, id: D1_MODEL_ID, baseUrl: `http://127.0.0.1:${api.port}` }),
+		apiKey: "sk-judge-test",
+	}));
+	try {
+		// The measured shape: confidence 0.3768 while probabilities.supported is 0.5845.
+		api.enqueue(200, {
+			answers: { relation: { choice: "supported", probabilities: { supported: 0.5845, unrelated: 0.3, contradicted: 0.1155 }, confidence: 0.3768 } },
+		});
+		const verdict = await judge.judge({ claim: "a", quote: "b" });
+		assert.equal(verdict.verdict, "supported");
+		assert.equal(verdict.score, 0.3768, "score keeps meaning the endpoint's confidence");
+		assert.deepEqual(verdict.probabilities, { supported: 0.5845, unrelated: 0.3, contradicted: 0.1155 });
+		// A partial distribution is dropped rather than half-recorded.
+		api.enqueue(200, { answers: { relation: { choice: "contradicted", probabilities: { supported: 1 }, confidence: 0.9 } } });
+		const partial = await judge.judge({ claim: "a", quote: "b" });
+		assert.equal(partial.probabilities, undefined);
+	} finally {
+		api.close();
+	}
+});
+
+test("modelId names the resolved model for the verdict cache, null when absent", async () => {
+	const models = judgeModels();
+	const judge = new Judge(models, () => ({
+		model: classifierModel({ provider: JUDGE_PROVIDER, id: D1_MODEL_ID, baseUrl: "http://127.0.0.1:1" }),
+	}));
+	assert.equal(await judge.modelId(), D1_MODEL_ID);
+	assert.equal(await new Judge(models, () => null).modelId(), null);
+});
+
+test("a timed-out attempt is retried once and the warm retry lands (RFC 0020 §4.3)", async () => {
+	const api = await startDecisionsApi();
+	const models = judgeModels();
+	const model = classifierModel({ provider: JUDGE_PROVIDER, id: D1_MODEL_ID, baseUrl: `http://127.0.0.1:${api.port}` });
+	const classifier = openRouterDecisionsApi();
+	try {
+		// The first request stalls past the per-attempt deadline (a cold start);
+		// the retry is warm and answers. `timeoutMs` pins the ladder's per-attempt
+		// deadline so the test does not wait the deployed 3.85 s.
+		api.enqueue(200, { answers: { relation: { choice: "supported", probabilities: { supported: 0.9 }, confidence: 0.9 } } }, 500);
+		api.enqueue(200, { answers: { relation: { choice: "supported", probabilities: { supported: 0.9 }, confidence: 0.9 } } });
+		const result = await models.classify(
+			model,
+			{ state: { claim: "a", quote: "b" }, questions: { relation: { type: "choice", instructions: "i", criteria: { supported: "s", unrelated: "u", contradicted: "c" } } } },
+			{ timeoutMs: 60 },
+		);
+		assert.equal(result.stopReason, "stop", result.errorMessage ?? "no error expected");
+		const answer = result.answers.relation;
+		assert.ok(answer !== undefined && answer.type === "choice" && answer.choice === "supported");
+		assert.equal(api.seen.length, 2, "one retry after the timed-out attempt");
+
+		// Both attempts time out: the failure surfaces as a timeout message the
+		// judge walk maps to cause `timeout`.
+		api.seen.length = 0;
+		api.enqueue(500, { error: { message: "still cold" } }, 500);
+		api.enqueue(500, { error: { message: "still cold" } }, 500);
+		const dead = await models.classify(
+			model,
+			{ state: { claim: "a", quote: "b" }, questions: { relation: { type: "choice", instructions: "i", criteria: { supported: "s", unrelated: "u", contradicted: "c" } } } },
+			{ timeoutMs: 60 },
+		);
+		assert.equal(dead.stopReason, "error");
+		assert.match(dead.errorMessage ?? "", /timeout|aborted/i);
+		assert.equal(api.seen.length, 2, "the ladder spent both attempts");
+	} finally {
+		api.close();
 	}
 });

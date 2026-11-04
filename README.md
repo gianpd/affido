@@ -301,8 +301,10 @@ A post-gate coherence check then judges each cited line against the quote
 behind its id with a hosted decision model that answers one typed choice
 (supported / unrelated / contradicted) and generates no text. On the shipped
 fixtures it scores 100% accuracy with 0% false accepts, so an incoherent line
-rejects the publish and the model retries; verdicts, latencies and truncations
-land in the trace, and the traces page renders the per-pair verdicts. The judge
+rejects the publish and the model retries; the trace keeps one record per
+publish attempt — verdicts, latencies, truncations, named failure causes
+(timeout, http_5xx, …) and the label distribution — and the traces page shows
+the attempt that published with its failed siblings (RFC 0020). The judge
 rides the run's own OpenRouter credential and is simply absent when none backs
 the run, so the keyless stack behaves exactly like the pure gate. The chat UI
 carries the per-question toggle; `/inspect?report=citations` measures exactness

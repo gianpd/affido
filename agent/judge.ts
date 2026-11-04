@@ -35,6 +35,12 @@ export type JudgeTargetResolver = () => Promise<JudgeTarget | null> | JudgeTarge
  * definition per label as the eval run. The definitions describe the fixture
  * semantics and do not leak pairs. */
 const QUESTION = "How does the evidence relate to the claim?";
+
+/** Versions the frozen question below (RFC 0020 §4.4): part of the verdict
+ * cache key, so any change to the question or the label definitions
+ * invalidates every cached verdict without a storage migration. Bump on any
+ * change to this block. */
+export const JUDGE_QUESTION_VERSION = 1;
 export const LABEL_DEFINITIONS = {
 	supported:
 		"the evidence states what the claim says; wording, numbers and dates may be written differently as long as the meaning is the same",
@@ -70,11 +76,19 @@ export class Judge implements CitationJudge {
 		return (await this.#targetOf()) !== null;
 	}
 
+	/** RFC 0020 §4.4: the model id behind the next call, part of the verdict
+	 * cache key. Null when no target resolves — but then `available()` is
+	 * false too and the layer is skipped before any call. */
+	async modelId(): Promise<string | null> {
+		const target = await this.#targetOf();
+		return target === null ? null : target.model.id;
+	}
+
 	/** One decision per (claim, quote) pair. `Models.classify` never rejects:
 	 * unknown providers, auth failures, transport errors and malformed answers
 	 * all come back as a result with `stopReason` "error"/"aborted". The port
-	 * throws instead, so `coherenceOf` counts the pair as unverified and
-	 * `enforce` fails closed (RFC 0017 §4.2). */
+	 * throws instead, so `coherenceOf` stores the named cause and `enforce`
+	 * fails closed (RFC 0017 §4.2, RFC 0020 §4.2). */
 	async judge(input: { readonly claim: string; readonly quote: string }): Promise<JudgeVerdict> {
 		const target = await this.#targetOf();
 		if (target === null) throw new Error("judge: no classifier model backs this run");
@@ -88,6 +102,16 @@ export class Judge implements CitationJudge {
 		if (answer === undefined || answer.type !== "choice" || !isLabel(answer.choice)) {
 			throw new Error(`judge returned an unexpected answer: ${JSON.stringify(answer)}`);
 		}
-		return { verdict: verdictOf(answer.choice), score: answer.confidence };
+		const probabilities = answer.probabilities;
+		const supported = probabilities.supported;
+		const unrelated = probabilities.unrelated;
+		const contradicted = probabilities.contradicted;
+		return {
+			verdict: verdictOf(answer.choice),
+			score: answer.confidence,
+			...(typeof supported === "number" && typeof unrelated === "number" && typeof contradicted === "number"
+				? { probabilities: { supported, unrelated, contradicted } }
+				: {}),
+		};
 	}
 }

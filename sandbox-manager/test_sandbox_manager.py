@@ -384,8 +384,16 @@ class CreateArgsTest(unittest.TestCase):
         # judge model is resolved at runtime from the run's provider, so no
         # model path or backend ever travels here.
         saved = sm.AGENT_CITATION_JUDGE
+        saved_budget = (
+            sm.AGENT_CITATION_JUDGE_PAIR_TIMEOUT_MS,
+            sm.AGENT_CITATION_JUDGE_CONCURRENCY,
+            sm.AGENT_CITATION_JUDGE_RUN_BUDGET_MS,
+        )
         try:
             sm.AGENT_CITATION_JUDGE = ""
+            sm.AGENT_CITATION_JUDGE_PAIR_TIMEOUT_MS = ""
+            sm.AGENT_CITATION_JUDGE_CONCURRENCY = ""
+            sm.AGENT_CITATION_JUDGE_RUN_BUDGET_MS = ""
             args = sm.create_args("user-j")
             env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
             self.assertFalse(any(e.startswith("CITATION_JUDGE") for e in env))
@@ -396,8 +404,24 @@ class CreateArgsTest(unittest.TestCase):
             self.assertIn("CITATION_JUDGE=warn", env)
             self.assertFalse(any(e.startswith("CITATION_JUDGE_MODEL_DIR") for e in env))
             self.assertFalse(any(e.startswith("CITATION_JUDGE_BACKEND") for e in env))
+
+            # RFC 0020 §4.3: the derived budget forwards verbatim when set, and
+            # nothing travels when unset (the agent's own defaults apply).
+            sm.AGENT_CITATION_JUDGE_PAIR_TIMEOUT_MS = "9000"
+            sm.AGENT_CITATION_JUDGE_CONCURRENCY = "6"
+            sm.AGENT_CITATION_JUDGE_RUN_BUDGET_MS = "45000"
+            args = sm.create_args("user-j")
+            env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+            self.assertIn("CITATION_JUDGE_PAIR_TIMEOUT_MS=9000", env)
+            self.assertIn("CITATION_JUDGE_CONCURRENCY=6", env)
+            self.assertIn("CITATION_JUDGE_RUN_BUDGET_MS=45000", env)
         finally:
             sm.AGENT_CITATION_JUDGE = saved
+            (
+                sm.AGENT_CITATION_JUDGE_PAIR_TIMEOUT_MS,
+                sm.AGENT_CITATION_JUDGE_CONCURRENCY,
+                sm.AGENT_CITATION_JUDGE_RUN_BUDGET_MS,
+            ) = saved_budget
 
     def test_create_args_bakes_the_websearch_url(self) -> None:
         # RFC 0016 §5: the web tools resolve the node through this env; the

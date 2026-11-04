@@ -8,8 +8,37 @@ import type {
 } from "@earendil-works/pi-durable";
 import { defineDoc, defineDocFamily } from "@earendil-works/pi-durable";
 import type { Annotation } from "./citation-store.ts";
-import type { JudgeMode, JudgePairRecord } from "./citation-judge.ts";
+import type { CachedVerdict, JudgeAttemptRecord, JudgeMode, JudgePairRecord } from "./citation-judge.ts";
 import type { ArtifactBaseline } from "./artifacts.ts";
+
+/** RFC 0020 §4.1: the judge trace as per-attempt records. Written whole on
+ * every judged publish (the commit layer snapshots a doc property at
+ * assignment time), never mutated in place. */
+export type JudgeRunState = {
+	readonly mode: Exclude<JudgeMode, "off">;
+	/** In publish-attempt order. */
+	attempts: JudgeAttemptRecord[];
+	/** RFC 0020 §4.4: run-local verdict cache, capped at 128 entries. */
+	cache?: Record<string, CachedVerdict>;
+	/** Judge wall clock spent across attempts; the run budget spends against it. */
+	spentMs?: number;
+};
+
+/** The pre-RFC-0020 flat shape. Runs stored before the change keep it; the
+ * report reads it as one legacy attempt (RFC 0020 §4.1 reading rule) and the
+ * first post-upgrade write folds it into one `legacy` attempt record. */
+export type LegacyJudgeRunState = {
+	readonly mode: Exclude<JudgeMode, "off">;
+	verdicts: JudgePairRecord[];
+	rejections: number;
+	truncated: number;
+	errors: number;
+};
+
+/** Reading rule for stored docs: `attempts` absent means the flat shape. */
+export const isLegacyJudgeState = (
+	judge: JudgeRunState | LegacyJudgeRunState | null | undefined,
+): judge is LegacyJudgeRunState => judge !== null && judge !== undefined && !("attempts" in judge);
 
 export type CitationRunState = {
 	runId: string;
@@ -25,16 +54,11 @@ export type CitationRunState = {
 	plain: string | null;
 	/** Why a strict run ended without an exit (bounce cap, fault, abort). */
 	endedReason: string | null;
-	/** RFC 0017 §6: null until the first judged publish; the commit layer
-	 * propagates mutations of properties that exist on the created doc, so the
-	 * key is present (null) from creation, like every other field. */
-	judge: {
-		mode: Exclude<JudgeMode, "off">;
-		verdicts: JudgePairRecord[];
-		rejections: number;
-		truncated: number;
-		errors: number;
-	} | null;
+	/** RFC 0017 §6 / RFC 0020 §4.1: null until the first judged publish; the
+	 * commit layer propagates mutations of properties that exist on the created
+	 * doc, so the key is present (null) from creation, like every other field.
+	 * Runs stored before RFC 0020 hold the flat shape; see the reading rule. */
+	judge: JudgeRunState | LegacyJudgeRunState | null;
 	/** Snapshot of `artifacts/` at admission (RFC 0009 §5.7): the baseline the
 	 * response's artifact list is diffed against. Written once, when the run is
 	 * fresh; a replay keeps the original so the list stays derivable. Runs stored

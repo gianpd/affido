@@ -55,3 +55,7 @@ verify-runs/
 # leftovers of the removed GLiNER runtime)
 agent/judge-models/
 agent/judge-eval/
+agent/judge-harvest/
+*.woff2
+*.mp3
+*.srt

@@ -17,6 +17,8 @@
 	import * as Alert from '#lib/components/ui/alert';
 	import * as Empty from '#lib/components/ui/empty';
 	import * as DropdownMenu from '#lib/components/ui/dropdown-menu';
+	import JudgeVerdicts from '#lib/components/judge-verdicts.svelte';
+	import type { CitationRunJudge } from '#lib/types';
 	import { formatCost, formatDate, formatNumber, shortId } from '#lib/format';
 	import { captureOrdinals } from '#lib/trace-graph';
 	import type { ActionData, PageData } from './$types';
@@ -25,6 +27,11 @@
 
 	let capturing = $state(false);
 	let forgetForm = $state<HTMLFormElement>();
+	let expandedRuns = $state<Record<string, boolean | undefined>>({});
+
+	const toggleRun = (runId: string) => {
+		expandedRuns[runId] = !(expandedRuns[runId] ?? false);
+	};
 
 	const forget = (id: string) => {
 		const input = forgetForm?.querySelector<HTMLInputElement>('input[name="id"]');
@@ -36,6 +43,20 @@
 	// Sessions are newest-first; per conversation, label each capture with its
 	// position in that conversation's capture history (1 = newest).
 	const ordinals = $derived(captureOrdinals(data.sessions));
+
+	// RFC 0020 §4.1: the Judge column shows the published attempt only; the
+	// attempts badge and the error badge carry what happened to the others.
+	const attemptsCauses = (judge: NonNullable<CitationRunJudge>): string =>
+		Object.entries(
+			(judge.attempts ?? []).reduce<Record<string, number>>((causes, attempt) => {
+				for (const [cause, count] of Object.entries(attempt.errorCauses)) {
+					causes[cause] = (causes[cause] ?? 0) + (count ?? 0);
+				}
+				return causes;
+			}, {})
+		)
+			.map(([cause, count]) => `${count}× ${cause}`)
+			.join(', ');
 
 	const stats = $derived([
 		{ label: 'Captures', value: formatNumber(data.sessions.length), icon: Layers },
@@ -96,8 +117,8 @@
 					</Badge>
 				</Card.Title>
 				<Card.Description>
-					Server-verified citation exactness per strict run, measured from the trace alone (RFC
-					0006).
+					Server-verified citation exactness and post-gate judge verdicts per strict run, measured
+					from the trace alone (RFC 0006, RFC 0017).
 				</Card.Description>
 			</Card.Header>
 			<Card.Content>
@@ -109,6 +130,7 @@
 								<Table.Head>Question</Table.Head>
 								<Table.Head>Exit</Table.Head>
 								<Table.Head>Exact</Table.Head>
+								<Table.Head>Judge</Table.Head>
 								<Table.Head>Friction</Table.Head>
 							</Table.Row>
 						</Table.Header>
@@ -129,12 +151,56 @@
 										{/if}
 									</Table.Cell>
 									<Table.Cell>{run.exact ? 'yes' : 'no'}</Table.Cell>
+									<Table.Cell>
+										{#if run.judge}
+											<div class="flex flex-wrap items-center gap-1">
+												<Badge variant="default" class="font-normal">
+													{run.judge.supported} supported
+												</Badge>
+												<Badge variant="outline" class="font-normal">
+													{run.judge.unsupported} unsupported
+												</Badge>
+												{#if run.judge.contradicted > 0}
+													<Badge variant="destructive" class="font-normal">
+														{run.judge.contradicted} contradicted
+													</Badge>
+												{/if}
+												{#if (run.judge.attempts?.length ?? 0) > 1}
+													<Badge variant="secondary" class="font-normal">
+														{run.judge.attempts?.length} attempts
+													</Badge>
+												{/if}
+												{#if attemptsCauses(run.judge)}
+													<Badge variant="destructive" class="font-normal">
+														{attemptsCauses(run.judge)}
+													</Badge>
+												{/if}
+											</div>
+											<Button
+												variant="ghost"
+												size="xs"
+												class="mt-1 text-muted-foreground"
+												onclick={() => toggleRun(run.runId)}
+											>
+												{expandedRuns[run.runId] ? 'Hide verdicts' : 'Show verdicts'}
+											</Button>
+										{:else}
+											<span class="text-xs text-muted-foreground">not run</span>
+										{/if}
+									</Table.Cell>
 									<Table.Cell class="text-xs text-muted-foreground">
 										{Object.entries({ ...run.annotateRejected, ...run.publishRejected })
 											.map(([reason, count]) => `${reason} ×${count}`)
 											.join(', ') || '—'}
 									</Table.Cell>
 								</Table.Row>
+								{#if expandedRuns[run.runId]}
+									<Table.Row class="bg-muted/20">
+										<Table.Cell colspan={6} class="whitespace-normal">
+											<JudgeVerdicts judge={run.judge} />
+										</Table.Cell>
+									</Table.Row>
+								{/if}
 							{/each}
 						</Table.Body>
 					</Table.Root>

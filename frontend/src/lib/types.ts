@@ -96,6 +96,101 @@ export type TraceReport = {
 	usage: TraceUsage;
 };
 
+/** One (line, citation) pair the post-gate coherence judge classified
+ * (RFC 0017 §6). `score` is the endpoint's confidence in `verdict` (0..1) —
+ * not the label probability; new consumers read `probabilities` (RFC 0020 R5). */
+export type JudgePairVerdict = {
+	line: number;
+	citationId: string;
+	verdict: 'supported' | 'unsupported' | 'contradicted';
+	score: number;
+	ms: number;
+	truncated: boolean;
+	/** The full label distribution, wire labels (unrelated, not unsupported). */
+	probabilities?: { supported: number; unrelated: number; contradicted: number };
+	/** The endpoint confidence, pinned separately from `score`'s legacy meaning. */
+	endpointConfidence?: number;
+	/** Best supported − best non-supported of the line, −1 when no support. */
+	margin?: number;
+	/** Served from the run's verdict cache: 0 ms, no endpoint call. */
+	cached?: boolean;
+};
+
+export type JudgeErrorCause =
+	'timeout' | 'transport' | 'http_4xx' | 'http_5xx' | 'protocol' | 'aborted';
+
+export type JudgeOutcome =
+	'published' | 'incoherent_citation' | 'judge_error_unverified' | 'judge_budget_exhausted';
+
+/** One judge attempt of a run, summarized (RFC 0020 §4.1): per-pair verdicts
+ * exist only for the attempt that published. */
+export type JudgeAttempt = {
+	attempt: number;
+	at: number;
+	lines: number;
+	pairs: number;
+	supported: number;
+	unsupported: number;
+	contradicted: number;
+	errors: number;
+	/** cause → count, the named failures of RFC 0020 §4.2. */
+	errorCauses: Partial<Record<JudgeErrorCause, number>>;
+	truncated: number;
+	outcome: JudgeOutcome;
+	legacy: boolean;
+	latencyMs: { p50: number; p95: number; max: number } | null;
+};
+
+/** The stored judge trace of one citation run; null when the judge never ran.
+ * The run-level counts and `verdicts` describe the attempt that published —
+ * never a sum over attempts (RFC 0020 R1). */
+export type CitationRunJudge = {
+	mode: 'warn' | 'enforce';
+	/** One summary per judge attempt, in publish-attempt order. Absent from
+	 * images that predate RFC 0020. */
+	attempts?: JudgeAttempt[];
+	/** The attempt that published, or the last of an unpublished run. */
+	published?: JudgeAttempt | null;
+	/** Per-pair verdicts of the published attempt, in call order. */
+	verdicts?: JudgePairVerdict[];
+	judgeVerdicts: number;
+	judgeRejections: number;
+	judgeTruncated: number;
+	judgeErrors: number;
+	supported: number;
+	unsupported: number;
+	contradicted: number;
+	latencyMs: { p50: number; p95: number; max?: number } | null;
+};
+
+/** One strict-citations run, as `GET /inspect?report=citations` reports it (RFC 0006 §5.8). */
+export type CitationRunReportView = {
+	runId: string;
+	strict: boolean;
+	prompt: string;
+	published: boolean;
+	plain: boolean;
+	used: string[];
+	reported: string[];
+	exact: boolean;
+	unreportedUsed: string[];
+	padded: string[];
+	repliedWithoutCitations: boolean;
+	annotateRejected: Record<string, number>;
+	publishRejected: Record<string, number>;
+	corpusCalls: number;
+	judge?: CitationRunJudge | null;
+};
+
+export type CitationsReport = {
+	agent: string;
+	conversationId: number;
+	runs: CitationRunReportView[];
+	gatedReplies: number;
+	exactReplies: number;
+	citationExactness: number | null;
+};
+
 /** One citation of an agent reply, as the sandbox envelope reports it (RFC 0006 R6). */
 export type Citation = {
 	citationId: string;

@@ -18,9 +18,25 @@ import {
 	VerifyError,
 	type CitationStore,
 } from "./citation-store.ts";
-import { coherenceOf } from "./citation-judge.ts";
+import {
+	coherenceOf,
+	judgedLines,
+	judgeLatencyOf,
+	JUDGE_BUDGET,
+	type CachedVerdict,
+	type JudgeAttemptRecord,
+	type JudgeOutcome,
+} from "./citation-judge.ts";
 import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
-import { CurrentRunDoc, mutateRun, readCurrentRun, readRun, type CurrentRun } from "./citation-run.ts";
+import {
+	CurrentRunDoc,
+	isLegacyJudgeState,
+	mutateRun,
+	readCurrentRun,
+	readRun,
+	type CurrentRun,
+	type JudgeRunState,
+} from "./citation-run.ts";
 
 export const MAX_CORPUS_CALLS = 48;
 const MAX_YIELD_BOUNCES = 2;
@@ -292,47 +308,94 @@ const publishTool = ({ store: _store, judge, judgeMode }: CitationToolDeps) =>
 					);
 					return rejection(error);
 				}
-				// RFC 0017 §4: after the deterministic gate accepted, and before the
-				// publish exists, the coherence judge classifies each cited line against
-				// the quote behind its id. `answer_publish` terminates the turn on
-				// success, so this is the only place a rejected line can retry; there is
-				// no post-hoc audit once published. Input is stored state alone: the
-				// annotation quotes and the line with tokens stripped. RFC 0018: a judge
-				// that is not *available* (no OpenRouter credential backs the run) is
-				// absent, not erroring — `enforce` never rejects for lack of a key.
+				// RFC 0017 §4, record keeping per RFC 0020: after the deterministic gate
+				// accepted, and before the publish exists, the coherence judge classifies
+				// each cited line against the quote behind its id. `answer_publish`
+				// terminates the turn on success, so this is the only place a rejected
+				// line can retry; there is no post-hoc audit once published. Input is
+				// stored state alone: the annotation quotes and the line with tokens
+				// stripped. RFC 0018: a judge that is not *available* (no OpenRouter
+				// credential backs the run) is absent, not erroring — `enforce` never
+				// rejects for lack of a key.
 				if (judge !== null && judge !== undefined && judgeMode !== undefined && judgeMode !== "off" && (await judge.available?.()) !== false) {
+					const prior = state.judge;
+					const priorV2 = prior !== null && !isLegacyJudgeState(prior) ? prior : null;
+					// 1-based publish attempt of this run, gate-rejected attempts included:
+					// one `uncited_line` before the first judged attempt is how the motivating
+					// trace's five publishes number 2..5 (RFC 0020 §2).
+					const attemptNo = 1 + Object.values(state.publishRejections).reduce((sum, count) => sum + count, 0);
+					const priorCache = priorV2?.cache ?? {};
+					const cachePuts = new Map<string, CachedVerdict>();
+					const remainingBudget = Math.max(0, JUDGE_BUDGET.runBudgetMs - (priorV2?.spentMs ?? 0));
+					const attemptStarted = performance.now();
 					const coherence = await coherenceOf({
 						markdown: args.markdown,
 						quoteOf: (citationId) => state.annotations[citationId]?.quote,
 						judge,
+						runBudgetMs: remainingBudget,
+						cache: {
+							get: (key) => priorCache[key] ?? cachePuts.get(key),
+							put: (key, verdict) => {
+								if (!cachePuts.has(key)) cachePuts.set(key, verdict);
+							},
+						},
 					});
-					const reason = coherence.ok ? "incoherent_citation" : coherence.reason === "judge_error" ? "judge_unavailable" : coherence.reason;
+					const wallMs = Math.round(performance.now() - attemptStarted);
 					const rejecting = !coherence.ok && judgeMode === "enforce";
+					// Warn mode never rejects: the attempt publishes even when a line
+					// failed, so its outcome is still `published` and the verdicts carry
+					// the finding.
+					const outcome: JudgeOutcome = coherence.ok || judgeMode === "warn" ? "published" : coherence.reason;
+					const attempt: JudgeAttemptRecord = {
+						attempt: attemptNo,
+						at: Date.now(),
+						lines: judgedLines(args.markdown).length,
+						verdicts: [...coherence.records],
+						errors: [...coherence.errors],
+						truncated: coherence.records.filter((record) => record.truncated).length,
+						outcome,
+						latencyMs: judgeLatencyOf(coherence.records),
+					};
 					await mutateRun(
 						api,
 						{ runId: run.runId, strict: run.strict, prompt: "" },
 						(s) => {
-							const prior = s.judge ?? { mode: judgeMode, verdicts: [], rejections: 0, truncated: 0, errors: 0 };
-							// One replacement object, not create-then-mutate: the commit
-							// layer snapshots a doc property at assignment time, so the
-							// `judgeState.verdicts.push(...)` after `s.judge ??= {...}` was
-							// dropped while `publishRejections` (mutated, never assigned)
-							// survived. The value is built in full and assigned once.
-							s.judge = {
+							// One replacement object, not create-then-mutate: the commit layer
+							// snapshots a doc property at assignment time. A pre-RFC-0020 flat
+							// judge state folds into one `legacy` attempt so no history is lost;
+							// its anonymous error counter has no records to carry.
+							const priorAttempts: readonly JudgeAttemptRecord[] = isLegacyJudgeState(s.judge)
+								? [{
+										attempt: 1,
+										at: 0,
+										lines: 0,
+										verdicts: [...s.judge.verdicts],
+										errors: [],
+										truncated: s.judge.truncated,
+										outcome: s.published !== null ? "published" : "incoherent_citation",
+										latencyMs: judgeLatencyOf(s.judge.verdicts),
+										legacy: true,
+									}]
+								: [...(priorV2?.attempts ?? [])];
+							const merged = { ...priorCache, ...Object.fromEntries(cachePuts) };
+							const keys = Object.keys(merged);
+							// FIFO cap at 128 (§4.4): insertion order survives, oldest entries drop.
+							const cache = keys.length > 128 ? Object.fromEntries(keys.slice(keys.length - 128).map((k) => [k, merged[k]!])) : merged;
+							const next: JudgeRunState = {
 								mode: judgeMode,
-								verdicts: [...prior.verdicts, ...coherence.records],
-								rejections: prior.rejections + (rejecting ? 1 : 0),
-								truncated: prior.truncated + coherence.records.filter((record) => record.truncated).length,
-								errors: prior.errors + coherence.errors,
+								attempts: [...priorAttempts, attempt],
+								...(Object.keys(cache).length === 0 ? {} : { cache }),
+								spentMs: (priorV2?.spentMs ?? 0) + wallMs,
 							};
+							s.judge = next;
 							if (rejecting) {
-								s.publishRejections[reason] = (s.publishRejections[reason] ?? 0) + 1;
+								s.publishRejections[coherence.reason] = (s.publishRejections[coherence.reason] ?? 0) + 1;
 							}
 						},
 						context,
 					);
 					if (rejecting) {
-						return rejection(new VerifyError(reason, coherence.detail));
+						return rejection(new VerifyError(coherence.reason, coherence.detail));
 					}
 				}
 				await mutateRun(

@@ -537,22 +537,33 @@ test("enforce rejects an incoherent line with incoherent_citation, records it, a
 	const report = (await agent.inspect({ limit: 50, report: "citations" })) as CitationsTraceReport;
 	const run = report.runs.find((candidate) => candidate.runId === "req-judge-1");
 	assert.notEqual(run, undefined);
-	console.log("RUN", JSON.stringify(run?.judge), JSON.stringify(run?.publishRejected));
 	assert.equal(run?.publishRejected.incoherent_citation, 1);
 	assert.equal(run?.judge?.mode, "enforce");
-	assert.equal(run?.judge?.judgeVerdicts, 2);
+	// RFC 0020: one record per publish attempt, aggregate from the one that
+	// published — not the old sum over different documents.
+	assert.equal(run?.judge?.attempts.length, 2);
+	assert.deepEqual(
+		run?.judge?.attempts.map((attempt) => ({ attempt: attempt.attempt, outcome: attempt.outcome, pairs: attempt.pairs })),
+		[
+			{ attempt: 1, outcome: "incoherent_citation", pairs: 1 },
+			{ attempt: 2, outcome: "published", pairs: 1 },
+		],
+	);
+	assert.equal(run?.judge?.published?.attempt, 2);
+	assert.equal(run?.judge?.judgeVerdicts, 1, "the aggregate counts the published attempt only");
 	assert.equal(run?.judge?.judgeRejections, 1);
-	assert.equal(run?.judge?.unsupported, 1);
+	assert.equal(run?.judge?.unsupported, 0);
 	assert.equal(run?.judge?.supported, 1);
 	assert.equal(run?.judge?.judgeTruncated, 0);
 	assert.notEqual(run?.judge?.latencyMs, null);
 	const verdicts = run?.judge?.verdicts ?? [];
-	assert.deepEqual(verdicts.map((record) => record.verdict), ["unsupported", "supported"]);
-	assert.deepEqual(verdicts.map((record) => record.line), [3, 3]);
+	assert.deepEqual(verdicts.map((record) => record.verdict), ["supported"]);
+	assert.deepEqual(verdicts.map((record) => record.line), [3]);
 	assert.match(verdicts[0]?.citationId ?? "", /^cit_[0-9a-f]{10}$/);
 	assert.equal(typeof verdicts[0]?.score, "number");
 	assert.equal(typeof verdicts[0]?.ms, "number");
 	assert.equal(verdicts[0]?.truncated, false);
+	assert.equal(typeof verdicts[0]?.margin, "number", "the passing line carries its margin");
 	await agent.close();
 });
 
@@ -643,7 +654,7 @@ test("warn records the incoherent verdict and publishes anyway", async () => {
 	await agent.close();
 });
 
-test("a judge that fails in enforce mode rejects with judge_unavailable and nothing is published", async () => {
+test("a judge that fails in enforce mode rejects with judge_error_unverified, names the cause, and nothing is published", async () => {
 	const judge: CitationJudge = new ScriptedJudge(() => {
 		throw new Error("session gone");
 	});
@@ -685,11 +696,126 @@ test("a judge that fails in enforce mode rejects with judge_unavailable and noth
 	// grep -> read -> annotate -> publish at least twice; every attempt is
 	// refused with the named reason and nothing is ever published. The exact
 	// attempt count depends on the bounce cap, so only the invariants: every
-	// refusal counted, every judge call errored, no verdict recorded.
-	const refusals = run?.publishRejected.judge_unavailable ?? 0;
+	// refusal counted, every judge call errored with its cause stored, no
+	// verdict recorded, and the retired name gone for good.
+	const refusals = run?.publishRejected.judge_error_unverified ?? 0;
 	assert.ok(refusals >= 2, `expected at least two refusals, got ${refusals}`);
-	assert.equal(run?.judge?.judgeErrors, refusals);
+	assert.ok((run?.judge?.attempts.length ?? 0) >= 2);
+	assert.ok(run?.judge?.attempts.every((attempt) => attempt.outcome === "judge_error_unverified"));
+	assert.ok(
+		run?.judge?.attempts.every((attempt) => attempt.errors === 1 && attempt.errorCauses.protocol === 1),
+		"every attempt stores its named failure",
+	);
 	assert.equal(run?.judge?.judgeVerdicts, 0);
 	assert.equal(run?.judge?.judgeRejections, refusals);
+	assert.ok(!JSON.stringify(run).includes("judge_unavailable"), "the retired reason is gone");
+	await agent.close();
+});
+
+test("a timing-out judge rejects with the timeout cause recorded per pair (RFC 0020 V3)", async () => {
+	// The judge fails instantly with the walk's own timeout wording, so the
+	// enforce path exercises without waiting the deployed 8 s envelope; the
+	// genuine hang past the deadline is covered in citation-judge.test.ts.
+	const judge: CitationJudge = new ScriptedJudge(() => {
+		throw new Error("judge timed out after 8000ms");
+	});
+	const script: FauxResponseFactory = (transcript) => {
+		const tool = lastToolResult(transcript.messages);
+		if (tool === undefined) return call("corpus_grep", { pattern: "rinnova" });
+		if (tool.name === "corpus_grep" && !tool.isError) {
+			const hit = (JSON.parse(tool.text) as { hits: { docId: string; text: string }[] }).hits[0];
+			if (hit !== undefined) return call("corpus_read", { docId: hit.docId, needle: hit.text });
+		}
+		if (tool.name === "corpus_read" && !tool.isError) {
+			const args = lastToolArgs(transcript.messages, "corpus_read");
+			if (typeof args?.docId === "string" && typeof args?.needle === "string") {
+				return call("corpus_annotate", { docId: args.docId, docVersion: 1, kind: "quote", citation: { text: args.needle } });
+			}
+		}
+		if (tool.name === "corpus_annotate" && !tool.isError) {
+			const citationId = (JSON.parse(tool.text) as { citationId: string }).citationId;
+			return call("answer_publish", { markdown: `## Rinnovo\n\n${COHERENT} [${citationId}].\n`, citationIds: [citationId] });
+		}
+		return fauxAssistantMessage([fauxText("The judge is down; giving up.")]);
+	};
+	const { bundle } = scriptedBundle(script);
+	const agent = await stagedFixture("citation-judge-timeout-", bundle, { judge, mode: "enforce" });
+
+	const result = (await agent.prompt("Quando va comunicata la disdetta?", "req-judge-timeout", "required")) as PromptResult;
+	assert.equal(result.status, "done");
+	assert.equal(result.evidence, "none", "fail-closed: no publish without a verified pass");
+
+	const report = (await agent.inspect({ limit: 50, report: "citations" })) as CitationsTraceReport;
+	const run = report.runs.find((candidate) => candidate.runId === "req-judge-timeout");
+	assert.notEqual(run, undefined);
+	assert.ok((run?.publishRejected.judge_error_unverified ?? 0) >= 1);
+	const first = run?.judge?.attempts[0];
+	assert.equal(first?.errorCauses.timeout, 1, "the timeout is named, not anonymous");
+	await agent.close();
+});
+
+test("a republish pays only for what changed: unchanged pairs are served from the run cache (RFC 0020 V6)", async () => {
+	// Two cited lines share one annotation: attempt 1 publishes an incoherent
+	// second line, attempt 2 rewrites it. Line 1's (claim, quote) pair is
+	// identical across attempts, so the second judgement must not re-call it.
+	const calls: string[] = [];
+	const judge: CitationJudge = new ScriptedJudge(({ claim }) => {
+		calls.push(claim);
+		return claim.includes("assistenza") ? { verdict: "unsupported", score: 0.81 } : { verdict: "supported", score: 0.9 };
+	});
+	const L1 = "Il contratto si rinnova tacitamente il 1 marzo 2027";
+	const L2_BAD = "L'assistenza e inclusa nel canone annuo";
+	const L2_GOOD = "Il contratto prevede una disdetta comunicata 90 giorni prima";
+	const script: FauxResponseFactory = (transcript) => {
+		const tool = lastToolResult(transcript.messages);
+		if (tool === undefined) return call("corpus_grep", { pattern: "rinnova" });
+		if (tool.name === "corpus_grep" && !tool.isError) {
+			const hit = (JSON.parse(tool.text) as { hits: { docId: string; text: string }[] }).hits[0];
+			if (hit !== undefined) return call("corpus_read", { docId: hit.docId, needle: hit.text });
+		}
+		if (tool.name === "corpus_read" && !tool.isError) {
+			const args = lastToolArgs(transcript.messages, "corpus_read");
+			if (typeof args?.docId === "string" && typeof args?.needle === "string") {
+				return call("corpus_annotate", { docId: args.docId, docVersion: 1, kind: "quote", citation: { text: args.needle } });
+			}
+		}
+		if (tool.name === "corpus_annotate" && !tool.isError) {
+			const citationId = (JSON.parse(tool.text) as { citationId: string }).citationId;
+			const retrying = transcript.messages.some(
+				(message) => message.role === "toolResult" && message.toolName === "answer_publish" && message.isError === true,
+			);
+			const second = retrying ? L2_GOOD : L2_BAD;
+			return call("answer_publish", {
+				markdown: `## Rinnovo\n\n${L1} [${citationId}].\n${second} [${citationId}].\n`,
+				citationIds: [citationId],
+			});
+		}
+		return fauxAssistantMessage([fauxText("The script reached an unexpected state.")]);
+	};
+	const { bundle } = scriptedBundle(script);
+	const agent = await stagedFixture("citation-judge-cache-", bundle, { judge, mode: "enforce" });
+
+	const result = (await agent.prompt("Quando si rinnova il contratto?", "req-judge-cache", "required")) as PromptResult;
+	assert.equal(result.status, "done");
+	assert.equal(result.evidence, "cited", "the retry published");
+
+	const report = (await agent.inspect({ limit: 50, report: "citations" })) as CitationsTraceReport;
+	const run = report.runs.find((candidate) => candidate.runId === "req-judge-cache");
+	assert.notEqual(run, undefined);
+	assert.equal(run?.judge?.attempts.length, 2, "one rejected attempt, one published");
+	assert.equal(run?.judge?.published?.attempt, 2);
+	assert.equal(run?.judge?.published?.pairs, 2);
+	// Attempt 1 judged both pairs; attempt 2 only the rewritten line.
+	assert.equal(calls.length, 3, `expected 3 judge calls (2 + the edited line), got ${calls.length}: ${JSON.stringify(calls)}`);
+	const publishedVerdicts = run?.judge?.verdicts ?? [];
+	assert.deepEqual(
+		publishedVerdicts.map((record) => ({ line: record.line, cached: record.cached === true })),
+		[
+			{ line: 3, cached: true },
+			{ line: 4, cached: false },
+		],
+		"the unchanged line is served from the cache at 0 ms",
+	);
+	assert.equal(publishedVerdicts[0]?.ms, 0);
 	await agent.close();
 });

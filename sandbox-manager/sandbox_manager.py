@@ -61,6 +61,13 @@ AGENT_CITATIONS_DEFAULT = os.getenv("AGENT_CITATIONS_DEFAULT", "")
 # when no such credential backs the run; it needs no weights, no model cache
 # and no memory cap. This env exists to override that default, not to enable it.
 AGENT_CITATION_JUDGE = os.getenv("AGENT_CITATION_JUDGE", "")
+# RFC 0020 §4.3: the judge's derived latency budget, forwarded verbatim; empty
+# means the agent's own defaults (8 s per-pair envelope, 4 pairs in flight,
+# 30 s per run). The agent derives the retry ladder from the envelope at load
+# and refuses to boot on an inconsistent value, so no validation lives here.
+AGENT_CITATION_JUDGE_PAIR_TIMEOUT_MS = os.getenv("AGENT_CITATION_JUDGE_PAIR_TIMEOUT_MS", "")
+AGENT_CITATION_JUDGE_CONCURRENCY = os.getenv("AGENT_CITATION_JUDGE_CONCURRENCY", "")
+AGENT_CITATION_JUDGE_RUN_BUDGET_MS = os.getenv("AGENT_CITATION_JUDGE_RUN_BUDGET_MS", "")
 # `off` (default): per-user networks are created without NAT egress, so a
 # sandbox can talk to its guests (caddy, manager, web) on its own subnet and
 # nothing else. `open` keeps the plain-bridge behaviour (internet egress) for
@@ -1039,6 +1046,15 @@ def create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
         # RFC 0017 §3 / RFC 0018 §5: the coherence layer's mode. No secret ever
         # travels here; the judge target resolves from the run's own provider.
         args += ["-e", f"CITATION_JUDGE={AGENT_CITATION_JUDGE}"]
+    for name, value in (
+        ("CITATION_JUDGE_PAIR_TIMEOUT_MS", AGENT_CITATION_JUDGE_PAIR_TIMEOUT_MS),
+        ("CITATION_JUDGE_CONCURRENCY", AGENT_CITATION_JUDGE_CONCURRENCY),
+        ("CITATION_JUDGE_RUN_BUDGET_MS", AGENT_CITATION_JUDGE_RUN_BUDGET_MS),
+    ):
+        # RFC 0020 §4.3: the derived judge budget, verbatim; the agent asserts
+        # the constants' invariant at load, so a bad value fails the boot loudly.
+        if value:
+            args += ["-e", f"{name}={value}"]
     for name, ip in sorted((hosts or {}).items()):
         args += ["--add-host", f"{name}:{ip}"]
     if AGENT_DNS:

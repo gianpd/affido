@@ -153,6 +153,15 @@ is resolved per call (absence = layer absent), and nothing is loaded.
 
 ## 6. Run state and report
 
+> Amended by RFC 0020: the flat shape below mixed the verdicts of every
+> publish attempt into one line numbering, hid failure causes and rejected
+> publishes on a hand-set retry budget smaller than the measured cold path.
+> The stored shape is now per-attempt (`judge.attempts[]`, each with its own
+> verdicts, named error causes, outcome and latency envelope), the run-level
+> numbers the report shows come from the attempt that published, and the
+> budget is derived. This section keeps the RFC 0017 shape for the record;
+> RFC 0020 §4 is the one in force.
+
 `CitationRunState.judge` (null until the first judged publish; the commit
 layer snapshots a doc property at assignment time, so the value is built in
 full and assigned once — create-then-mutate was observed to drop the first
@@ -163,9 +172,10 @@ judge: { mode, verdicts: [{line, citationId, verdict, score, ms, truncated}],
          rejections, truncated, errors }
 ```
 
-The citations report gains, per run: `judgeVerdicts`, `judgeRejections`,
-`judgeTruncated`, `judgeErrors`, per-verdict counts, and latency p50/p95 —
-`GET /inspect?report=citations` shows exactly what the layer did.
+The citations report gains, per run: `verdicts` (the per-pair records
+above), `judgeVerdicts`, `judgeRejections`, `judgeTruncated`, `judgeErrors`,
+per-verdict counts, and latency p50/p95 — `GET /inspect?report=citations`
+returns them, and the traces UI renders the per-pair table.
 
 ## 7. Runtime footprint (measured)
 
