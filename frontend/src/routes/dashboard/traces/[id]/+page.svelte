@@ -16,18 +16,51 @@
 	import * as Empty from '#lib/components/ui/empty';
 	import * as Collapsible from '#lib/components/ui/collapsible';
 	import { Separator } from '#lib/components/ui/separator';
+	import JudgeVerdicts from '#lib/components/judge-verdicts.svelte';
 	import TraceGraph from '#lib/components/trace-graph.svelte';
 	import TraceEntryDetail from '#lib/components/trace-entry-detail.svelte';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import ShieldCheck from '@lucide/svelte/icons/shield-check';
 	import Waypoints from '@lucide/svelte/icons/waypoints';
 	import { formatCost, formatDate, formatNumber } from '#lib/format';
+	import type { CitationsReport } from '#lib/types';
 	import type { ActionData, PageData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let refreshing = $state(false);
 	const report = $derived(data.report);
+
+	// The judge audit is not part of the snapshot: it lives in the sandbox's
+	// stored citation runs. Load it only when the tab is opened, so reading a
+	// snapshot never activates a paused sandbox.
+	let tab = $state('graph');
+	let judgeReport = $state<CitationsReport | null>();
+	let judgeError = $state<string>();
+	let judgeLoading = $state(false);
+	let judgeLoaded = $state(false);
+
+	const loadJudge = async () => {
+		if (judgeLoading || judgeLoaded) return;
+		judgeLoading = true;
+		judgeError = undefined;
+		try {
+			const response = await fetch(`/api/trace-judge?conversation=${data.session.conversationId}`);
+			const body = (await response.json()) as (CitationsReport & { error?: string }) | null;
+			if (!response.ok) throw new Error(body?.error ?? `HTTP ${response.status}`);
+			judgeReport = body;
+			judgeLoaded = true;
+		} catch (cause) {
+			judgeError = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			judgeLoading = false;
+		}
+	};
+
+	const handleTab = (value: string) => {
+		if (value === 'judge') void loadJudge();
+	};
 
 	// Per-entry expansion: the report only carries a 160-character summary, so the
 	// stored messages are fetched one entry at a time when a row is opened.
@@ -164,7 +197,7 @@
 
 	<Separator />
 
-	<Tabs.Root value="graph">
+	<Tabs.Root bind:value={tab} onValueChange={handleTab}>
 		<Tabs.List>
 			<Tabs.Trigger value="graph">
 				<Waypoints data-icon="inline-start" />
@@ -173,6 +206,10 @@
 			<Tabs.Trigger value="entries">Entries ({report.entries.returned})</Tabs.Trigger>
 			<Tabs.Trigger value="tasks">Tasks ({report.tasks.length})</Tabs.Trigger>
 			<Tabs.Trigger value="submissions">Submissions ({report.submissions.length})</Tabs.Trigger>
+			<Tabs.Trigger value="judge">
+				<ShieldCheck data-icon="inline-start" />
+				Judge
+			</Tabs.Trigger>
 			<Tabs.Trigger value="raw">Raw report</Tabs.Trigger>
 		</Tabs.List>
 
@@ -328,6 +365,85 @@
 							{/each}
 						</Table.Body>
 					</Table.Root>
+				</div>
+			{/if}
+		</Tabs.Content>
+
+		<Tabs.Content value="judge" class="pt-4">
+			{#if judgeLoading}
+				<p class="text-sm text-muted-foreground">Reading the judge audit from the sandbox…</p>
+			{:else if judgeError}
+				<Alert.Root variant="destructive">
+					<Alert.Title>Could not read the judge audit</Alert.Title>
+					<Alert.Description>{judgeError}</Alert.Description>
+				</Alert.Root>
+				<Button variant="outline" class="mt-3" onclick={() => void loadJudge()}>Retry</Button>
+			{:else if judgeReport === null}
+				<Empty.Root class="border">
+					<Empty.Header>
+						<Empty.Media variant="icon">
+							<ShieldCheck class="size-5" />
+						</Empty.Media>
+						<Empty.Title>Citation report unavailable</Empty.Title>
+						<Empty.Description>
+							This sandbox image does not serve the citation report.
+						</Empty.Description>
+					</Empty.Header>
+				</Empty.Root>
+			{:else if judgeReport === undefined}
+				<Empty.Root class="border">
+					<Empty.Header>
+						<Empty.Media variant="icon">
+							<ShieldCheck class="size-5" />
+						</Empty.Media>
+						<Empty.Title>Judge audit not loaded</Empty.Title>
+						<Empty.Description>
+							Read the stored judge verdicts for this conversation from the sandbox.
+						</Empty.Description>
+					</Empty.Header>
+					<Empty.Content>
+						<Button onclick={() => void loadJudge()}>Load judge audit</Button>
+					</Empty.Content>
+				</Empty.Root>
+			{:else if judgeReport.runs.length === 0}
+				<Empty.Root class="border">
+					<Empty.Header>
+						<Empty.Media variant="icon">
+							<ShieldCheck class="size-5" />
+						</Empty.Media>
+						<Empty.Title>No citation runs</Empty.Title>
+						<Empty.Description>
+							This conversation has no strict-citation run to judge.
+						</Empty.Description>
+					</Empty.Header>
+				</Empty.Root>
+			{:else}
+				<div class="flex flex-col gap-3">
+					<p class="text-xs text-muted-foreground">
+						Per-run verdicts read from the sandbox's stored citation runs. These are not part of the
+						captured snapshot.
+					</p>
+					{#each judgeReport.runs as run (run.runId)}
+						<Card.Root>
+							<Card.Header>
+								<Card.Title class="flex flex-wrap items-center gap-2 text-sm">
+									<span class="font-mono text-xs">{run.runId}</span>
+									<Badge variant={run.published ? 'default' : 'outline'} class="font-normal">
+										{run.published ? 'cited' : run.plain ? 'plain' : 'none'}
+									</Badge>
+									{#if run.judge}
+										<Badge variant="secondary" class="font-normal">{run.judge.mode}</Badge>
+									{/if}
+								</Card.Title>
+								<Card.Description class="line-clamp-2 text-xs">
+									{run.prompt || '—'}
+								</Card.Description>
+							</Card.Header>
+							<Card.Content>
+								<JudgeVerdicts judge={run.judge} />
+							</Card.Content>
+						</Card.Root>
+					{/each}
 				</div>
 			{/if}
 		</Tabs.Content>
