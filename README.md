@@ -319,10 +319,12 @@ no user code and has no route to the internet: it talks to operator-supplied
 SearXNG (search) and Camofox (page reads) on a shared internal network, and
 those two services are the only containers with egress.
 
-| Tool | Returns | Bounds |
+| Tool | Model-visible result | Bounds |
 |---|---|---|
 | `web_search {query, lang?, max?}` | `[{sourceId, title, domain, snippet}]` | query <= 256 chars, 4 searches per run, 8 results |
-| `web_read {sourceId}` | `{untrusted: true, url, title, text, sha256}` | opaque ids issued to this run, one read per result, 6000 chars |
+| `web_read {sourceId}` | `{untrusted: true, url, title, text, sha256, truncated, totalChars}` | opaque ids issued to this run, one read per result, 6000-character selected window |
+
+The node replies with validated envelopes containing `requestId` and `diagnostics`; the model sees only the compact results/page above. Both tools also expose the envelope as `structuredOutput` for program callers, declared with a shared `structuredOutputSchema`. `web_read` keeps at most 6000 characters but selects them from the page head plus a window around server-side focus terms from the query and snippet; `truncated` and `totalChars` state what was omitted. Search results still contain no URL.
 
 Web is **off by default**. The user enables it per message with the Web toggle
 next to Strict citations; the chat route sends `web: "allowed"` on `/prompt`

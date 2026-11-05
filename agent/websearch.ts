@@ -6,13 +6,16 @@
 // user data.
 //
 // The node is the only edge between the sandbox and the web. Two calls:
-//   POST /search {query, lang?, max?} -> [{sourceId, title, domain, snippet}]
-//   POST /read   {sourceId}           -> {untrusted, url, title, text, sha256}
-// The model never names a URL: sourceIds are opaque tokens resolved from this
-// run's table. `/read` refuses a `url` argument by name (no_url_in_arguments),
-// an id the run never received (unknown_source), a second read of the same
-// result, and the fifth search of a run (budget_exhausted). The run id rides in
-// the `x-run-id` header, set by the agent tool, never by the model.
+//   POST /search {query, lang?, max?} -> {requestId, results, diagnostics}
+//   POST /read   {sourceId}           -> {requestId, page, diagnostics}
+// The model sees the compact `results` array and the `page` object; programs
+// that call the tools see the validated envelope. `page.text` is at most 6000
+// characters, selected from a head window plus a focus window. Search results
+// never carry a URL: sourceIds are opaque tokens resolved from this run's
+// table. `/read` refuses a `url` argument by name (no_url_in_arguments), an id
+// the run never received (unknown_source), a second read of the same result,
+// and the fifth search of a run (budget_exhausted). The run id rides in the
+// `x-run-id` header, set by the agent tool, never by the model.
 //
 // Page fetches go through Camofox (a Firefox over REST): a raw fetch here
 // would need egress in the node, which is exactly what this topology removes.
@@ -21,6 +24,24 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { pathToFileURL } from "node:url";
 import { HttpError, json, readRawBody } from "./http.ts";
+import {
+	WEB_SOURCE_ID_PATTERN,
+	isCamofoxEvaluate,
+	isCamofoxPage,
+	isCamofoxTab,
+	isSearxResult,
+	isSearxngResponse,
+	isWebReadEnvelope,
+	isWebSearchEnvelope,
+	type CamofoxEvaluate,
+	type CamofoxPage,
+	type CamofoxTab,
+	type SearxResult,
+	type SearxngResponse,
+	type WebReadEnvelope,
+	type WebReadWindow,
+	type WebSearchEnvelope,
+} from "./web-protocol.ts";
 
 const DEFAULT_PORT = 8082;
 const MAX_BODY_BYTES = 16 * 1024;
@@ -34,15 +55,66 @@ export const MAX_READ_CHARS = 6000;
 
 const RUN_ID_MAX = 128;
 const RUN_ID_RE = /^[A-Za-z0-9._:-]+$/;
-const SOURCE_ID_RE = /^web_[A-Za-z0-9_-]{8,64}$/;
-/** The page text expression: title plus readable body, capped before it leaves
- * the browser so a huge page cannot flood the node. */
-const PAGE_EXPRESSION =
-	"JSON.stringify({title: document.title, text: (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 20000)})";
+const CALL_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const SOURCE_ID_RE = new RegExp(WEB_SOURCE_ID_PATTERN);
+/** The browser renders semantic blocks as Markdown-like text. It keeps the
+ * full visible length so the node can report an honest `totalChars`. */
+const PAGE_TEXT_CEILING = 60_000;
+const HEAD_WINDOW_CHARS = 2_500;
+const MAX_OPEN_ATTEMPTS = 2;
+const MAX_EVALUATE_ATTEMPTS = 3;
+
+const PAGE_EXPRESSION = `(() => {
+	const body = document.body;
+	if (!body) return JSON.stringify({ title: document.title, text: '', totalChars: 0 });
+	const textOf = (node) => ((node.innerText || node.textContent || '').trim());
+	const nodes = Array.from(body.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,pre,tr')).slice(0, 400);
+	const blocks = [];
+	for (const node of nodes) {
+		const tag = node.tagName.toLowerCase();
+		let value = '';
+		if (tag === 'tr') {
+			value = Array.from(node.querySelectorAll('th,td')).map(textOf).join(' | ');
+			if (value) value = '| ' + value + ' |';
+		} else {
+			value = textOf(node);
+		}
+		if (!value) continue;
+		value = value.slice(0, 2000);
+		let kind = 'p';
+		if (/^h[1-6]$/.test(tag)) kind = tag;
+		else if (tag === 'li' || tag === 'pre' || tag === 'tr') kind = tag;
+		blocks.push({ kind, text: value });
+	}
+	if (blocks.length === 0) {
+		const fallback = (body.innerText || body.textContent || '').slice(0, ${PAGE_TEXT_CEILING});
+		return JSON.stringify({ title: document.title, text: fallback, totalChars: fallback.length });
+	}
+	const render = (block) => {
+		if (block.kind[0] === 'h') return '#'.repeat(Number(block.kind[1])) + ' ' + block.text;
+		if (block.kind === 'li') return '- ' + block.text;
+		if (block.kind === 'pre') return '\`\`\`\\n' + block.text + '\\n\`\`\`';
+		return block.text;
+	};
+	let text = '';
+	for (const block of blocks) {
+		text += (text ? '\\n\\n' : '') + render(block);
+		if (text.length >= ${PAGE_TEXT_CEILING}) break;
+	}
+	const totalChars = text.length;
+	text = text.slice(0, ${PAGE_TEXT_CEILING});
+	return JSON.stringify({ title: document.title, text, totalChars });
+})()`;
 
 export type WebsearchLog = (...args: unknown[]) => void;
 
-export type WebsearchSource = { readonly url: string; readonly title: string };
+export type WebsearchSource = {
+	readonly url: string;
+	readonly title: string;
+	/** Server-side terms from the query/title/snippet, used only to select a
+	 * reading window. Never model-supplied and never returned to the model. */
+	readonly focus: readonly string[];
+};
 
 export type WebsearchOptions = {
 	readonly port?: number;
@@ -86,6 +158,9 @@ type RunState = {
 	token: string;
 	searches: number;
 	reads: number;
+	/** A failed upstream call must not spend the per-run budget. */
+	searchInFlight: number;
+	readInFlight: Set<string>;
 	sources: Map<string, WebsearchSource>;
 	read: Set<string>;
 };
@@ -118,6 +193,8 @@ class RunTable {
 			token,
 			searches: 0,
 			reads: 0,
+			searchInFlight: 0,
+			readInFlight: new Set(),
 			sources: new Map(),
 			read: new Set(),
 		});
@@ -231,6 +308,13 @@ const requireRun = (req: IncomingMessage): string => {
 	return runId;
 };
 
+const requestIdOf = (req: IncomingMessage): string => {
+	const raw = req.headers["x-call-id"];
+	const value = Array.isArray(raw) ? raw[0] : raw;
+	if (typeof value === "string" && CALL_ID_RE.test(value)) return value;
+	return `req_${randomBytes(9).toString("base64url")}`;
+};
+
 const readJson = async (req: IncomingMessage): Promise<Record<string, unknown>> => {
 	const bytes = await readRawBody(req, MAX_BODY_BYTES);
 	if (bytes.length === 0) return {};
@@ -296,9 +380,99 @@ const httpUrl = (value: string): string | null => {
 	}
 };
 
-// ── the two upstream clients ────────────────────────────────────────────────
+const STOP_WORDS = new Set([
+	"about", "after", "again", "from", "into", "that", "their", "there", "these",
+	"this", "what", "when", "where", "which", "with", "would", "your",
+	"per", "con", "della", "delle", "dello", "della", "delle", "sono", "questa",
+	"questo", "quello", "che", "non", "una", "uno", "sono", "come", "anche",
+]);
 
-type SearxResult = { readonly title?: unknown; readonly url?: unknown; readonly content?: unknown };
+/** Server-side focus terms: the model never chooses the reading window. */
+export const focusTermsOf = (parts: readonly (string | undefined)[]): string[] => {
+	const text = parts.filter((part): part is string => typeof part === "string").join(" ").toLowerCase();
+	const tokens = text.match(/[\p{L}\p{N}]{4,}/gu) ?? [];
+	const terms: string[] = [];
+	const seen = new Set<string>();
+	for (const token of tokens) {
+		if (STOP_WORDS.has(token) || seen.has(token)) continue;
+		seen.add(token);
+		terms.push(token);
+		if (terms.length >= 16) break;
+	}
+	return terms;
+};
+
+export type ReadWindowSelection = { readonly text: string; readonly window: WebReadWindow };
+
+/** Keep a head window and a bounded window around the best focus/heading hit.
+ * `maxChars` stays 6000: the eval's deep-marker loss came from taking only the
+ * first 6000 characters, not from the size of the cap itself. */
+export const selectReadWindow = (
+	text: string,
+	terms: readonly string[],
+	maxChars: number = MAX_READ_CHARS,
+): ReadWindowSelection => {
+	if (text.length <= maxChars) {
+		return { text, window: { mode: "full", headChars: text.length, start: 0, end: text.length } };
+	}
+	const headChars = Math.min(HEAD_WINDOW_CHARS, maxChars);
+	const head = text.slice(0, headChars);
+	const windowSize = maxChars - head.length;
+	const lower = text.toLowerCase();
+	const starts = new Set<number>([headChars]);
+	for (const term of terms) {
+		let from = headChars;
+		for (let found = 0; found < 40; found++) {
+			const at = lower.indexOf(term, from);
+			if (at < 0) break;
+			starts.add(Math.max(headChars, at - 200));
+			from = at + term.length;
+		}
+	}
+	const heading = /^#{1,6} /gm;
+	let match: RegExpExecArray | null;
+	while ((match = heading.exec(text)) !== null) {
+		if (match.index >= headChars) starts.add(Math.max(headChars, match.index - 200));
+		if (starts.size >= 80) break;
+	}
+	let best = headChars;
+	let bestScore = -1;
+	for (const start of starts) {
+		const end = Math.min(text.length, start + windowSize);
+		if (end <= start) continue;
+		const slice = text.slice(start, end);
+		const sliceLower = slice.toLowerCase();
+		let distinct = 0;
+		for (const term of terms) if (sliceLower.includes(term)) distinct += 1;
+		const headings = (slice.match(/^#{1,6} /gm) ?? []).length;
+		const score = distinct * 2 + headings;
+		if (score > bestScore) {
+			bestScore = score;
+			best = start;
+		}
+	}
+	const focus = text.slice(best, Math.min(text.length, best + windowSize));
+	const mode = best > headChars && terms.length > 0 ? "head+focus" : "head";
+	return {
+		text: head + focus,
+		window: { mode, headChars: head.length, start: best, end: best + focus.length },
+	};
+};
+
+const suspendedOf = (value: unknown): string[] => {
+	if (!Array.isArray(value)) return [];
+	const names: string[] = [];
+	for (const entry of value) {
+		if (Array.isArray(entry) && typeof entry[0] === "string") names.push(entry[0]);
+		else if (typeof entry === "object" && entry !== null) {
+			const record = entry as Record<string, unknown>;
+			if (typeof record["engine"] === "string") names.push(record["engine"]);
+		}
+	}
+	return [...new Set(names)];
+};
+
+// ── the two upstream clients ────────────────────────────────────────────────
 
 /** The default engine set can be entirely suspended (CAPTCHA, rate limits), in
  * which case SearXNG answers 200 with an empty list and the model sees "no
@@ -312,13 +486,28 @@ const SEARCH_ATTEMPT_TIMEOUT_MS = 10_000;
 /** Overall cascade budget, below web-tools' 30s abort. */
 const SEARCH_DEADLINE_MS = 25_000;
 
+type SearxAttempt = {
+	readonly results: readonly SearxResult[];
+	readonly suspended: readonly string[];
+	readonly dropped: number;
+};
+
+type SearxOutcome = {
+	readonly results: readonly SearxResult[];
+	readonly enginesTried: readonly string[];
+	readonly fallbackUsed: boolean;
+	readonly suspendedEngines: readonly string[];
+	readonly droppedCount: number;
+	readonly elapsedMs: number;
+};
+
 const searxngAttempt = async (
 	base: string,
 	query: string,
 	lang: string | undefined,
 	engine: string | undefined,
 	signal: AbortSignal,
-): Promise<readonly SearxResult[]> => {
+): Promise<SearxAttempt> => {
 	const url = new URL(`${baseOf(base)}/search`);
 	url.searchParams.set("q", query);
 	url.searchParams.set("format", "json");
@@ -341,26 +530,46 @@ const searxngAttempt = async (
 	} catch {
 		throw new WebsearchError(502, "search_unavailable", "SearXNG did not answer JSON (format=json disabled?)");
 	}
-	const results = (doc as { results?: unknown }).results;
-	return Array.isArray(results) ? (results as SearxResult[]) : [];
+	if (!isSearxngResponse(doc)) {
+		throw new WebsearchError(502, "search_unavailable", "SearXNG returned an invalid JSON envelope");
+	}
+	const results: SearxResult[] = [];
+	let dropped = 0;
+	for (const item of doc.results) {
+		if (isSearxResult(item)) results.push(item);
+		else dropped += 1;
+	}
+	return { results, suspended: suspendedOf(doc.unresponsive_engines), dropped };
 };
 
 /** Try the default engine set first, then one engine at a time. An empty 200 is
  * not an error: keep going until an engine returns results or the budget runs
  * out. A refusal is surfaced only when no attempt answered at all, so "no
  * results" and "search stack down" stay distinguishable. */
-const searxngSearch = async (base: string, query: string, lang: string | undefined): Promise<readonly SearxResult[]> => {
-	const deadline = Date.now() + SEARCH_DEADLINE_MS;
+const searxngSearch = async (base: string, query: string, lang: string | undefined): Promise<SearxOutcome> => {
+	const started = Date.now();
+	const deadline = started + SEARCH_DEADLINE_MS;
 	let lastRefusal: WebsearchError | null = null;
 	let answered = false;
+	const enginesTried: string[] = [];
+	const suspended = new Set<string>();
+	let winning: SearxAttempt | null = null;
+	let fallbackUsed = false;
 	for (const engine of [undefined, ...SEARXNG_FALLBACK_ENGINES]) {
 		const remaining = deadline - Date.now();
 		if (remaining <= 0) break;
+		enginesTried.push(engine ?? "default");
 		const signal = AbortSignal.timeout(Math.min(SEARCH_ATTEMPT_TIMEOUT_MS, remaining));
 		try {
-			const results = await searxngAttempt(base, query, lang, engine, signal);
+			const attempt = await searxngAttempt(base, query, lang, engine, signal);
 			answered = true;
-			if (results.length > 0) return results;
+			for (const name of attempt.suspended) suspended.add(name);
+			if (attempt.results.length > 0) {
+				winning = attempt;
+				fallbackUsed = engine !== undefined;
+				break;
+			}
+			if (winning === null) winning = attempt;
 		} catch (error) {
 			lastRefusal =
 				error instanceof WebsearchError
@@ -369,10 +578,97 @@ const searxngSearch = async (base: string, query: string, lang: string | undefin
 		}
 	}
 	if (!answered && lastRefusal !== null) throw lastRefusal;
-	return [];
+	const outcome = winning ?? { results: [], suspended: [], dropped: 0 };
+	return {
+		results: outcome.results,
+		enginesTried,
+		fallbackUsed,
+		suspendedEngines: [...suspended],
+		droppedCount: outcome.dropped,
+		elapsedMs: Date.now() - started,
+	};
 };
 
-type CamofoxRead = { readonly title: string; readonly text: string };
+type CamofoxRead = {
+	readonly title: string;
+	readonly text: string;
+	readonly totalChars: number;
+	readonly attempts: number;
+};
+
+type CamofoxOnce = { readonly page: CamofoxPage; readonly attempts: number } | null;
+
+const camofoxOnce = async (
+	base: string,
+	key: string,
+	user: string,
+	sessionKey: string,
+	target: string,
+	delayMs: number,
+): Promise<CamofoxOnce> => {
+	const headers: Record<string, string> = { "content-type": "application/json" };
+	if (key !== "") headers.authorization = `Bearer ${key}`;
+	const root = baseOf(base);
+	let response: Response;
+	try {
+		response = await fetch(`${root}/tabs`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ userId: user, sessionKey, url: target }),
+			redirect: "error",
+		});
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		throw new WebsearchError(502, "read_unavailable", `Camofox did not answer: ${reason}`);
+	}
+	if (!response.ok) throw new WebsearchError(502, "read_unavailable", `Camofox answered ${response.status} on /tabs`);
+	const opened: unknown = await response.json().catch(() => ({}));
+	if (!isCamofoxTab(opened)) throw new WebsearchError(502, "read_unavailable", "Camofox returned no tabId");
+	const tab: CamofoxTab = opened;
+	let attempts = 1;
+	try {
+		for (let attempt = 0; attempt < MAX_EVALUATE_ATTEMPTS; attempt++) {
+			attempts += 1;
+			if (attempt > 0 && delayMs > 0) await sleep(delayMs);
+			let evaluated: Response;
+			try {
+				evaluated = await fetch(`${root}/tabs/${encodeURIComponent(tab.tabId)}/evaluate`, {
+					method: "POST",
+					headers,
+					body: JSON.stringify({ userId: user, expression: PAGE_EXPRESSION }),
+					redirect: "error",
+				});
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				throw new WebsearchError(502, "read_unavailable", `Camofox evaluate did not answer: ${reason}`);
+			}
+			if (evaluated.status === 401 || evaluated.status === 403) {
+				// A missing or wrong CAMOFOX_API_KEY lands here; retries cannot fix it.
+				throw new WebsearchError(502, "read_unavailable", `Camofox refused the evaluate (${evaluated.status})`);
+			}
+			if (!evaluated.ok) continue;
+			const body: unknown = await evaluated.json().catch(() => ({}));
+			if (!isCamofoxEvaluate(body)) continue;
+			const evaluatedBody: CamofoxEvaluate = body;
+			let page: unknown;
+			try {
+				page = JSON.parse(evaluatedBody.result);
+			} catch {
+				continue;
+			}
+			if (!isCamofoxPage(page)) continue;
+			if (page.text === "") continue;
+			return { page, attempts };
+		}
+		return null;
+	} finally {
+		// Always close: no shared history, no leaked tabs between runs.
+		await fetch(`${root}/tabs/${encodeURIComponent(tab.tabId)}?userId=${encodeURIComponent(user)}`, {
+			method: "DELETE",
+			headers,
+		}).catch(() => undefined);
+	}
+};
 
 const camofoxRead = async (
 	base: string,
@@ -382,69 +678,33 @@ const camofoxRead = async (
 	target: string,
 	delayMs: number,
 ): Promise<CamofoxRead> => {
-	const headers: Record<string, string> = { "content-type": "application/json" };
-	if (key !== "") headers.authorization = `Bearer ${key}`;
-	const root = baseOf(base);
-	let tabId: string | null = null;
-	try {
-		let response: Response;
+	let attempts = 0;
+	let lastRefusal: WebsearchError | null = null;
+	for (let open = 0; open < MAX_OPEN_ATTEMPTS; open++) {
 		try {
-			response = await fetch(`${root}/tabs`, {
-				method: "POST",
-				headers,
-				body: JSON.stringify({ userId: user, sessionKey, url: target }),
-				redirect: "error",
-			});
+			const once = await camofoxOnce(base, key, user, sessionKey, target, delayMs);
+			attempts += once?.attempts ?? MAX_EVALUATE_ATTEMPTS + 1;
+			if (once !== null) {
+				return {
+					title: once.page.title ?? "",
+					text: once.page.text,
+					totalChars: once.page.totalChars,
+					attempts,
+				};
+			}
+			lastRefusal = new WebsearchError(502, "read_unavailable", "the page produced no text");
 		} catch (error) {
-			const reason = error instanceof Error ? error.message : String(error);
-			throw new WebsearchError(502, "read_unavailable", `Camofox did not answer: ${reason}`);
+			const refusal =
+				error instanceof WebsearchError
+					? error
+					: new WebsearchError(502, "read_unavailable", error instanceof Error ? error.message : String(error));
+			attempts += 1;
+			if (error instanceof WebsearchError && error.message.includes("refused the evaluate")) throw error;
+			lastRefusal = refusal;
 		}
-		if (!response.ok) throw new WebsearchError(502, "read_unavailable", `Camofox answered ${response.status} on /tabs`);
-		const opened = (await response.json().catch(() => ({}))) as { tabId?: unknown };
-		if (typeof opened.tabId !== "string" || opened.tabId === "") {
-			throw new WebsearchError(502, "read_unavailable", "Camofox returned no tabId");
-		}
-		tabId = opened.tabId;
-		// A freshly opened tab may still be navigating; a couple of evaluates
-		// absorb that without turning a slow page into a hard failure.
-		for (let attempt = 0; attempt < 3; attempt++) {
-			if (attempt > 0 && delayMs > 0) await sleep(delayMs);
-			const evaluated = await fetch(`${root}/tabs/${encodeURIComponent(tabId)}/evaluate`, {
-				method: "POST",
-				headers,
-				body: JSON.stringify({ userId: user, expression: PAGE_EXPRESSION }),
-				redirect: "error",
-			});
-			if (evaluated.status === 401 || evaluated.status === 403) {
-				// A missing or wrong CAMOFOX_API_KEY lands here; without this the
-				// retry loop turns an auth failure into "the page produced no text".
-				throw new WebsearchError(502, "read_unavailable", `Camofox refused the evaluate (${evaluated.status})`);
-			}
-			if (!evaluated.ok) continue;
-			const body = (await evaluated.json().catch(() => ({}))) as { result?: unknown };
-			const raw = typeof body.result === "string" ? body.result : "";
-			if (raw === "") continue;
-			let page: { title?: unknown; text?: unknown };
-			try {
-				page = JSON.parse(raw) as { title?: unknown; text?: unknown };
-			} catch {
-				continue;
-			}
-			const text = typeof page.text === "string" ? page.text : "";
-			if (text !== "") {
-				return { title: typeof page.title === "string" ? page.title : "", text };
-			}
-		}
-		throw new WebsearchError(502, "read_unavailable", "the page produced no text");
-	} finally {
-		if (tabId !== null) {
-			// Always close: no shared history, no leaked tabs between runs.
-			await fetch(`${root}/tabs/${encodeURIComponent(tabId)}?userId=${encodeURIComponent(user)}`, {
-				method: "DELETE",
-				headers,
-			}).catch(() => undefined);
-		}
+		if (delayMs > 0) await sleep(delayMs);
 	}
+	throw lastRefusal ?? new WebsearchError(502, "read_unavailable", "the page produced no text");
 };
 
 // ── server ──────────────────────────────────────────────────────────────────
@@ -504,7 +764,13 @@ export const createWebsearchServer = async (options: WebsearchOptions = {}): Pro
 		return { run, runId };
 	};
 
-	const search = async (req: IncomingMessage): Promise<unknown> => {
+	const validated = <T>(value: unknown, guard: (candidate: unknown) => candidate is T, label: string): T => {
+		if (!guard(value)) throw new WebsearchError(500, "internal", `the node produced an invalid ${label} response`);
+		return value;
+	};
+
+	const search = async (req: IncomingMessage, requestId: string): Promise<WebSearchEnvelope> => {
+		const started = Date.now();
 		const body = await readJson(req);
 		const query = requireString(
 			body.query,
@@ -522,35 +788,67 @@ export const createWebsearchServer = async (options: WebsearchOptions = {}): Pro
 		}
 		if (searxngUrl === "") throw new WebsearchError(503, "search_unavailable", "SEARXNG_URL is not configured");
 		const { run } = authorizeRun(req);
-		if (run.searches >= MAX_SEARCHES_PER_RUN) {
+		if (run.searches + run.searchInFlight >= MAX_SEARCHES_PER_RUN) {
 			throw new WebsearchError(429, "budget_exhausted", `this run already spent its ${MAX_SEARCHES_PER_RUN} searches`);
 		}
+		run.searchInFlight += 1;
+		let outcome: SearxOutcome;
+		try {
+			outcome = await searxngSearch(searxngUrl, query, lang);
+		} finally {
+			run.searchInFlight -= 1;
+		}
 		run.searches += 1;
-		const raw = await searxngSearch(searxngUrl, query, lang);
-		const results: { sourceId: string; title: string; domain: string; snippet: string }[] = [];
+		const results: WebSearchEnvelope["results"] = [];
 		const seen = new Set<string>();
-		for (const item of raw) {
+		let dropped = outcome.droppedCount;
+		for (const item of outcome.results) {
 			if (results.length >= max) break;
-			if (typeof item.url !== "string") continue;
+			if (typeof item.url !== "string") {
+				dropped += 1;
+				continue;
+			}
 			const url = httpUrl(item.url);
-			if (url === null || seen.has(url)) continue;
+			if (url === null || seen.has(url)) {
+				dropped += 1;
+				continue;
+			}
 			seen.add(url);
 			// Opaque id: the model cannot turn a result into a fetch target, and
 			// the id carries neither the run nor the URL.
 			const sourceId = `web_${randomBytes(9).toString("base64url")}`;
 			const title = typeof item.title === "string" && item.title !== "" ? item.title : new URL(url).hostname;
-			run.sources.set(sourceId, { url, title });
+			const snippet = typeof item.content === "string" ? item.content.slice(0, 500) : "";
+			run.sources.set(sourceId, {
+				url,
+				title,
+				focus: focusTermsOf([query, title, snippet]),
+			});
 			results.push({
 				sourceId,
 				title: title.slice(0, 300),
 				domain: new URL(url).hostname,
-				snippet: typeof item.content === "string" ? item.content.slice(0, 500) : "",
+				snippet,
 			});
 		}
-		return results;
+		const envelope: unknown = {
+			requestId,
+			results,
+			diagnostics: {
+				enginesTried: [...outcome.enginesTried],
+				fallbackUsed: outcome.fallbackUsed,
+				suspendedEngines: [...outcome.suspendedEngines],
+				droppedCount: dropped,
+				partial: outcome.fallbackUsed || dropped > 0 || results.length === 0,
+				resultCount: results.length,
+				elapsedMs: Date.now() - started,
+			},
+		};
+		return validated(envelope, isWebSearchEnvelope, "/search");
 	};
 
-	const read = async (req: IncomingMessage): Promise<unknown> => {
+	const read = async (req: IncomingMessage, requestId: string): Promise<WebReadEnvelope> => {
+		const started = Date.now();
 		const body = await readJson(req);
 		// RFC 0016 §5: there is no URL argument, ever. Name the refusal so a
 		// model that tries anyway can correct itself on the next call.
@@ -571,27 +869,48 @@ export const createWebsearchServer = async (options: WebsearchOptions = {}): Pro
 		if (source === undefined) {
 			throw new WebsearchError(404, "unknown_source", "sourceId was not issued to this run");
 		}
-		if (run.read.has(sourceId)) {
+		if (run.read.has(sourceId) || run.readInFlight.has(sourceId)) {
 			throw new WebsearchError(429, "already_read", "this result was already read in this run");
 		}
-		if (run.reads >= MAX_READS_PER_RUN) {
+		if (run.reads + run.readInFlight.size >= MAX_READS_PER_RUN) {
 			throw new WebsearchError(429, "budget_exhausted", `this run already spent its ${MAX_READS_PER_RUN} reads`);
 		}
 		if (camofoxUrl === "") throw new WebsearchError(503, "read_unavailable", "CAMOFOX_URL is not configured");
+		run.readInFlight.add(sourceId);
+		let fetched: CamofoxRead;
+		try {
+			fetched = await camofoxRead(camofoxUrl, camofoxKey, user, runId, source.url, delayMs);
+		} finally {
+			run.readInFlight.delete(sourceId);
+		}
 		run.reads += 1;
 		run.read.add(sourceId);
-		const page = await camofoxRead(camofoxUrl, camofoxKey, user, runId, source.url, delayMs);
-		const text = page.text.slice(0, MAX_READ_CHARS);
-		return {
+		const selection = selectReadWindow(fetched.text, source.focus);
+		const text = selection.text.slice(0, MAX_READ_CHARS);
+		const page = {
 			untrusted: true,
 			url: source.url,
-			title: page.title !== "" ? page.title.slice(0, 300) : source.title,
+			title: fetched.title !== "" ? fetched.title.slice(0, 300) : source.title,
 			text,
 			sha256: createHash("sha256").update(text).digest("hex"),
+			truncated: fetched.totalChars > text.length,
+			totalChars: fetched.totalChars,
 		};
+		const envelope: unknown = {
+			requestId,
+			page,
+			diagnostics: {
+				readAttempts: fetched.attempts,
+				window: selection.window,
+				selectedChars: text.length,
+				elapsedMs: Date.now() - started,
+			},
+		};
+		return validated(envelope, isWebReadEnvelope, "/read");
 	};
 
 	const server = createServer((req, res) => {
+		const requestId = requestIdOf(req);
 		const url = new URL(req.url ?? "/", "http://websearch");
 		void (async () => {
 			try {
@@ -640,23 +959,23 @@ export const createWebsearchServer = async (options: WebsearchOptions = {}): Pro
 				}
 				if (req.method === "POST" && url.pathname === "/search") {
 					guard(req);
-					return json(res, 200, await search(req));
+					return json(res, 200, await search(req, requestId));
 				}
 				if (req.method === "POST" && url.pathname === "/read") {
 					guard(req);
-					return json(res, 200, await read(req));
+					return json(res, 200, await read(req, requestId));
 				}
-				return json(res, 404, { error: "not_found", message: `${req.method} ${url.pathname}` });
+				return json(res, 404, { error: "not_found", message: `${req.method} ${url.pathname}`, requestId });
 			} catch (error) {
 				if (error instanceof WebsearchError) {
 					// Never log the query or the page: only the refusal code.
 					if (error.code !== "forbidden_peer") log(`refused ${error.code}: ${error.message}`);
-					return json(res, error.status, { error: error.code, message: error.message });
+					return json(res, error.status, { error: error.code, message: error.message, requestId });
 				}
-				if (error instanceof HttpError) return json(res, error.status, error.body);
+				if (error instanceof HttpError) return json(res, error.status, { ...error.body, requestId });
 				const message = error instanceof Error ? error.message : String(error);
 				log(`websearch request failed: ${message}`);
-				return json(res, 500, { error: "internal", message });
+				return json(res, 500, { error: "internal", message, requestId });
 			}
 		})();
 	});

@@ -66,8 +66,8 @@ const scripted: FauxResponseFactory = (transcript) => {
 	const userText = lastUserText(transcript.messages);
 	if (/search the web/i.test(userText)) {
 		const read = resultOf(transcript.messages, "web_read");
-		if (read !== undefined && !read.isError) {
-			return fauxAssistantMessage([fauxText(`Read the page: ${read.text}`)]);
+		if (read !== undefined) {
+			return fauxAssistantMessage([fauxText(read.isError ? `Web failed: ${read.text}` : `Read the page: ${read.text}`)]);
 		}
 		const search = resultOf(transcript.messages, "web_search");
 		if (search !== undefined && !search.isError) {
@@ -92,14 +92,20 @@ const scripted: FauxResponseFactory = (transcript) => {
 
 const CONTROL = "c".repeat(64);
 const RUN_TOKEN = "run-token-1";
+const PAGE_TEXT = "The contract renews on 1 March 2027.";
 
-const stubNode = async (): Promise<{ url: string; close: () => Promise<void>; runIds: string[] }> => {
+type StubOptions = { readonly malformedRead?: boolean };
+
+const stubNode = async (
+	options: StubOptions = {},
+): Promise<{ url: string; close: () => Promise<void>; runIds: string[] }> => {
 	const runIds: string[] = [];
 	const server = createServer((req, res) => {
 		void (async () => {
 			const chunks: Buffer[] = [];
 			for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
 			const runId = String(req.headers["x-run-id"] ?? "");
+			const requestId = String(req.headers["x-call-id"] ?? "req_test");
 			runIds.push(runId);
 			const body = chunks.length === 0 ? {} : (JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
 			const reply = (status: number, payload: unknown): void => {
@@ -114,19 +120,41 @@ const stubNode = async (): Promise<{ url: string; close: () => Promise<void>; ru
 				if (req.headers["x-run-token"] !== RUN_TOKEN) return reply(403, { error: "not_authorized" });
 			}
 			if (req.url === "/search") {
-				reply(200, [{ sourceId: "web_abcdefgh", title: "Renewal", domain: "example.com", snippet: "renewal" }]);
-				return;
+				return reply(200, {
+					requestId,
+					results: [{ sourceId: "web_abcdefgh", title: "Renewal", domain: "example.com", snippet: "renewal" }],
+					diagnostics: {
+						enginesTried: ["default"],
+						fallbackUsed: false,
+						suspendedEngines: [],
+						droppedCount: 0,
+						partial: false,
+						resultCount: 1,
+						elapsedMs: 1,
+					},
+				});
 			}
 			if (req.url === "/read") {
-				if (body.url !== undefined) return reply(400, { error: "no_url_in_arguments", message: "no url" });
-				reply(200, {
-					untrusted: true,
-					url: "https://example.com/renewal",
-					title: "Renewal",
-					text: "The contract renews on 1 March 2027.",
-					sha256: "0".repeat(64),
+				if (body.url !== undefined) return reply(400, { error: "no_url_in_arguments", message: "no url", requestId });
+				if (options.malformedRead === true) return reply(200, { not: "a page" });
+				return reply(200, {
+					requestId,
+					page: {
+						untrusted: true,
+						url: "https://example.com/renewal",
+						title: "Renewal",
+						text: PAGE_TEXT,
+						sha256: "0".repeat(64),
+						truncated: false,
+						totalChars: PAGE_TEXT.length,
+					},
+					diagnostics: {
+						readAttempts: 1,
+						window: { mode: "full", headChars: PAGE_TEXT.length, start: 0, end: PAGE_TEXT.length },
+						selectedChars: PAGE_TEXT.length,
+						elapsedMs: 1,
+					},
 				});
-				return;
 			}
 			reply(404, { error: "not_found" });
 		})();
@@ -215,7 +243,7 @@ test("web_search and web_read reach the node, and the first read taints the conv
 		assert.equal(await first.agent.webTainted(), false);
 		const result = (await first.agent.prompt("search the web for the renewal date", "run-web-1", "off", "allowed")) as PromptResult;
 		assert.equal(result.status, "done", result.reasonDetail ?? "");
-		assert.ok(result.answer?.includes("The contract renews on 1 March 2027."), result.answer ?? "no answer");
+		assert.ok(result.answer?.includes(PAGE_TEXT), result.answer ?? "no answer");
 		// The trusted admission path registered the run, then the two tools
 		// carried the same run id and the token the node returned.
 		assert.deepEqual(node.runIds, ["run-web-1", "run-web-1", "run-web-1"]);
@@ -227,6 +255,27 @@ test("web_search and web_read reach the node, and the first read taints the conv
 		const restarted = await buildAgent(workspace, sessionDb);
 		assert.equal(await restarted.agent.webTainted(), true, "the taint survives a restart");
 		await restarted.agent.close();
+	} finally {
+		if (saved === undefined) delete process.env.WEBSEARCH_URL;
+		else process.env.WEBSEARCH_URL = saved;
+		await node.close();
+	}
+});
+
+test("a malformed node response is refused and does not taint the conversation", async () => {
+	const node = await stubNode({ malformedRead: true });
+	const workspace = await mkdtemp(join(tmpdir(), "web-malformed-"));
+	const sessionDb = join(workspace, "session.sqlite");
+	const saved = process.env.WEBSEARCH_URL;
+	process.env.WEBSEARCH_URL = node.url;
+	try {
+		const { agent } = await buildAgent(workspace, sessionDb);
+		await agent.configureWeb(CONTROL);
+		const result = (await agent.prompt("search the web for the renewal date", "run-web-4", "off", "allowed")) as PromptResult;
+		assert.equal(result.status, "done", result.reasonDetail ?? "");
+		assert.ok(result.answer?.includes("invalid_response"), result.answer ?? "no answer");
+		assert.equal(await agent.webTainted(), false);
+		await agent.close();
 	} finally {
 		if (saved === undefined) delete process.env.WEBSEARCH_URL;
 		else process.env.WEBSEARCH_URL = saved;

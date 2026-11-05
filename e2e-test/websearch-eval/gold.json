@@ -1,0 +1,152 @@
+{
+  "version": 3,
+  "name": "affido web-search gold dataset",
+  "frozen_at": "2026-11-05",
+  "frozen_by": "pre-registration before the scored run",
+  "provenance": "Queries and URLs were chosen after a discovery pass against the live operator stack (SearXNG JSON endpoint and Camofox /tabs+/evaluate). Relevance labels and content markers were written before any scored attempt. Markers come from an independent host-side fetch of each URL (curl + HTML text extraction), not from the affido web_read output. Raw discovery outputs are kept in runs/<run-id>/pre-gold/. Version 2 dropped the lang field: language=en selects a different SearXNG engine set and makes the target URLs unstable; the scored run uses the node's default engine set, the same one the faux /prompt path uses. Version 3 keeps the frozen queries, URLs and markers unchanged but documents the new response envelopes, structuredOutput, requestId, diagnostics and head+focus reading window. A new scored run with a new run id and date is required; the 20261105T100715Z numbers are historical.",
+  "tool_contract": "POST /search returns {requestId, results:[{sourceId, title, domain, snippet}], diagnostics}; the model sees only results, which contain NO URL. POST /read returns {requestId, page:{untrusted,url,title,text,sha256,truncated,totalChars}, diagnostics}. A specific URL cannot be passed to /read. The harness selects up to 3 results whose domain matches the gold URL's domain, reads their opaque ids, and compares the URL revealed in page.url with the gold URL. url_reach_rate measures that resolution, not a URL lookup.",
+  "scoring": {
+    "relevance": "A result is relevant when its domain ends with one of relevance.domains, or when title+snippet+domain contain at least 2 of relevance.topical_terms. A result is irrelevant first when its URL/title/snippet matches exclude_url_regex, or when its domain ends with one of exclude_domains. Matching is case-insensitive; domain matching is suffix-based.",
+    "markers": "A marker is present when the whitespace-collapsed, lowercase delivered text contains the whitespace-collapsed, lowercase marker. head_markers are expected inside the first 6000 characters of the page's visible text; deep_markers are expected after it (verified at freeze time against Camofox full innerText). The node may select a head+focus window, so a deep marker can appear in the delivered 6000 characters without the whole page being delivered.",
+    "normalization": "URLs match when lowercase scheme + hostname without leading www. + pathname without trailing slash are equal; query strings and fragments are ignored. http and https are NOT interchangeable.",
+    "usable_read": "read_ok && envelope_ok && fidelity >= 0.60 && quality_score >= 0.70"
+  },
+  "queries": [
+    {
+      "id": "Q1",
+      "query": "Node.js 24 run TypeScript natively type stripping",
+      "lang": null,
+      "intent": "Find the official documentation for running TypeScript natively in Node.js (type stripping).",
+      "url_id": "U1",
+      "relevance": {
+        "domains": ["nodejs.org", "github.com/nodejs", "2ality.com", "v8.dev", "developer.mozilla.org"],
+        "exclude_domains": ["pinterest.com", "quora.com"],
+        "exclude_url_regex": [],
+        "topical_terms": ["node.js", "typescript", "type stripping", "natively", "node 24", "nodejs 24", "strip-types"]
+      }
+    },
+    {
+      "id": "Q2",
+      "query": "Svelte 5 runes $state documentation",
+      "lang": null,
+      "intent": "Find the official Svelte 5 documentation page for the $state rune.",
+      "url_id": "U2",
+      "relevance": {
+        "domains": ["svelte.dev", "sveltejs.github.io", "github.com/sveltejs"],
+        "exclude_domains": ["pinterest.com", "quora.com"],
+        "exclude_url_regex": [],
+        "topical_terms": ["svelte", "runes", "$state", "svelte 5", "reactivity", "rune"]
+      }
+    },
+    {
+      "id": "Q3",
+      "query": "HTTP status code 429 MDN",
+      "lang": null,
+      "intent": "Find the canonical HTTP 429 Too Many Requests reference page and its semantics (Retry-After, rate limiting).",
+      "url_id": "U3",
+      "relevance": {
+        "domains": ["developer.mozilla.org", "httpwg.org", "rfc-editor.org", "ietf.org"],
+        "exclude_domains": ["pinterest.com", "quora.com"],
+        "exclude_url_regex": [],
+        "topical_terms": ["429", "too many requests", "http", "rate limit", "retry-after"]
+      }
+    },
+    {
+      "id": "Q4",
+      "query": "ISO 8601 date and time format wikipedia",
+      "lang": null,
+      "intent": "Find the encyclopedic reference for the ISO 8601 date/time representation standard.",
+      "url_id": "U4",
+      "relevance": {
+        "domains": ["en.wikipedia.org", "it.wikipedia.org", "simple.wikipedia.org", "iso.org"],
+        "exclude_domains": ["pinterest.com", "quora.com"],
+        "exclude_url_regex": ["File:", "Wikipedia:", "Special:"],
+        "topical_terms": ["iso 8601", "date", "time", "calendar", "representation"]
+      }
+    },
+    {
+      "id": "Q5",
+      "query": "example domain illustrative examples",
+      "lang": null,
+      "intent": "Find the authoritative explanation of reserved example domains and the example.com landing page.",
+      "url_id": "U5",
+      "relevance": {
+        "domains": ["iana.org", "example.com", "example.org", "icann.org", "rfc-editor.org"],
+        "exclude_domains": ["quora.com", "namefi.io", "pinterest.com"],
+        "exclude_url_regex": [],
+        "topical_terms": ["example domain", "illustrative examples", "documentation purposes", "reserved", "example.com"]
+      }
+    }
+  ],
+  "urls": [
+    {
+      "id": "U1",
+      "url": "https://nodejs.org/learn/typescript/run-natively",
+      "query_id": "Q1",
+      "target_query": "Node.js 24 run TypeScript natively type stripping",
+      "lang": null,
+      "kind": "documentation, fits inside the 6000-char cap",
+      "expected_domain": "nodejs.org",
+      "expected_title_keywords": ["Running TypeScript Natively"],
+      "head_markers": ["Running TypeScript Natively", "Type stripping", "--experimental-strip-types", "Type checking"],
+      "deep_markers": [],
+      "frozen_full_innertext_chars": 5411
+    },
+    {
+      "id": "U2",
+      "url": "https://svelte.dev/docs/svelte/$state",
+      "query_id": "Q2",
+      "target_query": "Svelte 5 runes $state documentation",
+      "lang": null,
+      "kind": "long SPA documentation, exceeds the 6000-char cap",
+      "expected_domain": "svelte.dev",
+      "expected_title_keywords": ["$state"],
+      "head_markers": ["$state", "Deep state", "$state.snapshot", "$state.raw"],
+      "deep_markers": ["updates are synchronized", "Use this feature sparingly"],
+      "frozen_full_innertext_chars": 9468
+    },
+    {
+      "id": "U3",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/429",
+      "query_id": "Q3",
+      "target_query": "HTTP status code 429 MDN",
+      "lang": null,
+      "kind": "short technical reference, fits inside the cap",
+      "expected_domain": "developer.mozilla.org",
+      "expected_title_keywords": ["429 Too Many Requests"],
+      "head_markers": ["429 Too Many Requests", "too many requests in a given amount of time", "rate limiting", "Retry-After"],
+      "deep_markers": [],
+      "frozen_full_innertext_chars": 4391
+    },
+    {
+      "id": "U4",
+      "url": "https://en.wikipedia.org/wiki/ISO_8601",
+      "query_id": "Q4",
+      "target_query": "ISO 8601 date and time format wikipedia",
+      "lang": null,
+      "kind": "very long article, heavily truncated by the cap",
+      "expected_domain": "en.wikipedia.org",
+      "expected_title_keywords": ["ISO 8601"],
+      "head_markers": ["ISO 8601", "Data elements and interchange formats", "Calendar dates", "Ordinal dates"],
+      "deep_markers": ["Time zone designators", "Coordinated Universal Time", "Date and time values are ordered from the largest", "lexicographical order"],
+      "frozen_full_innertext_chars": 52508
+    },
+    {
+      "id": "U5",
+      "url": "https://www.example.com/",
+      "query_id": "Q5",
+      "target_query": "example domain illustrative examples",
+      "lang": null,
+      "kind": "tiny static page, control case",
+      "expected_domain": "example.com",
+      "expected_title_keywords": ["Example Domain"],
+      "head_markers": [
+        "This domain is for use in documentation examples without needing permission",
+        "This is not a service",
+        "avoid relying on it for testing and monitoring purposes"
+      ],
+      "deep_markers": [],
+      "frozen_full_innertext_chars": 917
+    }
+  ]
+}

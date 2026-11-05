@@ -81,6 +81,10 @@ probe="$(docker compose exec -T sandbox-manager python3 - \
 	|| fail "the first result has no domain: ${probe}"
 [[ "$(printf '%s' "${probe}" | field "d['search']['leaksUrl']")" == "False" ]] \
 	|| fail "a sourceId carries the URL: ${probe}"
+[[ "$(printf '%s' "${probe}" | field "d['search']['requestId']")" == "e2e-probe" ]] \
+	|| fail "the search response lost its requestId: ${probe}"
+[[ "$(printf '%s' "${probe}" | field "d['search']['partial']")" == "True" ]] \
+	|| fail "a dropped result did not mark the search partial: ${probe}"
 [[ "$(printf '%s' "${probe}" | field "d['read']['status']")" == "200" ]] \
 	|| fail "read failed: ${probe}"
 [[ "$(printf '%s' "${probe}" | field "d['read']['untrusted']")" == "True" ]] \
@@ -89,6 +93,14 @@ probe="$(docker compose exec -T sandbox-manager python3 - \
 	|| fail "read text exceeds the 6000-char cap: ${probe}"
 [[ "$(printf '%s' "${probe}" | field "d['read']['hasText']")" == "True" ]] \
 	|| fail "the fetched page text did not arrive: ${probe}"
+[[ "$(printf '%s' "${probe}" | field "d['read']['requestId']")" == "e2e-probe" ]] \
+	|| fail "the read response lost its requestId: ${probe}"
+[[ "$(printf '%s' "${probe}" | field "d['read']['truncated']")" == "False" ]] \
+	|| fail "a short page is marked truncated: ${probe}"
+[[ "$(printf '%s' "${probe}" | field "d['read']['totalChars']")" -ge "$(printf '%s' "${probe}" | field "d['read']['chars']")" ]] \
+	|| fail "totalChars is smaller than the delivered text: ${probe}"
+[[ "$(printf '%s' "${probe}" | field "d['read']['window']['mode']")" == "full" ]] \
+	|| fail "a short page did not use the full window: ${probe}"
 [[ "$(printf '%s' "${probe}" | field "d['already_read']['status']")" == "429" ]] \
 	|| fail "a second read of one result was allowed: ${probe}"
 [[ "$(printf '%s' "${probe}" | field "d['already_read']['error']")" == "already_read" ]] \

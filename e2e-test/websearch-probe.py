@@ -37,7 +37,7 @@ def call(
     run_token: str | None = None,
 ) -> tuple[int, object]:
     data = None if payload is None else json.dumps(payload).encode()
-    headers = {"content-type": "application/json", "x-control-token": control}
+    headers = {"content-type": "application/json", "x-control-token": control, "x-call-id": "e2e-probe"}
     if run_id is not None:
         headers["x-run-id"] = run_id
     if run_token is not None:
@@ -83,24 +83,34 @@ out["web_off"] = {"status": status, "error": (body or {}).get("error") if isinst
 # 3. Authorised run: search, read, duplicate read, non-http/private filtering.
 token = register(run, True)
 status, first = call("POST", "/search", {"query": "contratto rinnovo"}, run_id=run, run_token=token)
-results = first if isinstance(first, list) else []
+envelope = first if isinstance(first, dict) else {}
+results = envelope.get("results") if isinstance(envelope.get("results"), list) else []
+diagnostics = envelope.get("diagnostics") if isinstance(envelope.get("diagnostics"), dict) else {}
 out["search"] = {
     "status": status,
+    "requestId": envelope.get("requestId"),
     "results": len(results),
     "sourceId": (results[0] or {}).get("sourceId") if results else None,
     "domain": (results[0] or {}).get("domain") if results else None,
     "leaksUrl": any("example.com" in str((r or {}).get("sourceId", "")) for r in results),
+    "partial": diagnostics.get("partial"),
 }
 source = out["search"]["sourceId"]
 
 if isinstance(source, str):
-    status, page = call("POST", "/read", {"sourceId": source}, run_id=run, run_token=token)
+    status, read_envelope = call("POST", "/read", {"sourceId": source}, run_id=run, run_token=token)
+    envelope = read_envelope if isinstance(read_envelope, dict) else {}
+    page = envelope.get("page") if isinstance(envelope.get("page"), dict) else {}
     out["read"] = {
         "status": status,
-        "untrusted": page.get("untrusted") if isinstance(page, dict) else None,
-        "url": page.get("url") if isinstance(page, dict) else None,
-        "chars": len(page.get("text") or "") if isinstance(page, dict) else 0,
-        "hasText": "renews" in (page.get("text") or "") if isinstance(page, dict) else False,
+        "requestId": envelope.get("requestId"),
+        "untrusted": page.get("untrusted"),
+        "url": page.get("url"),
+        "chars": len(page.get("text") or ""),
+        "hasText": "renews" in (page.get("text") or ""),
+        "truncated": page.get("truncated"),
+        "totalChars": page.get("totalChars"),
+        "window": (envelope.get("diagnostics") or {}).get("window"),
     }
     status, body = call("POST", "/read", {"sourceId": source}, run_id=run, run_token=token)
     out["already_read"] = {"status": status, "error": body.get("error") if isinstance(body, dict) else None}

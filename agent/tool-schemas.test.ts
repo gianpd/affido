@@ -6,8 +6,9 @@
 // first token — observed 2026-10-25 on corpus_read.lineRange, which settled
 // every prompt as model_error until the tuple was replaced with a bounded
 // number-array. A schema valid in both draft-07 and 2020-12 is valid for the
-// whole catalog, so this test validates every installed tool's parameters
-// against both meta-schemas: no provider may ever see an unportable schema.
+// whole catalog, so this test validates every installed tool's parameters and
+// response schemas against both meta-schemas: neither providers nor program
+// callers may see an unportable schema.
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -23,14 +24,17 @@ import { WorkspaceCitationStore } from "./workspace-store.ts";
 
 type JsonObject = { readonly [key: string]: unknown };
 
-const registryTools = async (): Promise<readonly { readonly name: string; readonly parameters: JsonObject }[]> => {
+const registryTools = async (): Promise<
+	readonly { readonly name: string; readonly parameters: JsonObject; readonly structuredOutput?: JsonObject }[]
+> => {
 	const workspace = await mkdtemp(join(tmpdir(), "tool-schemas-"));
 	const store = new WorkspaceCitationStore(new NodeExecutionEnv({ cwd: workspace }), BACKGROUND_CONTEXT);
 	const registry = createAgentRegistry({ name: "schema-test", workspace, store });
 	return registry.snapshot().tools().map(({ tool }) => {
 		const parameters = tool.parameters as JsonObject | undefined;
 		assert.ok(parameters !== undefined, `${tool.name} has no parameter schema`);
-		return { name: tool.name, parameters };
+		const structuredOutput = tool.structuredOutputSchema as unknown as JsonObject | undefined;
+		return { name: tool.name, parameters, ...(structuredOutput === undefined ? {} : { structuredOutput }) };
 	});
 };
 
@@ -41,12 +45,28 @@ test("every installed tool schema validates as JSON Schema draft-07 and 2020-12"
 	// CodingTools (read, write, edit, bash) plus the five citation tools; a
 	// shrinking count means a registration silently disappeared from the wire.
 	assert.ok(tools.length >= 9, `expected at least 9 tools, got ${tools.length}`);
-	for (const { name, parameters } of tools) {
+	for (const { name, parameters, structuredOutput } of tools) {
 		const valid7 = draft7.validateSchema(parameters);
 		assert.ok(valid7, `${name} is not draft-07: ${JSON.stringify(draft7.errors)}`);
 		const valid2020 = draft2020.validateSchema(parameters);
 		assert.ok(valid2020, `${name} is not 2020-12 (the DeepSeek gate): ${JSON.stringify(draft2020.errors)}`);
+		if (structuredOutput !== undefined) {
+			const validOutput7 = draft7.validateSchema(structuredOutput);
+			assert.ok(validOutput7, `${name} response is not draft-07: ${JSON.stringify(draft7.errors)}`);
+			const validOutput2020 = draft2020.validateSchema(structuredOutput);
+			assert.ok(validOutput2020, `${name} response is not 2020-12: ${JSON.stringify(draft2020.errors)}`);
+		}
 	}
+});
+
+test("both web tools declare a structured output schema; search results have no URL", async () => {
+	const tools = await registryTools();
+	const search = tools.find((tool) => tool.name === "web_search");
+	const read = tools.find((tool) => tool.name === "web_read");
+	assert.ok(search?.structuredOutput !== undefined, "web_search has no structuredOutputSchema");
+	assert.ok(read?.structuredOutput !== undefined, "web_read has no structuredOutputSchema");
+	assert.ok(!JSON.stringify(search?.structuredOutput).includes('"url"'), "web_search exposes a URL");
+	assert.ok(JSON.stringify(read?.structuredOutput).includes('"url"'), "web_read lost its URL");
 });
 
 test("corpus_read.lineRange is a bounded number-array, never draft-4 tuple items", async () => {

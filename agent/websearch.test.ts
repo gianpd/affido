@@ -1,7 +1,7 @@
-// RFC 0016 §5/§6/§7: the web-search node. Exercises the tool contract (opaque
-// source ids, no URL argument, budgets), the per-run authorisation gate (only a
-// run registered with the manager-delivered control token can search), and the
-// SearXNG / Camofox clients against local fakes. No Docker, no manager.
+// RFC 0016 §5/§6/§7: the web-search node. Exercises the shared response
+// schemas, opaque source ids, no URL argument, budgets, the per-run
+// authorisation gate, and the SearXNG / Camofox clients against local fakes.
+// No Docker, no manager.
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -12,12 +12,22 @@ import {
 	MAX_RESULTS,
 	MAX_SEARCHES_PER_RUN,
 	createWebsearchServer,
+	focusTermsOf,
 	peerAllowed,
+	selectReadWindow,
 	type WebsearchOptions,
 	type WebsearchServer,
 } from "./websearch.ts";
+import {
+	isWebError,
+	isWebReadEnvelope,
+	isWebSearchEnvelope,
+	type WebReadEnvelope,
+	type WebSearchEnvelope,
+} from "./web-protocol.ts";
 
 type Fake = { readonly url: string; readonly close: () => Promise<void>; readonly calls: string[] };
+type Reply = { readonly status: number; readonly body: unknown };
 
 const CONTROL = "c".repeat(64);
 
@@ -73,76 +83,28 @@ const fakeSearxng = async (): Promise<Fake> => {
 	return { ...listening, calls };
 };
 
-test("search falls back to one engine when the default set is suspended", async () => {
+const fakeSearxngUnavailableFirstCall = async (): Promise<Fake> => {
 	const calls: string[] = [];
+	let seen = 0;
 	const server = createServer((req, res) => {
 		const url = new URL(req.url ?? "/", "http://fake");
 		calls.push(url.search);
-		const engine = url.searchParams.get("engines");
-		const results = engine === "bing" ? [{ title: "Bing page", url: "https://example.com/bing", content: "bing" }] : [];
+		seen += 1;
+		// The default engine set plus all six fallbacks fail once; the next
+		// search call is healthy. A failed call must not spend the run budget.
+		if (seen <= 7) {
+			res.writeHead(502, { "content-type": "application/json" });
+			res.end(JSON.stringify({ error: "upstream" }));
+			return;
+		}
 		res.writeHead(200, { "content-type": "application/json" });
-		res.end(JSON.stringify({ results, unresponsive_engines: engine === null ? [["brave", "Suspended: timeout"]] : [] }));
+		res.end(JSON.stringify({ results: [{ title: "Recovered", url: "https://example.com/recovered", content: "ok" }] }));
 	});
 	const listening = await listen(server);
-	const camofox = await fakeCamofox("x");
-	const node = await start({ searxngUrl: listening.url, camofoxUrl: camofox.url });
-	try {
-		const runToken = (await register(node, "run-cascade")).token ?? "";
-		const search = await post(node, "/search", { query: "renewal" }, "run-cascade", runToken);
-		assert.equal(search.status, 200);
-		const results = search.body as { title: string }[];
-		assert.equal(results.length, 1);
-		assert.equal(results[0]?.title, "Bing page");
-		assert.equal(calls.length, 2, "the default set is asked once, then the first fallback engine");
-		assert.match(calls[0] ?? "", /format=json/);
-		assert.doesNotMatch(calls[0] ?? "", /engines=/);
-		assert.match(calls[1] ?? "", /engines=bing/);
-	} finally {
-		await node.close();
-		await listening.close();
-		await camofox.close();
-	}
-});
+	return { ...listening, calls };
+};
 
-test("a search stack that refuses every attempt is a named error", async () => {
-	const server = createServer((_req, res) => {
-		res.writeHead(502, { "content-type": "application/json" });
-		res.end(JSON.stringify({ error: "upstream" }));
-	});
-	const listening = await listen(server);
-	const node = await start({ searxngUrl: listening.url });
-	try {
-		const runToken = (await register(node, "run-refused")).token ?? "";
-		const search = await post(node, "/search", { query: "renewal" }, "run-refused", runToken);
-		assert.equal(search.status, 502);
-		assert.equal((search.body as { error: string }).error, "search_unavailable");
-	} finally {
-		await node.close();
-		await listening.close();
-	}
-});
-
-test("a Camofox auth refusal is named, not reported as an empty page", async () => {
-	const searxng = await fakeSearxng();
-	const camofox = await fakeCamofox("x", 401);
-	const node = await start({ searxngUrl: searxng.url, camofoxUrl: camofox.url, camofoxKey: "" });
-	try {
-		const runToken = (await register(node, "run-camofox")).token ?? "";
-		const search = await post(node, "/search", { query: "renewal" }, "run-camofox", runToken);
-		const sourceId = (search.body as { sourceId: string }[])[0]?.sourceId ?? "";
-		const read = await post(node, "/read", { sourceId }, "run-camofox", runToken);
-		assert.equal(read.status, 502);
-		const body = read.body as { error: string; message: string };
-		assert.equal(body.error, "read_unavailable");
-		assert.match(body.message, /401/);
-	} finally {
-		await node.close();
-		await searxng.close();
-		await camofox.close();
-	}
-});
-
-const fakeCamofox = async (text: string, evaluateStatus = 200): Promise<Fake> => {
+const fakeCamofox = async (text: string, evaluateStatus = 200, totalChars = text.length): Promise<Fake> => {
 	const calls: string[] = [];
 	const server = createServer((req, res) => {
 		void (async () => {
@@ -162,7 +124,7 @@ const fakeCamofox = async (text: string, evaluateStatus = 200): Promise<Fake> =>
 					return;
 				}
 				res.writeHead(200, { "content-type": "application/json" });
-				res.end(JSON.stringify({ ok: true, result: JSON.stringify({ title: "First page", text }) }));
+				res.end(JSON.stringify({ ok: true, result: JSON.stringify({ title: "First page", text, totalChars }) }));
 				return;
 			}
 			if (req.method === "DELETE" && url.pathname === "/tabs/tab-1") {
@@ -178,12 +140,27 @@ const fakeCamofox = async (text: string, evaluateStatus = 200): Promise<Fake> =>
 	return { ...listening, calls };
 };
 
+const searchEnvelopeOf = (result: Reply): WebSearchEnvelope => {
+	if (!isWebSearchEnvelope(result.body)) throw new Error(`not a /search envelope: ${JSON.stringify(result.body)}`);
+	return result.body;
+};
+
+const readEnvelopeOf = (result: Reply): WebReadEnvelope => {
+	if (!isWebReadEnvelope(result.body)) throw new Error(`not a /read envelope: ${JSON.stringify(result.body)}`);
+	return result.body;
+};
+
+const errorOf = (result: Reply): string => {
+	if (!isWebError(result.body)) throw new Error(`not a web error: ${JSON.stringify(result.body)}`);
+	return result.body.error;
+};
+
 const call = async (
 	node: WebsearchServer,
 	path: string,
 	payload: Record<string, unknown>,
 	headers: Record<string, string> = {},
-): Promise<{ status: number; body: unknown }> => {
+): Promise<Reply> => {
 	const response = await fetch(`http://127.0.0.1:${node.port}${path}`, {
 		method: "POST",
 		headers: { "content-type": "application/json", ...headers },
@@ -192,17 +169,19 @@ const call = async (
 	return { status: response.status, body: await response.json() };
 };
 
-/** A data call: x-run-id + the per-run token. */
+/** A data call: x-run-id + the per-run token + a trusted call id. */
 const post = (
 	node: WebsearchServer,
 	path: string,
 	payload: Record<string, unknown>,
 	runId: string,
 	runToken?: string,
-): Promise<{ status: number; body: unknown }> =>
+	callId = "test-call",
+): Promise<Reply> =>
 	call(node, path, payload, {
 		...(runId === "" ? {} : { "x-run-id": runId }),
 		...(runToken === undefined ? {} : { "x-run-token": runToken }),
+		"x-call-id": callId,
 	});
 
 /** Register one run the way the trusted admission path does. */
@@ -212,9 +191,9 @@ const register = async (
 	web = true,
 	control = CONTROL,
 ): Promise<{ status: number; token: string | undefined }> => {
-	const reply = await call(node, "/runs", { web }, { "x-control-token": control, "x-run-id": runId });
-	const body = reply.body as { runToken?: unknown };
-	return { status: reply.status, token: typeof body.runToken === "string" ? body.runToken : undefined };
+	const result = await call(node, "/runs", { web }, { "x-control-token": control, "x-run-id": runId });
+	const value = result.body as { runToken?: unknown };
+	return { status: result.status, token: typeof value.runToken === "string" ? value.runToken : undefined };
 };
 
 const start = (options: Partial<WebsearchOptions> = {}): Promise<WebsearchServer> =>
@@ -236,6 +215,109 @@ test("peerAllowed matches the sandbox CIDR and refuses everything else", () => {
 	assert.equal(peerAllowed(undefined, ["10.5.0.0/16"]), false);
 });
 
+test("selectReadWindow keeps a deep focus marker inside the 6000-character cap", () => {
+	const deep = "x".repeat(7_000) + " renewal marker " + "y".repeat(7_000);
+	const selection = selectReadWindow(deep, focusTermsOf(["renewal"]));
+	assert.equal(selection.text.length, MAX_READ_CHARS);
+	assert.match(selection.text, /renewal marker/);
+	assert.equal(selection.window.mode, "head+focus");
+	assert.ok(selection.window.start > selection.window.headChars);
+});
+
+test("search falls back to one engine when the default set is suspended", async () => {
+	const calls: string[] = [];
+	const server = createServer((req, res) => {
+		const url = new URL(req.url ?? "/", "http://fake");
+		calls.push(url.search);
+		const engine = url.searchParams.get("engines");
+		const results = engine === "bing" ? [{ title: "Bing page", url: "https://example.com/bing", content: "bing" }] : [];
+		res.writeHead(200, { "content-type": "application/json" });
+		res.end(JSON.stringify({ results, unresponsive_engines: engine === null ? [["brave", "Suspended: timeout"]] : [] }));
+	});
+	const listening = await listen(server);
+	const camofox = await fakeCamofox("x");
+	const node = await start({ searxngUrl: listening.url, camofoxUrl: camofox.url });
+	try {
+		const runToken = (await register(node, "run-cascade")).token ?? "";
+		const search = await post(node, "/search", { query: "renewal" }, "run-cascade", runToken);
+		assert.equal(search.status, 200);
+		const envelope = searchEnvelopeOf(search);
+		assert.equal(envelope.requestId, "test-call");
+		assert.equal(envelope.results.length, 1);
+		assert.equal(envelope.results[0]?.title, "Bing page");
+		assert.equal(envelope.diagnostics.fallbackUsed, true);
+		assert.deepEqual(envelope.diagnostics.enginesTried, ["default", "bing"]);
+		assert.ok(envelope.diagnostics.suspendedEngines.includes("brave"));
+		assert.equal(calls.length, 2, "the default set is asked once, then the first fallback engine");
+		assert.match(calls[0] ?? "", /format=json/);
+		assert.doesNotMatch(calls[0] ?? "", /engines=/);
+		assert.match(calls[1] ?? "", /engines=bing/);
+	} finally {
+		await node.close();
+		await listening.close();
+		await camofox.close();
+	}
+});
+
+test("a failed upstream search does not spend the per-run budget", async () => {
+	const searxng = await fakeSearxngUnavailableFirstCall();
+	const node = await start({ searxngUrl: searxng.url });
+	try {
+		const token = (await register(node, "run-retry")).token ?? "";
+		const failed = await post(node, "/search", { query: "fail once" }, "run-retry", token);
+		assert.equal(failed.status, 502);
+		assert.equal(errorOf(failed), "search_unavailable");
+		for (let index = 0; index < MAX_SEARCHES_PER_RUN; index++) {
+			const ok = await post(node, "/search", { query: `q${index}` }, "run-retry", token);
+			assert.equal(ok.status, 200, `search ${index + 1} after the failure should be allowed`);
+		}
+		const exhausted = await post(node, "/search", { query: "one too many" }, "run-retry", token);
+		assert.equal(exhausted.status, 429);
+		assert.equal(errorOf(exhausted), "budget_exhausted");
+	} finally {
+		await node.close();
+		await searxng.close();
+	}
+});
+
+test("a search stack that refuses every attempt is a named error", async () => {
+	const server = createServer((_req, res) => {
+		res.writeHead(502, { "content-type": "application/json" });
+		res.end(JSON.stringify({ error: "upstream" }));
+	});
+	const listening = await listen(server);
+	const node = await start({ searxngUrl: listening.url });
+	try {
+		const runToken = (await register(node, "run-refused")).token ?? "";
+		const search = await post(node, "/search", { query: "renewal" }, "run-refused", runToken);
+		assert.equal(search.status, 502);
+		assert.equal(errorOf(search), "search_unavailable");
+	} finally {
+		await node.close();
+		await listening.close();
+	}
+});
+
+test("a Camofox auth refusal is named, not reported as an empty page", async () => {
+	const searxng = await fakeSearxng();
+	const camofox = await fakeCamofox("x", 401);
+	const node = await start({ searxngUrl: searxng.url, camofoxUrl: camofox.url, camofoxKey: "" });
+	try {
+		const runToken = (await register(node, "run-camofox")).token ?? "";
+		const search = await post(node, "/search", { query: "renewal" }, "run-camofox", runToken);
+		const sourceId = searchEnvelopeOf(search).results[0]?.sourceId ?? "";
+		const read = await post(node, "/read", { sourceId }, "run-camofox", runToken);
+		assert.equal(read.status, 502);
+		if (!isWebError(read.body)) throw new Error("not a web error");
+		assert.equal(read.body.error, "read_unavailable");
+		assert.match(read.body.message, /401/);
+	} finally {
+		await node.close();
+		await searxng.close();
+		await camofox.close();
+	}
+});
+
 test("web_search returns opaque ids and web_read resolves only ids of this run", async () => {
 	const searxng = await fakeSearxng();
 	const camofox = await fakeCamofox("The page text.");
@@ -245,45 +327,54 @@ test("web_search returns opaque ids and web_read resolves only ids of this run",
 		assert.notEqual(runToken, "");
 		const search = await post(node, "/search", { query: "renewal", max: MAX_RESULTS }, "run-1", runToken);
 		assert.equal(search.status, 200);
-		const results = search.body as { sourceId: string; title: string; domain: string; snippet: string }[];
+		const envelope = searchEnvelopeOf(search);
+		const results = envelope.results;
 		assert.equal(results.length, 3, "duplicates, non-http and private-address results are dropped");
 		assert.equal(results[0]?.domain, "example.com");
 		assert.match(results[0]?.sourceId ?? "", /^web_[A-Za-z0-9_-]+$/);
 		assert.ok(!(results[0]?.sourceId ?? "").includes("example.com"), "the id leaks no URL");
 		assert.equal(new Set(results.map((result) => result.sourceId)).size, results.length);
+		assert.equal(envelope.diagnostics.resultCount, 3);
+		assert.equal(envelope.diagnostics.partial, true, "dropped results make the answer partial");
 
 		const sourceId = results[0]?.sourceId ?? "";
 		const read = await post(node, "/read", { sourceId }, "run-1", runToken);
 		assert.equal(read.status, 200);
-		const page = read.body as { untrusted: boolean; url: string; title: string; text: string; sha256: string };
+		const readEnvelope = readEnvelopeOf(read);
+		const page = readEnvelope.page;
+		assert.equal(readEnvelope.requestId, "test-call");
 		assert.equal(page.untrusted, true);
 		assert.equal(page.url, "https://example.com/first");
 		assert.equal(page.title, "First page");
 		assert.equal(page.text, "The page text.");
 		assert.equal(page.sha256, createHash("sha256").update("The page text.").digest("hex"));
+		assert.equal(page.truncated, false);
+		assert.equal(page.totalChars, "The page text.".length);
+		assert.equal(readEnvelope.diagnostics.window.mode, "full");
+		assert.equal(readEnvelope.diagnostics.selectedChars, page.text.length);
 		// Camofox closed the tab: no shared history between runs.
 		assert.ok(camofox.calls.includes("DELETE /tabs/tab-1"));
 
 		// A URL argument never reaches a fetch: it is refused by name.
 		const byUrl = await post(node, "/read", { url: "https://example.com/first" }, "run-1", runToken);
 		assert.equal(byUrl.status, 400);
-		assert.equal((byUrl.body as { error: string }).error, "no_url_in_arguments");
+		assert.equal(errorOf(byUrl), "no_url_in_arguments");
 
 		// A well-formed id issued to another run is unknown here.
 		const runToken2 = (await register(node, "run-2")).token ?? "";
 		const otherRun = await post(node, "/read", { sourceId }, "run-2", runToken2);
 		assert.equal(otherRun.status, 404);
-		assert.equal((otherRun.body as { error: string }).error, "unknown_source");
+		assert.equal(errorOf(otherRun), "unknown_source");
 
 		// One read per result.
 		const again = await post(node, "/read", { sourceId }, "run-1", runToken);
 		assert.equal(again.status, 429);
-		assert.equal((again.body as { error: string }).error, "already_read");
+		assert.equal(errorOf(again), "already_read");
 
 		// Reads of results this run never received stay refused.
 		const fabricated = await post(node, "/read", { sourceId: "web_other_run_3" }, "run-1", runToken);
 		assert.equal(fabricated.status, 404);
-		assert.equal((fabricated.body as { error: string }).error, "unknown_source");
+		assert.equal(errorOf(fabricated), "unknown_source");
 	} finally {
 		await node.close();
 		await searxng.close();
@@ -313,24 +404,24 @@ test("only a user-authorised, registered run with its token can search", async (
 		// Only the same token is accepted afterwards.
 		const mismatch = await call(node, "/control", { token: "d".repeat(64) });
 		assert.equal(mismatch.status, 403);
-		assert.equal((mismatch.body as { error: string }).error, "control_token_mismatch");
+		assert.equal(errorOf(mismatch), "control_token_mismatch");
 
 		// A registration without the control token is refused.
 		const noControl = await call(node, "/runs", { web: true }, { "x-run-id": "run-x" });
 		assert.equal(noControl.status, 403);
-		assert.equal((noControl.body as { error: string }).error, "forbidden_control");
+		assert.equal(errorOf(noControl), "forbidden_control");
 
 		// A run the user did not authorise is refused, token or not.
 		const offToken = (await register(node, "run-off", false)).token ?? "";
 		const off = await post(node, "/search", { query: "x" }, "run-off", offToken);
 		assert.equal(off.status, 403);
-		assert.equal((off.body as { error: string }).error, "web_not_authorized");
+		assert.equal(errorOf(off), "web_not_authorized");
 
 		// An authorised run still needs the per-run token.
 		const onToken = (await register(node, "run-on")).token ?? "";
 		const missing = await post(node, "/search", { query: "x" }, "run-on");
 		assert.equal(missing.status, 403);
-		assert.equal((missing.body as { error: string }).error, "not_authorized");
+		assert.equal(errorOf(missing), "not_authorized");
 		const wrong = await post(node, "/search", { query: "x" }, "run-on", "wrong-token");
 		assert.equal(wrong.status, 403);
 		const ok = await post(node, "/search", { query: "x" }, "run-on", onToken);
@@ -339,7 +430,7 @@ test("only a user-authorised, registered run with its token can search", async (
 		// An id never registered is not authorised, even with a plausible token.
 		const unknown = await post(node, "/search", { query: "x" }, "run-never", "made-up-token");
 		assert.equal(unknown.status, 403);
-		assert.equal((unknown.body as { error: string }).error, "web_not_authorized");
+		assert.equal(errorOf(unknown), "web_not_authorized");
 	} finally {
 		await node.close();
 		await searxng.close();
@@ -356,12 +447,12 @@ test("budgets, bounds and the peer guard are enforced by the node", async () => 
 		// The fifth search of one run is refused; another run starts fresh.
 		const budgetToken = (await register(node, "run-budget")).token ?? "";
 		for (let index = 0; index < MAX_SEARCHES_PER_RUN; index++) {
-			const reply = await post(node, "/search", { query: `q${index}` }, "run-budget", budgetToken);
-			assert.equal(reply.status, 200, `search ${index + 1} should be allowed`);
+			const result = await post(node, "/search", { query: `q${index}` }, "run-budget", budgetToken);
+			assert.equal(result.status, 200, `search ${index + 1} should be allowed`);
 		}
 		const exhausted = await post(node, "/search", { query: "one too many" }, "run-budget", budgetToken);
 		assert.equal(exhausted.status, 429);
-		assert.equal((exhausted.body as { error: string }).error, "budget_exhausted");
+		assert.equal(errorOf(exhausted), "budget_exhausted");
 		const freshToken = (await register(node, "run-2")).token ?? "";
 		const fresh = await post(node, "/search", { query: "fresh" }, "run-2", freshToken);
 		assert.equal(fresh.status, 200);
@@ -370,29 +461,34 @@ test("budgets, bounds and the peer guard are enforced by the node", async () => 
 		const boundsToken = (await register(node, "run-bounds")).token ?? "";
 		const long = await post(node, "/search", { query: "x".repeat(257) }, "run-bounds", boundsToken);
 		assert.equal(long.status, 413);
-		assert.equal((long.body as { error: string }).error, "query_too_long");
+		assert.equal(errorOf(long), "query_too_long");
 		const tooMany = await post(node, "/search", { query: "x", max: MAX_RESULTS + 1 }, "run-bounds", boundsToken);
 		assert.equal(tooMany.status, 400);
 
-		// The read text is capped before it leaves the node.
+		// The read text is capped before it leaves the node, and the envelope
+		// says how much was omitted.
 		const readToken = (await register(node, "run-3")).token ?? "";
 		const search = await post(node, "/search", { query: "renewal" }, "run-3", readToken);
-		const sourceId = (search.body as { sourceId: string }[])[0]?.sourceId ?? "";
+		const sourceId = searchEnvelopeOf(search).results[0]?.sourceId ?? "";
 		const read = await post(node, "/read", { sourceId }, "run-3", readToken);
 		assert.equal(read.status, 200);
-		assert.equal(((read.body as { text: string }).text).length, MAX_READ_CHARS);
+		const readEnvelope = readEnvelopeOf(read);
+		assert.equal(readEnvelope.page.text.length, MAX_READ_CHARS);
+		assert.equal(readEnvelope.page.truncated, true);
+		assert.equal(readEnvelope.page.totalChars, 20_000);
+		assert.equal(readEnvelope.diagnostics.selectedChars, MAX_READ_CHARS);
 
 		// Peer outside the user's subnet: forbidden before any upstream call.
 		const before = searxng.calls.length;
 		const forbidden = await post(closed, "/search", { query: "should not run" }, "run-x", "token");
 		assert.equal(forbidden.status, 403);
-		assert.equal((forbidden.body as { error: string }).error, "forbidden_peer");
+		assert.equal(errorOf(forbidden), "forbidden_peer");
 		assert.equal(searxng.calls.length, before);
 
 		// No run id: the caller (the agent tool) always sets one.
 		const noRun = await post(node, "/search", { query: "x" }, "", "token");
 		assert.equal(noRun.status, 400);
-		assert.equal((noRun.body as { error: string }).error, "missing_run");
+		assert.equal(errorOf(noRun), "missing_run");
 	} finally {
 		await node.close();
 		await closed.close();
@@ -409,7 +505,7 @@ test("a missing search stack is a named error, not a crash", async () => {
 		const runToken = (await register(node, "run-1")).token ?? "";
 		const search = await post(node, "/search", { query: "renewal" }, "run-1", runToken);
 		assert.equal(search.status, 503);
-		assert.equal((search.body as { error: string }).error, "search_unavailable");
+		assert.equal(errorOf(search), "search_unavailable");
 	} finally {
 		await node.close();
 	}

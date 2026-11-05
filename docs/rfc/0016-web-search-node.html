@@ -600,18 +600,20 @@ svg text{font-family:var(--body);}
 			<tr>
 				<td class="k mono">web_search</td>
 				<td class="mono">POST /search<br>{query, lang?, max?}</td>
-				<td class="mono">[{sourceId, title, domain, snippet}]</td>
+				<td class="mono">model: [{sourceId, title, domain, snippet}]<br>envelope: {requestId, results, diagnostics}</td>
 				<td>query ≤ 256 chars · ≤ 4 searches per run · ≤ 8 results</td>
 			</tr>
 			<tr>
 				<td class="k mono">web_read</td>
 				<td class="mono">POST /read<br>{sourceId}</td>
-				<td class="mono">{untrusted:true, url, title, text, sha256}</td>
-				<td>only ids issued to this run · 1 read per result · ≤ 6000 chars</td>
+				<td class="mono">model: {untrusted:true, url, title, text, sha256, truncated, totalChars}<br>envelope: {requestId, page, diagnostics}</td>
+				<td>only ids issued to this run · 1 read per result · ≤ 6000-character selected window</td>
 			</tr>
 		</tbody>
 	</table>
 	</div>
+
+	<p class="note"><b>Shared response protocol.</b> <code>agent/web-protocol.ts</code> defines the schemas used by the node, the model-facing tools and the two upstream clients. The node validates every reply before sending it; <code>postNode()</code> validates it again before anything reaches the model. Program callers receive the full envelope through <code>structuredOutput</code>, with a declared <code>structuredOutputSchema</code>. <code>requestId</code> comes from the trusted tool <code>callId</code>, not from a model argument. Search results still carry no URL. A long page keeps at most 6000 characters, selected from the head plus a window around server-side focus terms; <code>truncated</code> and <code>totalChars</code> make the omission explicit.</p>
 
 	<p class="note"><b>Authorised per run.</b> Web is off by default. The user enables it for one message with the composer toggle; the trusted admission path registers that run with the node using the manager-delivered control token, and stores the returned per-run token. The node refuses an unregistered run, a run registered with <code>web: false</code>, and any call without the matching per-run token (<code>web_not_authorized</code>). The model never writes the grant; a bash child cannot read the control token, so it cannot register a run of its own.</p>
 
@@ -695,7 +697,7 @@ svg text{font-family:var(--body);}
 	<table>
 		<thead><tr><th>Piece</th><th>Where</th><th>What the gate proves</th></tr></thead>
 		<tbody>
-			<tr><td class="k">node</td><td class="mono">agent/websearch.ts</td><td>opaque source ids, <code>no_url_in_arguments</code>, 4 searches / 8 results / one read per result / 6000 chars, <code>forbidden_peer</code> outside the sandbox subnet (<code>agent/websearch.test.ts</code>).</td></tr>
+			<tr><td class="k">node</td><td class="mono">agent/websearch.ts · agent/web-protocol.ts</td><td>shared response schemas, opaque source ids, <code>no_url_in_arguments</code>, 4 searches / 8 results / one read per result / 6000-character head+focus window, <code>forbidden_peer</code> outside the sandbox subnet (<code>agent/websearch.test.ts</code>).</td></tr>
 			<tr><td class="k">tools + taint</td><td class="mono">agent/web-tools.ts</td><td><code>web_search</code> → <code>web_read</code> through the real harness; a run without the user's grant answers <code>web_not_authorized</code>; the first read taints the conversation and blocks the reserved persistence tools, across a restart (<code>agent/web-tools.test.ts</code>).</td></tr>
 			<tr><td class="k">per-run grant</td><td class="mono">websearch.ts · sandbox_manager.py · /webconfig</td><td>the manager delivers a control token derived from <code>MANAGER_TOKEN</code>; the node registers a run only with it and only the trusted admission path holds it; a forged run, a <code>web: false</code> run and a forged control token are all refused (<code>websearch.test.ts</code>, <code>websearch-probe.py</code>).</td></tr>
 			<tr><td class="k">topology</td><td class="mono">sandbox_manager.py</td><td><code>websearch_create_args</code>: same per-user network, no volumes, no ports, own caps, Phase 0 hardening, baked service hosts, <code>WEBSEARCH_IN</code> must be <code>--internal</code>.</td></tr>
@@ -706,7 +708,7 @@ svg text{font-family:var(--body);}
 	</table>
 	</div>
 
-	<p class="note"><b>Deviations, all inside the intent.</b> The taint is a conversation-scoped durable document (<code>web.taint</code>) written by the first successful read, with a monotonic in-process cache; it is not re-derived from the transcript on every call, because the tool hook has no entry reader. The HTTP persistence routes therefore activate the agent on a cold cache (a restarted process) to read that document; <code>/health</code> and <code>/status</code> still never open storage. The node's health is not fatal on resolve, unlike the sidecar's: chat and uploads keep working while the search stack is down, and the tools answer <code>search_unavailable</code>. The node's peer guard is a CIDR list baked at create time, so a recreated per-user network recreates the node. Page text is <code>document.body.innerText</code> capped inside the browser (no Readability library in the image), not a readability extraction. <code>websearch-in</code>/<code>websearch-out</code> are created by the manager when absent (with <code>--internal</code> enforced on the former) instead of being purely operator-supplied; the services themselves remain operator infrastructure. The duplicate-read refusal is the named <code>already_read</code>; the RFC listed only <code>budget_exhausted</code> and <code>unknown_source</code>. The per-run <code>web: "allowed"</code> authorisation of §7 is implemented, and enforced at the node rather than only in the tool: the control token is derived from <code>MANAGER_TOKEN</code>, delivered to the node and the agent on every resolve, and held only in the agent's process memory, so a bash child cannot register a run. The control token is in-memory, not a mount; a changed <code>MANAGER_TOKEN</code> requires reprovisioning the node. Run authorisations expire after an hour.</p>
+	<p class="note"><b>Deviations, all inside the intent.</b> The taint is a conversation-scoped durable document (<code>web.taint</code>) written by the first successful read, with a monotonic in-process cache; it is not re-derived from the transcript on every call, because the tool hook has no entry reader. The HTTP persistence routes therefore activate the agent on a cold cache (a restarted process) to read that document; <code>/health</code> and <code>/status</code> still never open storage. The node's health is not fatal on resolve, unlike the sidecar's: chat and uploads keep working while the search stack is down, and the tools answer <code>search_unavailable</code>. The node's peer guard is a CIDR list baked at create time, so a recreated per-user network recreates the node. Page text is Markdown-like semantic blocks rendered inside the browser (no Readability library in the image), capped at 60000 visible characters; the node selects a 6000-character head+focus window and reports <code>truncated</code>/<code>totalChars</code>. The live evaluation results in <code>e2e-test/websearch-eval/REPORT.md</code> predate this window and are historical. <code>websearch-in</code>/<code>websearch-out</code> are created by the manager when absent (with <code>--internal</code> enforced on the former) instead of being purely operator-supplied; the services themselves remain operator infrastructure. The duplicate-read refusal is the named <code>already_read</code>; the RFC listed only <code>budget_exhausted</code> and <code>unknown_source</code>. The per-run <code>web: "allowed"</code> authorisation of §7 is implemented, and enforced at the node rather than only in the tool: the control token is derived from <code>MANAGER_TOKEN</code>, delivered to the node and the agent on every resolve, and held only in the agent's process memory, so a bash child cannot register a run. The control token is in-memory, not a mount; a changed <code>MANAGER_TOKEN</code> requires reprovisioning the node. Run authorisations expire after an hour.</p>
 </section>
 
 <footer class="foot">
