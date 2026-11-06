@@ -64,8 +64,9 @@ cp .env.example .env        # no MANAGER_TOKEN yet: dev.sh generates one
 ./dev.sh up                 # fake provider: no API key, deterministic demo
 ```
 
-The stack: Caddy on `localhost:18080` (the only published port), Postgres,
-the sandbox manager. Then prove a cold per-user provision end to end:
+The stack: Caddy on `localhost:18080` and Postgres on `localhost:15432`
+(both loopback-bound by default), plus the sandbox manager, which publishes
+no host port. Then prove a cold per-user provision end to end:
 
 ```bash
 docker compose exec -T oltp psql -U pi -d pi <<'SQL'
@@ -138,8 +139,9 @@ The e2e suite runs against the running stack:
 
 ## Web client
 
-`frontend/` is a SvelteKit 5 app with better-auth accounts, shadcn-svelte
-components and the AI SDK chat. It shares the `pi` database with the manager.
+`frontend/` is a SvelteKit 3 / Svelte 5 app with better-auth accounts,
+shadcn-svelte components and the AI SDK chat. It shares the `pi` database
+with the manager.
 Postgres is published on `localhost:15432` (`OLTP_PORT` overrides).
 
 ```bash
@@ -379,9 +381,11 @@ passed to the node only — it never enters a sandbox and no tool echoes it.
               (internal)                                    (bridge)
 ```
 
-The control plane declares no agent `ports`, so the sole host mapping is Caddy's
-`18080:80`. Caddy dials each agent by container name on the per-user network the
-manager created; the agent containers, their key sidecars and the web-search
+The control plane declares no agent `ports`. Caddy publishes
+`${CADDY_BIND:-127.0.0.1}:18080:80` and Postgres publishes
+`127.0.0.1:${OLTP_PORT:-15432}:5432` for the web client's Drizzle connection;
+`CADDY_BIND=0.0.0.0` is the explicit opt-in for LAN access. Caddy dials each
+agent by container name on the per-user network the manager created; the agent containers, their key sidecars and the web-search
 nodes are not compose services, so `docker compose ps` lists only caddy, oltp
 and sandbox-manager. Each per-user network hosts exactly one group, and
 cross-tenant reachability is blocked and proven by `e2e-test/security.sh`.

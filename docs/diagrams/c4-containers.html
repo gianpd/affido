@@ -10,194 +10,317 @@
 </style>
 </head>
 <body>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 980" width="1400" height="980" role="img" aria-labelledby="c4title c4desc"><title id="c4title">affido — C4 container diagram</title><desc id="c4desc">Actors, internal services, external services, volumes and connections of the affido stack: web client, Caddy gateway, sandbox manager, OLTP Postgres, per-user agent sandbox, Docker Engine, model API.</desc><defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1380" width="1600" height="1380" role="img" aria-labelledby="c4title c4desc"><title id="c4title">affido — C4 container diagram</title><desc id="c4desc">Current affido stack: user and operator, SvelteKit web client, Caddy gateway, sandbox manager, OLTP Postgres, BYOK key-encryption file and skills marketplace; one per-user group of agent, key-injection sidecar and web-search node with two durable volumes; Docker Engine, model providers, the operator SearXNG/Camofox search stack and the open web, with the labelled control, data, provisioning, model and web connections between them.</desc><defs>
 <marker id="ar-ink" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#22303f"/></marker>
 <marker id="ar-red" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#bd3f1d"/></marker>
 <marker id="ar-teal" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#0e7568"/></marker>
 <marker id="ar-blue" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#2b5d92"/></marker>
+<marker id="ar-web" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#6f4b8a"/></marker>
 <marker id="ar-muted" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#8a7f6a"/></marker>
 <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse"><path d="M28 0 H0 V28" fill="none" stroke="#e2d8bf" stroke-width="0.7"/></pattern>
-</defs><rect width="1400" height="980" fill="#f4eddd"/>
-<rect width="1400" height="980" fill="url(#grid)"/>
-<text x="40.0" y="30.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="2.2">AFFIDO · C4 MODEL</text>
+</defs><rect width="1600" height="1380" fill="#f4eddd"/>
+<rect width="1600" height="1380" fill="url(#grid)"/>
+<text x="40.0" y="30.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="2.2">AFFIDO · C4 MODEL</text>
 <text x="40.0" y="64.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="31.0" font-weight="700" fill="#22303f" text-anchor="start">Container Diagram</text>
-<text x="430.0" y="42.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.6" font-weight="400" fill="#5a6672" text-anchor="start">One durable, sandboxed, fully traced agent per user: bounded by its container,</text>
-<text x="430.0" y="56.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.6" font-weight="400" fill="#5a6672" text-anchor="start">granted one skill at a time; resumed after pause or eviction.</text>
-<text x="1360.0" y="30.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="end" letter-spacing="2.2">C4 · CONTAINERS</text>
-<path d="M 918.0 78 H 936.0" stroke="#22303f" stroke-width="2" fill="none"/>
-<circle cx="927.0" cy="78" r="2.2" fill="#22303f"/>
-<text x="941.0" y="81.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">control</text>
-<path d="M 988.7 78 H 1006.7" stroke="#bd3f1d" stroke-width="2" fill="none"/>
-<circle cx="997.7" cy="78" r="2.2" fill="#bd3f1d"/>
-<text x="1011.7" y="81.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">data plane</text>
-<path d="M 1073.8 78 H 1091.8" stroke="#0e7568" stroke-width="2" fill="none"/>
-<circle cx="1082.8" cy="78" r="2.2" fill="#0e7568"/>
-<text x="1096.8" y="81.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">provisioning</text>
-<path d="M 1168.6 78 H 1186.6" stroke="#2b5d92" stroke-width="2" fill="none"/>
-<circle cx="1177.6" cy="78" r="2.2" fill="#2b5d92"/>
-<text x="1191.6" y="81.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">model</text>
-<path d="M 1229.6 78 H 1247.6" stroke="#8a7f6a" stroke-width="2" stroke-dasharray="4 4" fill="none"/>
-<circle cx="1238.6" cy="78" r="2.2" fill="#8a7f6a"/>
-<text x="1252.6" y="81.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">draft / volume</text>
-<rect x="205.0" y="120.0" width="820.0" height="405.0" rx="3" fill="none" stroke="#22303f" stroke-width="1.2" stroke-dasharray="7 6"/>
-<text x="215.0" y="136.0" font-family="DejaVu Sans Mono, monospace" font-size="9.4" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.2">AFFIDO CONTROL PLANE — docker compose project</text>
-<rect x="205.0" y="560.0" width="820.0" height="370.0" rx="3" fill="none" stroke="#bd3f1d" stroke-width="1.2" stroke-dasharray="7 6"/>
-<text x="215.0" y="576.0" font-family="DejaVu Sans Mono, monospace" font-size="9.4" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.2">PER-USER SANDBOX — one container, one network, own volumes</text>
-<text x="1015.0" y="576.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="end">no host ports · WORKSPACE + SESSION_DB</text>
-<path d="M 180.0 240.0 L 189.5 240.0 Q 196.0 240.0 202.5 240.3 L 202.5 240.3 Q 209.0 240.6 215.5 240.6 L 225.0 240.6" fill="none" stroke="#22303f" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-ink)"/>
-<path d="M 30.0 679.0 L 16.0 679.0 Q 14.0 679.0 16.0 679.0 L 16.0 679.0 Q 18.0 679.0 18.0 677.0 L 18.0 107.0 Q 18.0 98.0 27.0 98.0 L 1201.0 98.0 Q 1210.0 98.0 1210.0 107.0 L 1209.4 356.0 Q 1209.3 364.0 1209.3 372.0 L 1209.3 380.0" fill="none" stroke="#0e7568" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-teal)"/>
-<path d="M 470.0 240.6 L 478.0 240.6 Q 486.0 240.6 494.0 239.9 L 526.0 237.2 Q 534.0 236.5 542.0 236.5 L 550.0 236.5" fill="none" stroke="#bd3f1d" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-red)"/>
-<path d="M 390.1 305.0 L 390.1 316.5 Q 390.1 321.0 390.1 325.5 L 390.1 325.5 Q 390.0 330.0 394.5 330.0 L 521.0 330.0 Q 530.0 330.0 530.0 339.0 L 530.0 423.0 Q 530.0 425.0 532.0 425.0 L 532.0 425.0 Q 534.0 425.0 536.0 425.0 L 550.0 425.0" fill="none" stroke="#22303f" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-ink)"/>
-<path d="M 670.0 295.0 L 670.0 303.0 Q 670.0 311.0 670.0 319.0 L 670.0 331.0 Q 670.0 339.0 670.0 347.0 L 670.0 355.0" fill="none" stroke="#22303f" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-ink)"/>
-<path d="M 790.0 425.0 L 798.0 425.0 Q 806.0 425.0 814.0 425.0 L 816.0 425.0 Q 824.0 425.0 832.0 425.0 L 840.0 425.0" fill="none" stroke="#22303f" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-ink)"/>
-<path d="M 349.9 165.0 L 349.9 152.0 Q 349.9 149.0 350.0 152.0 L 350.0 152.0 Q 350.0 155.0 353.0 155.0 L 916.0 155.0 Q 925.0 155.0 925.0 164.0 L 924.6 331.0 Q 924.6 339.0 924.6 347.0 L 924.6 355.0" fill="none" stroke="#22303f" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-ink)"/>
-<path d="M 790.0 219.6 L 805.5 219.6 Q 806.0 219.6 805.5 219.8 L 805.5 219.8 Q 805.0 220.0 805.0 220.5 L 805.0 566.0 Q 805.0 575.0 796.0 575.0 L 702.0 575.0 Q 700.0 575.0 699.6 577.0 L 699.6 577.0 Q 699.1 579.0 699.1 581.0 L 699.1 595.0" fill="none" stroke="#bd3f1d" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-red)"/>
-<path d="M 622.0 495.0 L 622.0 503.0 Q 622.0 511.0 621.5 519.0 L 620.5 535.0 Q 620.0 544.0 629.0 544.0 L 1031.0 544.0 Q 1040.0 544.0 1040.0 535.0 L 1040.0 435.5 Q 1040.0 435.0 1039.5 435.0 L 1039.5 435.0 Q 1039.0 435.0 1039.5 435.0 L 1055.0 435.0" fill="none" stroke="#0e7568" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-teal)"/>
-<path d="M 770.0 839.9 L 778.0 839.9 Q 786.0 839.9 793.9 841.4 L 1037.2 888.3 Q 1046.0 890.0 1046.0 881.0 L 1046.0 623.5 Q 1046.0 620.0 1042.5 620.0 L 1042.5 620.0 Q 1039.0 620.0 1042.5 620.0 L 1055.0 620.0" fill="none" stroke="#2b5d92" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-blue)"/>
-<path d="M 699.1 905.0 L 699.1 913.0 Q 699.1 921.0 699.4 929.0 L 699.8 943.0 Q 700.0 952.0 709.0 952.0 L 1201.0 952.0 Q 1210.0 952.0 1209.9 943.0 L 1209.4 864.0 Q 1209.3 856.0 1209.3 848.0 L 1209.3 840.0" fill="none" stroke="#8a7f6a" stroke-width="1.6" stroke-dasharray="5 5" stroke-linejoin="round" marker-end="url(#ar-muted)"/>
-<path d="M 770.0 650.8 L 782.0 650.8 Q 786.0 650.8 790.0 650.2 L 790.0 650.2 Q 794.0 649.6 798.0 649.6 L 810.0 649.6" fill="none" stroke="#8a7f6a" stroke-width="1.6" stroke-dasharray="5 5" stroke-linejoin="round" marker-end="url(#ar-muted)" marker-start="url(#ar-muted)"/>
-<path d="M 770.0 799.6 L 782.0 799.6 Q 786.0 799.6 790.0 799.7 L 790.0 799.7 Q 794.0 799.8 798.0 799.8 L 810.0 799.8" fill="none" stroke="#8a7f6a" stroke-width="1.6" stroke-dasharray="5 5" stroke-linejoin="round" marker-end="url(#ar-muted)" marker-start="url(#ar-muted)"/>
-<rect x="30.0" y="180.0" width="150.0" height="120.0" rx="2" fill="#f0e4c8" stroke="#22303f" stroke-width="1.4"/>
-<circle cx="52.0" cy="204.0" r="6.2" fill="none" stroke="#22303f" stroke-width="1.4"/>
-<path d="M 42.0 221.0 Q 52.0 210.0 62.0 221.0" fill="none" stroke="#22303f" stroke-width="1.4"/>
-<text x="74.0" y="204.0" font-family="DejaVu Sans Mono, monospace" font-size="7.5" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.1">PERSON</text>
-<text x="42.0" y="238.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="11.4" font-weight="700" fill="#22303f" text-anchor="start">User / Owner</text>
-<text x="42.0" y="252.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">browser</text>
-<text x="42.0" y="272.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.4" font-weight="400" fill="#22303f" text-anchor="start">chat · uploads · skills</text>
-<text x="42.0" y="284.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.4" font-weight="400" fill="#22303f" text-anchor="start">traces · artifacts</text>
-<rect x="30.0" y="620.0" width="150.0" height="118.0" rx="2" fill="#f0e4c8" stroke="#22303f" stroke-width="1.4"/>
-<circle cx="52.0" cy="644.0" r="6.2" fill="none" stroke="#22303f" stroke-width="1.4"/>
-<path d="M 42.0 661.0 Q 52.0 650.0 62.0 661.0" fill="none" stroke="#22303f" stroke-width="1.4"/>
-<text x="74.0" y="644.0" font-family="DejaVu Sans Mono, monospace" font-size="7.5" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.1">PERSON</text>
-<text x="42.0" y="678.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="11.4" font-weight="700" fill="#22303f" text-anchor="start">Operator / Deployer</text>
-<text x="42.0" y="692.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">shell · dev.sh</text>
-<text x="42.0" y="712.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.4" font-weight="400" fill="#22303f" text-anchor="start">compose up · reload</text>
-<text x="42.0" y="724.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.4" font-weight="400" fill="#22303f" text-anchor="start">verify.sh · e2e</text>
-<rect x="225.0" y="165.0" width="245.0" height="140.0" rx="2" fill="#fbf6ea" stroke="#22303f" stroke-width="1.4"/>
-<rect x="225.0" y="165.0" width="245.0" height="26.0" rx="2" fill="#ece3cd" stroke="#22303f" stroke-width="1.4"/>
-<text x="237.0" y="181.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.3">CONTAINER</text>
-<text x="237.0" y="216.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.6" font-weight="700" fill="#22303f" text-anchor="start">Web Client</text>
-<text x="237.0" y="232.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="start">SvelteKit 3 · Svelte 5 · Drizzle</text>
-<text x="237.0" y="249.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">better-auth sign-in + sessions</text>
-<text x="237.0" y="261.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">dashboard · chat · documents</text>
-<text x="237.0" y="274.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">skills catalog · traces · uploads</text>
-<rect x="550.0" y="165.0" width="240.0" height="130.0" rx="2" fill="#fbf6ea" stroke="#22303f" stroke-width="1.4"/>
-<rect x="550.0" y="165.0" width="240.0" height="26.0" rx="2" fill="#ece3cd" stroke="#22303f" stroke-width="1.4"/>
-<text x="562.0" y="181.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.3">CONTAINER</text>
-<text x="562.0" y="216.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.6" font-weight="700" fill="#22303f" text-anchor="start">Caddy Gateway</text>
-<text x="562.0" y="232.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="start">Caddy 2.11 · :18080 published</text>
-<text x="562.0" y="249.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">only published endpoint</text>
-<text x="562.0" y="261.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">forward_auth → manager /resolve</text>
-<text x="562.0" y="274.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">strips X-Sandbox-Endpoint, proxies</text>
-<rect x="550.0" y="355.0" width="240.0" height="140.0" rx="2" fill="#fbf6ea" stroke="#22303f" stroke-width="1.4"/>
-<rect x="550.0" y="355.0" width="240.0" height="26.0" rx="2" fill="#ece3cd" stroke="#22303f" stroke-width="1.4"/>
-<text x="562.0" y="371.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.3">CONTAINER</text>
-<text x="562.0" y="406.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.6" font-weight="700" fill="#22303f" text-anchor="start">Sandbox Manager</text>
-<text x="562.0" y="422.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="start">Python 3.13 · psycopg · docker CLI</text>
-<text x="562.0" y="439.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">sandbox_registry: user → sandbox</text>
-<text x="562.0" y="451.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">provisions on first request</text>
-<text x="562.0" y="464.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">idle eviction + watchdog restart</text>
-<rect x="840.0" y="355.0" width="180.0" height="140.0" rx="2" fill="#fbf6ea" stroke="#22303f" stroke-width="1.4"/>
-<rect x="840.0" y="355.0" width="180.0" height="26.0" rx="2" fill="#ece3cd" stroke="#22303f" stroke-width="1.4"/>
-<text x="852.0" y="371.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.3">CONTAINER</text>
-<text x="852.0" y="406.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.6" font-weight="700" fill="#22303f" text-anchor="start">OLTP Postgres</text>
-<text x="852.0" y="422.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="start">postgres:17 · oltp-data</text>
-<text x="852.0" y="439.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">better-auth: user, session</text>
-<text x="852.0" y="451.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">sandbox_registry rows</text>
-<text x="852.0" y="464.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">chat + trace metadata</text>
-<rect x="225.0" y="595.0" width="545.0" height="310.0" rx="2" fill="#fbf6ea" stroke="#22303f" stroke-width="1.4"/>
-<rect x="225.0" y="595.0" width="545.0" height="26.0" rx="2" fill="#ece3cd" stroke="#22303f" stroke-width="1.4"/>
-<text x="237.0" y="611.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.3">CONTAINER</text>
-<text x="758.0" y="611.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#5a6672" text-anchor="end" letter-spacing="1.1">ONE PER USER</text>
-<text x="239.0" y="652.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="16.0" font-weight="700" fill="#22303f" text-anchor="start">Agent Sandbox</text>
-<text x="756.0" y="652.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="end">node 24</text>
-<text x="239.0" y="670.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">affido-agent:latest · node /app/server.ts · PORT=8080</text>
-<text x="239.0" y="688.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">Runs the conversation: prompt in, tool calls, cited answer and full trace out.</text>
-<text x="239.0" y="700.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">Starts powerless: powers arrive only as installed, manifest-verified skills.</text>
-<rect x="239.0" y="718.0" width="517.0" height="30.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
-<text x="248.0" y="737.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.5" font-weight="700" fill="#22303f" text-anchor="start">HTTP tool router</text>
-<text x="354.0" y="737.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">one HttpTool subclass per route · server.ts</text>
-<rect x="239.0" y="756.0" width="250.0" height="50.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
-<text x="248.0" y="775.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.7" font-weight="700" fill="#22303f" text-anchor="start">DurableHarness</text>
-<text x="248.0" y="789.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">open on demand, pause when idle</text>
-<rect x="505.0" y="756.0" width="251.0" height="50.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
-<text x="514.0" y="775.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.7" font-weight="700" fill="#22303f" text-anchor="start">ContainerAgent + model</text>
-<text x="514.0" y="789.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">pi-durable 1.3.0 · SQLite storage</text>
-<rect x="239.0" y="814.0" width="250.0" height="50.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
-<text x="248.0" y="833.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.7" font-weight="700" fill="#22303f" text-anchor="start">Citation gate · RFC 0006</text>
-<text x="248.0" y="847.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">verifies every quote before publish</text>
-<rect x="505.0" y="814.0" width="251.0" height="50.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
-<text x="514.0" y="833.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.7" font-weight="700" fill="#22303f" text-anchor="start">Tools: workspace, uploads, skills</text>
-<text x="514.0" y="847.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">artifacts · corpus · traces</text>
-<text x="239.0" y="889.0" font-family="DejaVu Sans Mono, monospace" font-size="8.2" font-weight="400" fill="#5a6672" text-anchor="start">SESSION_DB=/data/session.sqlite · WORKSPACE=/workspace · IDLE_MS=5000</text>
-<rect x="810.0" y="595.0" width="195.0" height="130.0" rx="2" fill="#ddeae4" stroke="#0e7568" stroke-width="1.4"/>
-<rect x="810.0" y="595.0" width="195.0" height="26.0" rx="2" fill="#ece3cd" stroke="#0e7568" stroke-width="1.4"/>
-<text x="822.0" y="611.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#0e7568" text-anchor="start" letter-spacing="1.3">VOLUME</text>
-<text x="822.0" y="646.0" font-family="DejaVu Sans Mono, monospace" font-size="12.4" font-weight="700" fill="#22303f" text-anchor="start">pi-ws-&lt;user&gt;</text>
-<text x="822.0" y="662.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">/workspace · docker volume</text>
-<text x="822.0" y="680.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.4" font-weight="400" fill="#22303f" text-anchor="start">uploads/ · corpus/ · skills/</text>
-<text x="822.0" y="692.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.4" font-weight="400" fill="#22303f" text-anchor="start">artifacts/ — survives stop</text>
-<rect x="810.0" y="740.0" width="195.0" height="130.0" rx="2" fill="#ddeae4" stroke="#0e7568" stroke-width="1.4"/>
-<rect x="810.0" y="740.0" width="195.0" height="26.0" rx="2" fill="#ece3cd" stroke="#0e7568" stroke-width="1.4"/>
-<text x="822.0" y="756.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#0e7568" text-anchor="start" letter-spacing="1.3">VOLUME</text>
-<text x="822.0" y="791.0" font-family="DejaVu Sans Mono, monospace" font-size="12.4" font-weight="700" fill="#22303f" text-anchor="start">pi-data-&lt;user&gt;</text>
-<text x="822.0" y="807.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">/data · docker volume</text>
-<text x="822.0" y="825.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.4" font-weight="400" fill="#22303f" text-anchor="start">session.sqlite: conversations,</text>
-<text x="822.0" y="837.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.4" font-weight="400" fill="#22303f" text-anchor="start">traces, submissions</text>
-<rect x="1055.0" y="380.0" width="315.0" height="110.0" rx="2" fill="#e0e8ef" stroke="#2b5d92" stroke-width="1.4"/>
-<rect x="1055.0" y="380.0" width="315.0" height="26.0" rx="2" fill="#ece3cd" stroke="#2b5d92" stroke-width="1.4"/>
-<text x="1067.0" y="396.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#2b5d92" text-anchor="start" letter-spacing="1.3">EXTERNAL SYSTEM</text>
-<text x="1067.0" y="431.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="13.4" font-weight="700" fill="#22303f" text-anchor="start">Docker Engine</text>
-<text x="1067.0" y="447.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">host daemon · /var/run/docker.sock</text>
-<text x="1067.0" y="465.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">Creates networks, volumes, containers</text>
-<text x="1067.0" y="477.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">and starts/stops them on request.</text>
-<rect x="1055.0" y="560.0" width="315.0" height="120.0" rx="2" fill="#e0e8ef" stroke="#2b5d92" stroke-width="1.4"/>
-<rect x="1055.0" y="560.0" width="315.0" height="26.0" rx="2" fill="#ece3cd" stroke="#2b5d92" stroke-width="1.4"/>
-<text x="1067.0" y="576.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#2b5d92" text-anchor="start" letter-spacing="1.3">EXTERNAL SYSTEM</text>
-<text x="1067.0" y="611.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="13.4" font-weight="700" fill="#22303f" text-anchor="start">Model API</text>
-<text x="1067.0" y="627.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">OpenRouter / OpenAI · HTTPS</text>
-<text x="1067.0" y="645.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">Chat completions + tool calls; the key</text>
-<text x="1067.0" y="657.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">is read from /run/secrets, never env</text>
-<rect x="1055.0" y="720.0" width="315.0" height="120.0" rx="2" fill="#fbf6ea" stroke="#bd3f1d" stroke-width="1.4" stroke-dasharray="4 4"/>
-<rect x="1055.0" y="720.0" width="315.0" height="26.0" rx="2" fill="#ece3cd" stroke="#2b5d92" stroke-width="1.4"/>
-<text x="1067.0" y="736.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#2b5d92" text-anchor="start" letter-spacing="1.3">EXTERNAL SYSTEM</text>
-<text x="1358.0" y="736.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#5a6672" text-anchor="end" letter-spacing="1.1">RFC 0010 · DRAFT</text>
-<rect x="1055.0" y="720.0" width="315.0" height="26.0" rx="2" fill="#ece3cd" stroke="#bd3f1d" stroke-width="1.4" stroke-dasharray="4 4"/>
-<text x="1358.0" y="736.5" font-family="DejaVu Sans Mono, monospace" font-size="7.6" font-weight="400" fill="#bd3f1d" text-anchor="end" letter-spacing="1.1">RFC 0010 · DRAFT</text>
-<text x="1067.0" y="771.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="13.4" font-weight="700" fill="#22303f" text-anchor="start">Gmail API · WhatsApp bridge</text>
-<text x="1067.0" y="787.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">OAuth2 REST · local whatsapp-mcp</text>
-<text x="1067.0" y="805.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">Gmail OAuth2 + WhatsApp pairing</text>
-<text x="1067.0" y="817.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="400" fill="#22303f" text-anchor="start">tokens in the connector store</text>
-<rect x="182.4" y="210.4" width="39.1" height="16.6" rx="2" fill="#f4eddd" stroke="#22303f" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="188.4" y="220.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">HTTPS</text>
-<rect x="601.8" y="79.4" width="196.3" height="16.6" rx="2" fill="#f4eddd" stroke="#0e7568" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="607.8" y="89.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#0e7568" text-anchor="start">docker compose up · build · reload</text>
-<rect x="476.9" y="194.8" width="66.2" height="27.2" rx="2" fill="#f4eddd" stroke="#bd3f1d" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="482.9" y="205.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#bd3f1d" text-anchor="start">HTTP</text>
-<text x="482.9" y="215.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#bd3f1d" text-anchor="start">/u/&lt;uid&gt;/*</text>
-<rect x="433.8" y="311.4" width="82.5" height="16.6" rx="2" fill="#f4eddd" stroke="#22303f" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="439.8" y="321.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">POST /resolve</text>
-<rect x="680.0" y="308.4" width="77.1" height="16.6" rx="2" fill="#f4eddd" stroke="#22303f" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="686.0" y="318.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">forward_auth</text>
-<text x="809.9" y="405.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">SQL</text>
-<text x="809.9" y="415.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">rw</text>
-<rect x="715.4" y="135.4" width="169.2" height="16.6" rx="2" fill="#f4eddd" stroke="#22303f" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="721.4" y="145.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">Drizzle · auth, chats, traces</text>
-<rect x="815.0" y="277.8" width="109.6" height="27.2" rx="2" fill="#f4eddd" stroke="#bd3f1d" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="821.0" y="288.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#bd3f1d" text-anchor="start">reverse_proxy</text>
-<text x="821.0" y="298.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#bd3f1d" text-anchor="start">X-Sandbox-Endpoint</text>
-<rect x="880.0" y="524.4" width="142.1" height="16.6" rx="2" fill="#f4eddd" stroke="#0e7568" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="886.0" y="534.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#0e7568" text-anchor="start">docker create/start/stop</text>
-<rect x="842.5" y="870.4" width="115.0" height="16.6" rx="2" fill="#f4eddd" stroke="#2b5d92" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="848.5" y="880.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#2b5d92" text-anchor="start">HTTPS · completions</text>
-<rect x="1220.0" y="888.4" width="142.1" height="16.6" rx="2" fill="#f4eddd" stroke="#8a7f6a" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="1226.0" y="898.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#8a7f6a" text-anchor="start">OAuth2 · QR pair — draft</text>
-<rect x="778.6" y="622.4" width="22.8" height="16.6" rx="2" fill="#f4eddd" stroke="#8a7f6a" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="784.6" y="632.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#8a7f6a" text-anchor="start">rw</text>
-<rect x="778.6" y="772.4" width="22.8" height="16.6" rx="2" fill="#f4eddd" stroke="#8a7f6a" stroke-opacity="0.35" stroke-width="0.8"/>
-<text x="784.6" y="782.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#8a7f6a" text-anchor="start">rw</text>
-<text x="40.0" y="968.0" font-family="DejaVu Sans Mono, monospace" font-size="8.2" font-weight="400" fill="#5a6672" text-anchor="start">Sources: docker-compose.yml · caddy/Caddyfile · sandbox-manager/sandbox_manager.py · agent/server.ts · agent/harness.ts · frontend/src/lib/server/sandbox.ts</text>
-<text x="1360.0" y="968.0" font-family="DejaVu Sans Mono, monospace" font-size="8.2" font-weight="400" fill="#5a6672" text-anchor="end">docs/diagrams/c4_containers.py</text>
+<text x="430.0" y="42.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.6" font-weight="400" fill="#5a6672" text-anchor="start">One durable, fully traced agent sandbox per user: three containers, two volumes,</text>
+<text x="430.0" y="56.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.6" font-weight="400" fill="#5a6672" text-anchor="start">internal networks, and a per-run web path that never gives the model a URL.</text>
+<text x="1560.0" y="30.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="end" letter-spacing="2.2">C4 · CONTAINERS</text>
+<text x="1560.0" y="56.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="end">scope: CHANGELOG [Unreleased] + 0.1.0</text>
+<path d="M 900.0 78 H 918.0" stroke="#22303f" stroke-width="2" fill="none"/>
+<circle cx="909.0" cy="78" r="2.2" fill="#22303f"/>
+<text x="923.0" y="81.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">control</text>
+<path d="M 970.7 78 H 988.7" stroke="#bd3f1d" stroke-width="2" fill="none"/>
+<circle cx="979.7" cy="78" r="2.2" fill="#bd3f1d"/>
+<text x="993.7" y="81.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">data plane</text>
+<path d="M 1055.8 78 H 1073.8" stroke="#0e7568" stroke-width="2" fill="none"/>
+<circle cx="1064.8" cy="78" r="2.2" fill="#0e7568"/>
+<text x="1078.8" y="81.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">provisioning</text>
+<path d="M 1150.6 78 H 1168.6" stroke="#2b5d92" stroke-width="2" fill="none"/>
+<circle cx="1159.6" cy="78" r="2.2" fill="#2b5d92"/>
+<text x="1173.6" y="81.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">model / key</text>
+<path d="M 1240.5 78 H 1258.5" stroke="#6f4b8a" stroke-width="2" fill="none"/>
+<circle cx="1249.5" cy="78" r="2.2" fill="#6f4b8a"/>
+<text x="1263.5" y="81.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">web plane</text>
+<path d="M 1320.8 78 H 1338.8" stroke="#8a7f6a" stroke-width="2" stroke-dasharray="4 4" fill="none"/>
+<circle cx="1329.8" cy="78" r="2.2" fill="#8a7f6a"/>
+<text x="1343.8" y="81.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">volume / draft</text>
+<path d="M 180.0 230.0 L 188.8 230.0 Q 196.0 230.0 197.5 237.1 L 197.5 237.1 Q 199.0 244.1 206.2 244.1 L 215.0 244.1" fill="none" stroke="#22303f" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-ink)"/>
+<path d="M 30.0 775.0 L 15.0 775.0 Q 14.0 775.0 15.0 775.0 L 15.0 775.0 Q 16.0 775.0 16.0 774.0 L 16.0 109.0 Q 16.0 100.0 25.0 100.0 L 1346.0 100.0 Q 1355.0 100.0 1355.0 109.0 L 1355.0 131.0 Q 1355.0 139.0 1355.0 147.0 L 1355.0 155.0" fill="none" stroke="#0e7568" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-teal)"/>
+<path d="M 470.0 212.8 L 478.0 212.8 Q 486.0 212.8 494.0 212.8 L 526.0 212.8 Q 534.0 212.8 542.0 212.8 L 550.0 212.8" fill="none" stroke="#bd3f1d" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-red)"/>
+<path d="M 296.6 320.0 L 296.6 328.0 Q 296.6 336.0 296.6 344.0 L 296.6 351.0 Q 296.6 359.0 296.6 367.0 L 296.6 375.0" fill="none" stroke="#22303f" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-ink)"/>
+<path d="M 429.2 320.0 L 429.2 331.5 Q 429.2 336.0 429.6 340.5 L 429.6 340.5 Q 430.0 345.0 434.5 345.0 L 516.0 345.0 Q 525.0 345.0 525.0 354.0 L 525.0 450.5 Q 525.0 455.0 529.5 455.0 L 529.5 455.0 Q 534.0 455.0 538.5 455.0 L 550.0 455.0" fill="none" stroke="#22303f" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-ink)"/>
+<path d="M 342.5 155.0 L 342.5 148.5 Q 342.5 142.0 349.0 142.0 L 958.5 142.0 Q 965.0 142.0 965.0 148.5 L 965.0 155.0" fill="none" stroke="#22303f" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-ink)"/>
+<path d="M 677.5 320.0 L 677.5 328.0 Q 677.5 336.0 677.5 344.0 L 677.5 351.0 Q 677.5 359.0 677.5 367.0 L 677.5 375.0" fill="none" stroke="#22303f" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-ink)"/>
+<path d="M 677.5 375.0 L 677.5 365.0 Q 677.5 359.0 677.5 353.0 L 677.5 353.0 Q 677.5 347.0 683.5 347.0 L 959.5 347.0 Q 965.0 347.0 965.0 341.5 L 965.0 341.5 Q 965.0 336.0 965.0 330.5 L 965.0 320.0" fill="none" stroke="#22303f" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-ink)"/>
+<path d="M 805.0 455.0 L 817.0 455.0 Q 821.0 455.0 825.0 455.0 L 825.0 455.0 Q 829.0 455.0 833.0 455.0 L 845.0 455.0" fill="none" stroke="#0e7568" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-teal)"/>
+<path d="M 677.5 535.0 L 677.5 543.0 Q 677.5 551.0 685.5 551.0 L 691.0 551.0 Q 700.0 551.0 709.0 551.0 L 1101.0 551.0 Q 1110.0 551.0 1110.0 542.0 L 1110.0 306.5 Q 1110.0 299.5 1117.0 299.5 L 1117.0 299.5 Q 1124.0 299.5 1131.0 299.5 L 1140.0 299.5" fill="none" stroke="#0e7568" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-teal)"/>
+<path d="M 805.0 278.8 L 819.0 278.8 Q 821.0 278.8 823.0 278.8 L 823.0 278.8 Q 825.0 278.8 825.0 280.8 L 825.0 569.0 Q 825.0 578.0 816.0 578.0 L 579.0 578.0 Q 570.0 578.0 569.9 587.0 L 569.9 596.0 Q 569.9 604.0 569.9 612.0 L 569.9 620.0" fill="none" stroke="#bd3f1d" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-red)"/>
+<path d="M 613.8 535.0 L 613.8 546.5 Q 613.8 551.0 613.4 555.5 L 613.4 555.5 Q 613.0 560.0 608.5 560.0 L 295.0 560.0 Q 286.0 560.0 285.9 569.0 L 285.6 596.0 Q 285.5 604.0 285.5 612.0 L 285.5 620.0" fill="none" stroke="#0e7568" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-teal)"/>
+<path d="M 733.6 535.0 L 733.6 543.0 Q 733.6 551.0 733.8 559.0 L 733.8 561.0 Q 734.0 570.0 743.0 570.0 L 829.0 570.0 Q 838.0 570.0 838.0 579.0 L 838.0 596.0 Q 838.0 604.0 838.0 612.0 L 838.0 620.0" fill="none" stroke="#0e7568" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-teal)"/>
+<path d="M 779.5 535.0 L 779.5 543.0 Q 779.5 551.0 787.5 551.0 L 1106.0 551.0 Q 1115.0 551.0 1115.0 560.0 L 1115.0 809.0 Q 1115.0 818.0 1106.0 818.0 L 897.0 818.0 Q 895.0 818.0 895.0 816.0 L 895.0 816.0 Q 895.0 814.0 895.0 816.0 L 895.0 830.0" fill="none" stroke="#0e7568" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-teal)"/>
+<path d="M 685.0 791.1 L 705.0 791.0" fill="none" stroke="#2b5d92" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-blue)"/>
+<path d="M 1085.0 715.0 L 1093.0 715.0 Q 1101.0 715.0 1109.0 715.0 L 1111.0 715.0 Q 1120.0 715.0 1120.0 706.0 L 1120.0 518.5 Q 1120.0 516.5 1122.0 516.5 L 1122.0 516.5 Q 1124.0 516.5 1126.0 516.5 L 1140.0 516.5" fill="none" stroke="#2b5d92" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-blue)"/>
+<path d="M 685.0 1027.6 L 705.0 1028.0" fill="none" stroke="#6f4b8a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-web)"/>
+<path d="M 1085.0 940.0 L 1093.0 940.0 Q 1101.0 940.0 1109.0 940.0 L 1111.0 940.0 Q 1120.0 940.0 1120.0 931.0 L 1120.0 804.0 Q 1120.0 802.0 1122.0 802.0 L 1122.0 802.0 Q 1124.0 802.0 1126.0 802.0 L 1140.0 802.0" fill="none" stroke="#6f4b8a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-web)"/>
+<path d="M 1355.0 825.0 L 1355.0 855.0" fill="none" stroke="#6f4b8a" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#ar-web)"/>
+<path d="M 341.9 1050.0 L 341.9 1070.0" fill="none" stroke="#8a7f6a" stroke-width="1.6" stroke-dasharray="5 5" stroke-linejoin="round" marker-end="url(#ar-muted)" marker-start="url(#ar-muted)"/>
+<path d="M 619.2 1050.0 L 619.1 1055.0 Q 619.0 1060.0 624.0 1060.0 L 890.0 1060.0 Q 895.0 1060.0 895.0 1065.0 L 895.0 1070.0" fill="none" stroke="#8a7f6a" stroke-width="1.6" stroke-dasharray="5 5" stroke-linejoin="round" marker-end="url(#ar-muted)" marker-start="url(#ar-muted)"/>
+<rect x="200.0" y="115.0" width="900.0" height="450.0" rx="3" fill="none" stroke="#22303f" stroke-width="1.2" stroke-dasharray="7 6"/>
+<rect x="207.0" y="117.0" width="132.4" height="18" fill="#f4eddd"/>
+<text x="213.0" y="131.0" font-family="DejaVu Sans Mono, monospace" font-size="9.2" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="0.6">AFFIDO CONTROL PLANE</text>
+<rect x="843.1" y="117.0" width="246.9" height="18" fill="#f4eddd"/>
+<text x="1084.0" y="131.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="end" letter-spacing="0.6">compose: caddy · oltp · sandbox-manager</text>
+<rect x="200.0" y="595.0" width="900.0" height="640.0" rx="3" fill="none" stroke="#bd3f1d" stroke-width="1.2" stroke-dasharray="7 6"/>
+<rect x="207.0" y="597.0" width="584.1" height="18" fill="#f4eddd"/>
+<text x="213.0" y="611.0" font-family="DejaVu Sans Mono, monospace" font-size="9.2" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="0.6">PER-USER SANDBOX — agent + key sidecar + web-search node · no host ports · runsc · cap-drop ALL</text>
+<rect x="30.0" y="155.0" width="150.0" height="150.0" rx="2" fill="#f0e4c8" stroke="#22303f" stroke-width="1.4"/>
+<circle cx="52.0" cy="179.0" r="6.2" fill="none" stroke="#22303f" stroke-width="1.4"/>
+<path d="M 42.0 196.0 Q 52.0 185.0 62.0 196.0" fill="none" stroke="#22303f" stroke-width="1.4"/>
+<text x="74.0" y="179.0" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.1">PERSON</text>
+<text x="42.0" y="213.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="11.6" font-weight="700" fill="#22303f" text-anchor="start">User / Owner</text>
+<text x="42.0" y="227.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="start">browser</text>
+<text x="42.0" y="247.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">chat · uploads · settings</text>
+<text x="42.0" y="259.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">traces · judge audit</text>
+<text x="42.0" y="271.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">Strict / Web toggles</text>
+<rect x="30.0" y="700.0" width="150.0" height="150.0" rx="2" fill="#f0e4c8" stroke="#22303f" stroke-width="1.4"/>
+<circle cx="52.0" cy="724.0" r="6.2" fill="none" stroke="#22303f" stroke-width="1.4"/>
+<path d="M 42.0 741.0 Q 52.0 730.0 62.0 741.0" fill="none" stroke="#22303f" stroke-width="1.4"/>
+<text x="74.0" y="724.0" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.1">PERSON</text>
+<text x="42.0" y="758.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="11.6" font-weight="700" fill="#22303f" text-anchor="start">Operator / Deployer</text>
+<text x="42.0" y="772.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="start">shell · dev.sh</text>
+<text x="42.0" y="792.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">up · reload · reset</text>
+<text x="42.0" y="804.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">verify.sh · e2e suites</text>
+<text x="42.0" y="816.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">install runsc (gVisor)</text>
+<text x="42.0" y="829.2" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">restore egress=off</text>
+<rect x="215.0" y="155.0" width="255.0" height="165.0" rx="2" fill="#fbf6ea" stroke="#22303f" stroke-width="1.4"/>
+<rect x="215.0" y="155.0" width="255.0" height="26.0" rx="2" fill="#ece3cd" stroke="#22303f" stroke-width="1.4"/>
+<text x="227.0" y="171.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.3">APP</text>
+<text x="458.0" y="171.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#5a6672" text-anchor="end" letter-spacing="1.0">outside compose</text>
+<text x="227.0" y="206.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">Web Client</text>
+<text x="227.0" y="222.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">SvelteKit 3 · Svelte 5 · Drizzle</text>
+<text x="227.0" y="239.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">better-auth sign-in + sessions</text>
+<text x="227.0" y="251.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">chat (AI SDK) · docs · corpus · skills</text>
+<text x="227.0" y="264.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">traces: graph + Judge tab (on demand)</text>
+<text x="227.0" y="277.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">settings: BYOK provider + key</text>
+<text x="227.0" y="290.2" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">composer: Strict citations / Web</text>
+<rect x="550.0" y="155.0" width="255.0" height="165.0" rx="2" fill="#fbf6ea" stroke="#22303f" stroke-width="1.4"/>
+<rect x="550.0" y="155.0" width="255.0" height="26.0" rx="2" fill="#ece3cd" stroke="#22303f" stroke-width="1.4"/>
+<text x="562.0" y="171.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.3">CONTAINER</text>
+<text x="793.0" y="171.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#5a6672" text-anchor="end" letter-spacing="1.0">published :18080</text>
+<text x="562.0" y="206.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">Caddy Gateway</text>
+<text x="562.0" y="222.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">caddy:2.11.4-alpine · :18080</text>
+<text x="562.0" y="239.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">CADDY_BIND=127.0.0.1 (loopback)</text>
+<text x="562.0" y="251.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">forward_auth → manager /resolve</text>
+<text x="562.0" y="264.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">/providers/* → /whoami, then proxy</text>
+<text x="562.0" y="277.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">strips client X-Sandbox-Endpoint</text>
+<text x="562.0" y="290.2" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">reverse_proxy to per-user :8080</text>
+<text x="562.0" y="303.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">/skills/file · /ingest · /uploads/*</text>
+<rect x="845.0" y="155.0" width="240.0" height="165.0" rx="2" fill="#fbf6ea" stroke="#22303f" stroke-width="1.4"/>
+<rect x="845.0" y="155.0" width="240.0" height="26.0" rx="2" fill="#ece3cd" stroke="#22303f" stroke-width="1.4"/>
+<text x="857.0" y="171.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.3">CONTAINER</text>
+<text x="857.0" y="206.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">OLTP Postgres</text>
+<text x="857.0" y="222.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">postgres:17-alpine · oltp-data</text>
+<text x="857.0" y="239.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">better-auth user / session</text>
+<text x="857.0" y="251.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">sandbox_registry</text>
+<text x="857.0" y="264.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">provider_key (AES-GCM ciphertext)</text>
+<text x="857.0" y="277.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">provider_selection</text>
+<text x="857.0" y="290.2" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">documents · chats · trace_session</text>
+<text x="857.0" y="303.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">127.0.0.1:15432 only</text>
+<rect x="215.0" y="375.0" width="255.0" height="160.0" rx="2" fill="#fbf6ea" stroke="#22303f" stroke-width="1.4"/>
+<rect x="215.0" y="375.0" width="255.0" height="26.0" rx="2" fill="#ece3cd" stroke="#22303f" stroke-width="1.4"/>
+<text x="227.0" y="391.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#a96f14" text-anchor="start" letter-spacing="1.3">HOST FILES</text>
+<text x="227.0" y="426.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">Skills Marketplace</text>
+<text x="227.0" y="442.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">marketplace/manifest.mjs · sha256</text>
+<text x="227.0" y="459.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">curated bundles, manifest hashed</text>
+<text x="227.0" y="471.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">md-to-docx · pdf-text-extraction</text>
+<text x="227.0" y="484.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">server-side fs read at request time</text>
+<text x="227.0" y="497.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">bytes installed via Caddy, one file each</text>
+<text x="227.0" y="510.2" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">verify.sh checks every hash</text>
+<rect x="550.0" y="375.0" width="255.0" height="160.0" rx="2" fill="#fbf6ea" stroke="#22303f" stroke-width="1.4"/>
+<rect x="550.0" y="375.0" width="255.0" height="26.0" rx="2" fill="#ece3cd" stroke="#22303f" stroke-width="1.4"/>
+<text x="562.0" y="391.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.3">CONTAINER</text>
+<text x="562.0" y="426.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">Sandbox Manager</text>
+<text x="562.0" y="442.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">Python 3.13 · psycopg · docker CLI</text>
+<text x="562.0" y="459.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">registry · provisioning · eviction</text>
+<text x="562.0" y="471.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">BYOK: AES-GCM keys + reconcile</text>
+<text x="562.0" y="484.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">idle stop · watchdog · peer guard</text>
+<text x="562.0" y="497.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">hostwall iptables · runsc boot gate</text>
+<text x="562.0" y="510.2" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">resolve: /config · /webconfig · /control</text>
+<rect x="845.0" y="375.0" width="240.0" height="160.0" rx="2" fill="#f3ddd2" stroke="#bd3f1d" stroke-width="1.4"/>
+<rect x="845.0" y="375.0" width="240.0" height="26.0" rx="2" fill="#ece3cd" stroke="#bd3f1d" stroke-width="1.4"/>
+<text x="857.0" y="391.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#bd3f1d" text-anchor="start" letter-spacing="1.3">SECRET FILE</text>
+<text x="1073.0" y="391.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#bd3f1d" text-anchor="end" letter-spacing="1.0">manager only</text>
+<text x="857.0" y="426.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">llm_key_kek</text>
+<text x="857.0" y="442.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">secrets/ · ro mount into manager</text>
+<text x="857.0" y="459.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">32-byte KEK (raw or base64)</text>
+<text x="857.0" y="471.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">AES-256-GCM, AAD=user||provider</text>
+<text x="857.0" y="484.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">plaintext keys never at rest</text>
+<text x="857.0" y="497.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">standalone agent: /run/secrets</text>
+<rect x="215.0" y="620.0" width="470.0" height="430.0" rx="2" fill="#fbf6ea" stroke="#22303f" stroke-width="1.4"/>
+<rect x="215.0" y="620.0" width="470.0" height="26.0" rx="2" fill="#ece3cd" stroke="#22303f" stroke-width="1.4"/>
+<text x="227.0" y="636.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.3">CONTAINER</text>
+<text x="229.0" y="677.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="16.2" font-weight="700" fill="#22303f" text-anchor="start">Agent Sandbox</text>
+<text x="671.0" y="677.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="end">node 24 · :8080</text>
+<text x="229.0" y="695.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">affido-agent:latest · node /app/server.ts · PORT=8080</text>
+<text x="229.0" y="713.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">Runs the conversation: /prompt in, cited answer + trace out.</text>
+<text x="229.0" y="725.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">Faux keyless by default; real providers are BYOK via the sidecar.</text>
+<rect x="229.0" y="738.0" width="442.0" height="30.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
+<text x="238.0" y="757.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="700" fill="#22303f" text-anchor="start">HTTP tool router</text>
+<text x="344.0" y="757.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">HttpTool per route (tools.ts) · /prompt idempotent by requestId</text>
+<rect x="229.0" y="778.0" width="216.0" height="52.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
+<text x="238.0" y="797.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="700" fill="#22303f" text-anchor="start">DurableHarness</text>
+<text x="238.0" y="811.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">activate · pause · conversations</text>
+<rect x="455.0" y="778.0" width="216.0" height="52.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
+<text x="464.0" y="797.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="700" fill="#22303f" text-anchor="start">ContainerAgent + model</text>
+<text x="464.0" y="811.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">pi-durable 1.3.0 · registry</text>
+<rect x="229.0" y="840.0" width="216.0" height="52.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
+<text x="238.0" y="859.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="700" fill="#22303f" text-anchor="start">Citation gate · RFC 0006</text>
+<text x="238.0" y="873.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">verified quotes · strict runs</text>
+<rect x="455.0" y="840.0" width="216.0" height="52.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
+<text x="464.0" y="859.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="700" fill="#22303f" text-anchor="start">Coherence judge · d1.1</text>
+<text x="464.0" y="873.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">RFC 0017/18/20 · audit trace</text>
+<rect x="229.0" y="902.0" width="216.0" height="52.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
+<text x="238.0" y="921.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="700" fill="#22303f" text-anchor="start">IngestPipeline · RFC 0014</text>
+<text x="238.0" y="935.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">corpus/meta registry · unpdf</text>
+<rect x="455.0" y="902.0" width="216.0" height="52.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
+<text x="464.0" y="921.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="700" fill="#22303f" text-anchor="start">Web tools + taint gate</text>
+<text x="464.0" y="935.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">web_search · web_read · 409</text>
+<rect x="229.0" y="964.0" width="216.0" height="52.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
+<text x="238.0" y="983.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="700" fill="#22303f" text-anchor="start">Skills + artifacts</text>
+<text x="238.0" y="997.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">marketplace · /artifact</text>
+<rect x="455.0" y="964.0" width="216.0" height="52.0" rx="2" fill="#f4eddd" stroke="#d3c7a8" stroke-width="1.0"/>
+<text x="464.0" y="983.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.8" font-weight="700" fill="#22303f" text-anchor="start">Traces + judge audit</text>
+<text x="464.0" y="997.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">/inspect?report=citations</text>
+<text x="229.0" y="1034.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">SESSION_DB=/data/session.sqlite · WORKSPACE=/workspace · IDLE_MS=5000</text>
+<rect x="705.0" y="620.0" width="380.0" height="190.0" rx="2" fill="#e0e8ef" stroke="#2b5d92" stroke-width="1.4"/>
+<rect x="705.0" y="620.0" width="380.0" height="26.0" rx="2" fill="#ece3cd" stroke="#2b5d92" stroke-width="1.4"/>
+<text x="717.0" y="636.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#2b5d92" text-anchor="start" letter-spacing="1.3">CONTAINER</text>
+<text x="1073.0" y="636.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#2b5d92" text-anchor="end" letter-spacing="1.0">RFC 0013 · no key in agent</text>
+<text x="717.0" y="671.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">Key-injection Sidecar</text>
+<text x="717.0" y="687.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">same image · node /app/sidecar.ts · :8081</text>
+<text x="717.0" y="704.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">holds apiKey in process RAM only</text>
+<text x="717.0" y="716.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">POST /config {apiKey} at resolve time</text>
+<text x="717.0" y="729.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">strips inbound auth, stamps the key</text>
+<text x="717.0" y="742.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">pinned upstream; /judge/decisions</text>
+<text x="717.0" y="755.2" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">no volumes · no published ports</text>
+<rect x="705.0" y="830.0" width="380.0" height="220.0" rx="2" fill="#eae0ef" stroke="#6f4b8a" stroke-width="1.4"/>
+<rect x="705.0" y="830.0" width="380.0" height="26.0" rx="2" fill="#ece3cd" stroke="#6f4b8a" stroke-width="1.4"/>
+<text x="717.0" y="846.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#6f4b8a" text-anchor="start" letter-spacing="1.3">CONTAINER</text>
+<text x="1073.0" y="846.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#6f4b8a" text-anchor="end" letter-spacing="1.0">RFC 0016</text>
+<text x="717.0" y="881.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">Web-search Node</text>
+<text x="717.0" y="897.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">same image · node /app/websearch.ts · :8082</text>
+<text x="717.0" y="914.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">POST /runs · /search · /read</text>
+<text x="717.0" y="926.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">opaque sourceId; no URL argument</text>
+<text x="717.0" y="939.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">4 searches · 8 results · 6000 chars</text>
+<text x="717.0" y="952.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">per-run token + manager control token</text>
+<text x="717.0" y="965.2" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">no volumes · no user code · no egress</text>
+<text x="717.0" y="978.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">web: allowed per message (default off)</text>
+<rect x="215.0" y="1070.0" width="470.0" height="145.0" rx="2" fill="#ddeae4" stroke="#0e7568" stroke-width="1.4"/>
+<rect x="215.0" y="1070.0" width="470.0" height="26.0" rx="2" fill="#ece3cd" stroke="#0e7568" stroke-width="1.4"/>
+<text x="227.0" y="1086.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#0e7568" text-anchor="start" letter-spacing="1.3">VOLUME</text>
+<text x="227.0" y="1121.0" font-family="DejaVu Sans Mono, monospace" font-size="12.6" font-weight="700" fill="#22303f" text-anchor="start">pi-ws-&lt;user&gt;</text>
+<text x="227.0" y="1137.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">/workspace · docker volume</text>
+<text x="227.0" y="1155.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">corpus/{raw,uploads,text,meta} (RFC 0014)</text>
+<text x="227.0" y="1167.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">skills/ · artifacts/ · workspace files</text>
+<text x="227.0" y="1179.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">PDF text derived at ingest (unpdf)</text>
+<rect x="705.0" y="1070.0" width="380.0" height="145.0" rx="2" fill="#ddeae4" stroke="#0e7568" stroke-width="1.4"/>
+<rect x="705.0" y="1070.0" width="380.0" height="26.0" rx="2" fill="#ece3cd" stroke="#0e7568" stroke-width="1.4"/>
+<text x="717.0" y="1086.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#0e7568" text-anchor="start" letter-spacing="1.3">VOLUME</text>
+<text x="717.0" y="1121.0" font-family="DejaVu Sans Mono, monospace" font-size="12.6" font-weight="700" fill="#22303f" text-anchor="start">pi-data-&lt;user&gt;</text>
+<text x="717.0" y="1137.0" font-family="DejaVu Sans Mono, monospace" font-size="8.6" font-weight="400" fill="#5a6672" text-anchor="start">/data/session.sqlite</text>
+<text x="717.0" y="1155.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">conversations · entries · submissions</text>
+<text x="717.0" y="1167.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">citation runs + judge verdicts</text>
+<text x="717.0" y="1179.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">web.taint (durable, never cleared)</text>
+<text x="717.0" y="1192.2" font-family="DejaVu Sans, system-ui, sans-serif" font-size="9.6" font-weight="400" fill="#22303f" text-anchor="start">survives pause, stop/restart, eviction</text>
+<rect x="1140.0" y="155.0" width="430.0" height="170.0" rx="2" fill="#e0e8ef" stroke="#2b5d92" stroke-width="1.4"/>
+<rect x="1140.0" y="155.0" width="430.0" height="26.0" rx="2" fill="#ece3cd" stroke="#2b5d92" stroke-width="1.4"/>
+<text x="1152.0" y="171.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#2b5d92" text-anchor="start" letter-spacing="1.3">EXTERNAL SYSTEM</text>
+<text x="1152.0" y="206.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">Docker Engine (host daemon)</text>
+<text x="1152.0" y="222.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">/var/run/docker.sock · runsc required</text>
+<text x="1152.0" y="240.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">creates per-user networks + volumes</text>
+<text x="1152.0" y="252.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">starts/stops the three containers</text>
+<text x="1152.0" y="265.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">gVisor + --cap-drop ALL + seccomp</text>
+<rect x="1140.0" y="355.0" width="430.0" height="190.0" rx="2" fill="#e0e8ef" stroke="#2b5d92" stroke-width="1.4"/>
+<rect x="1140.0" y="355.0" width="430.0" height="26.0" rx="2" fill="#ece3cd" stroke="#2b5d92" stroke-width="1.4"/>
+<text x="1152.0" y="371.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#2b5d92" text-anchor="start" letter-spacing="1.3">EXTERNAL SYSTEM</text>
+<text x="1152.0" y="406.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">Model providers (BYOK)</text>
+<text x="1152.0" y="422.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">OpenRouter / OpenAI / custom · HTTPS</text>
+<text x="1152.0" y="440.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">chat completions via sidecar proxy</text>
+<text x="1152.0" y="452.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">/judge/decisions → d1.1 classifier</text>
+<text x="1152.0" y="465.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">pinned upstream, key in sidecar RAM</text>
+<text x="1152.0" y="478.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">AGENT_EGRESS=open required for real keys</text>
+<rect x="1140.0" y="595.0" width="430.0" height="230.0" rx="2" fill="#eae0ef" stroke="#6f4b8a" stroke-width="1.4"/>
+<rect x="1140.0" y="595.0" width="430.0" height="26.0" rx="2" fill="#ece3cd" stroke="#6f4b8a" stroke-width="1.4"/>
+<text x="1152.0" y="611.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#6f4b8a" text-anchor="start" letter-spacing="1.3">EXTERNAL / OPERATOR</text>
+<text x="1152.0" y="646.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">SearXNG + Camofox (operator)</text>
+<text x="1152.0" y="662.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">websearch-in (internal) · websearch-out (egress)</text>
+<text x="1152.0" y="680.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">only services with internet egress</text>
+<text x="1152.0" y="692.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">page fetch runs in Camofox&#x27;s browser</text>
+<text x="1152.0" y="705.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">CAMOFOX_API_KEY: shared operator secret</text>
+<text x="1152.0" y="718.4" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">verify.sh uses an e2e-only fake stack</text>
+<rect x="1140.0" y="855.0" width="430.0" height="130.0" rx="2" fill="#e0e8ef" stroke="#2b5d92" stroke-width="1.4"/>
+<rect x="1140.0" y="855.0" width="430.0" height="26.0" rx="2" fill="#ece3cd" stroke="#2b5d92" stroke-width="1.4"/>
+<text x="1152.0" y="871.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#2b5d92" text-anchor="start" letter-spacing="1.3">EXTERNAL SYSTEM</text>
+<text x="1152.0" y="906.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">Open web</text>
+<text x="1152.0" y="922.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">HTTPS · no sandbox or node ever dials it</text>
+<text x="1152.0" y="940.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">reached only through websearch-out</text>
+<rect x="1140.0" y="1015.0" width="430.0" height="150.0" rx="2" fill="#fbf6ea" stroke="#bd3f1d" stroke-width="1.4" stroke-dasharray="4 4"/>
+<rect x="1140.0" y="1015.0" width="430.0" height="26.0" rx="2" fill="#ece3cd" stroke="#bd3f1d" stroke-width="1.4" stroke-dasharray="4 4"/>
+<text x="1152.0" y="1031.5" font-family="DejaVu Sans Mono, monospace" font-size="7.8" font-weight="400" fill="#bd3f1d" text-anchor="start" letter-spacing="1.2">ROADMAP · NO CODE</text>
+<text x="1152.0" y="1066.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="14.8" font-weight="700" fill="#22303f" text-anchor="start">Not implemented (no code)</text>
+<text x="1152.0" y="1082.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#5a6672" text-anchor="start">draft / proposed RFCs, listed for completeness</text>
+<text x="1152.0" y="1100.0" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">RFC 0010 — Gmail / WhatsApp connectors</text>
+<text x="1152.0" y="1112.8" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">RFC 0015 — multiple agents per user</text>
+<text x="1152.0" y="1125.6" font-family="DejaVu Sans, system-ui, sans-serif" font-size="10.2" font-weight="400" fill="#22303f" text-anchor="start">RFC 0019 — web-derived citations</text>
+<rect x="178.4" y="206.4" width="39.1" height="16.6" rx="2" fill="#f4eddd" stroke="#22303f" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="184.4" y="216.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">HTTPS</text>
+<rect x="512.7" y="88.4" width="174.7" height="16.6" rx="2" fill="#f4eddd" stroke="#0e7568" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="518.7" y="98.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#0e7568" text-anchor="start">dev.sh up · reload · verify.sh</text>
+<rect x="463.3" y="182.8" width="93.3" height="27.2" rx="2" fill="#f4eddd" stroke="#bd3f1d" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="469.3" y="193.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#bd3f1d" text-anchor="start">HTTP /u/&lt;uid&gt;/*</text>
+<text x="469.3" y="203.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#bd3f1d" text-anchor="start">/providers/*</text>
+<rect x="242.5" y="332.8" width="115.0" height="27.2" rx="2" fill="#f4eddd" stroke="#22303f" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="248.5" y="343.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">server-side fs read</text>
+<text x="248.5" y="353.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">manifest + bytes</text>
+<rect x="388.1" y="328.4" width="163.8" height="16.6" rx="2" fill="#f4eddd" stroke="#22303f" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="394.1" y="338.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">POST /resolve (trusted mode)</text>
+<rect x="515.4" y="136.4" width="169.2" height="16.6" rx="2" fill="#f4eddd" stroke="#22303f" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="521.4" y="146.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">Drizzle · auth, chats, traces</text>
+<rect x="690.0" y="342.8" width="131.3" height="27.2" rx="2" fill="#f4eddd" stroke="#22303f" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="696.0" y="353.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">forward_auth /resolve</text>
+<text x="696.0" y="363.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">/providers/* → /whoami</text>
+<rect x="807.7" y="328.4" width="44.5" height="16.6" rx="2" fill="#f4eddd" stroke="#22303f" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="813.7" y="338.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#22303f" text-anchor="start">SQL rw</text>
+<rect x="813.6" y="428.4" width="22.8" height="16.6" rx="2" fill="#f4eddd" stroke="#0e7568" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="819.6" y="438.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#0e7568" text-anchor="start">ro</text>
+<rect x="1150.0" y="328.4" width="142.1" height="16.6" rx="2" fill="#f4eddd" stroke="#0e7568" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="1156.0" y="338.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#0e7568" text-anchor="start">docker create/start/stop</text>
+<rect x="719.1" y="563.8" width="201.8" height="27.2" rx="2" fill="#f4eddd" stroke="#bd3f1d" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="725.1" y="574.0" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#bd3f1d" text-anchor="start">reverse_proxy · X-Sandbox-Endpoint</text>
+<text x="725.1" y="584.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#bd3f1d" text-anchor="start">/skills/file · /ingest · /uploads/*</text>
+<rect x="305.6" y="574.4" width="228.9" height="16.6" rx="2" fill="#f4eddd" stroke="#0e7568" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="311.6" y="584.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#0e7568" text-anchor="start">resolve: /config · /webconfig · /control</text>
+<rect x="1150.0" y="566.4" width="180.1" height="16.6" rx="2" fill="#f4eddd" stroke="#2b5d92" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="1156.0" y="576.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#2b5d92" text-anchor="start">HTTPS · chat + /judge/decisions</text>
+<rect x="1150.0" y="833.4" width="201.8" height="16.6" rx="2" fill="#f4eddd" stroke="#6f4b8a" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="1156.0" y="843.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#6f4b8a" text-anchor="start">SearXNG /search · Camofox /evaluate</text>
+<rect x="1400.0" y="833.4" width="82.5" height="16.6" rx="2" fill="#f4eddd" stroke="#6f4b8a" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="1406.0" y="843.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#6f4b8a" text-anchor="start">websearch-out</text>
+<rect x="348.6" y="1053.4" width="22.8" height="16.6" rx="2" fill="#f4eddd" stroke="#8a7f6a" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="354.6" y="1063.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#8a7f6a" text-anchor="start">rw</text>
+<rect x="748.6" y="1053.4" width="22.8" height="16.6" rx="2" fill="#f4eddd" stroke="#8a7f6a" stroke-opacity="0.35" stroke-width="0.8"/>
+<text x="754.6" y="1063.6" font-family="DejaVu Sans Mono, monospace" font-size="9.0" font-weight="400" fill="#8a7f6a" text-anchor="start">rw</text>
+<text x="40.0" y="1252.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.4">SECURITY BOUNDARY</text>
+<text x="40.0" y="1265.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">runsc mandatory (manager fails closed) · --cap-drop ALL · seccomp no-ptrace · --internal per-user networks + iptables INPUT DROP · peer guard 403</text>
+<text x="40.0" y="1276.4" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">websearch-in is internal; websearch-out is the only egress · the web-search node holds no volume and no user code · MANAGER_TOKEN-derived control tokens</text>
+<text x="40.0" y="1287.8" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">MANAGER_TOKEN random + fail-closed · CADDY_BIND=127.0.0.1 · Postgres on 127.0.0.1:15432 · no API key in env, image, volume or logs</text>
+<text x="40.0" y="1300.0" font-family="DejaVu Sans Mono, monospace" font-size="8.8" font-weight="400" fill="#5a6672" text-anchor="start" letter-spacing="1.4">KEY / WEB FLOWS</text>
+<text x="40.0" y="1313.0" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">BYOK: PUT /providers/config → AES-GCM in OLTP (KEK) → decrypt at resolve → sidecar RAM → pinned HTTPS upstream; the agent holds a placeholder.</text>
+<text x="40.0" y="1324.4" font-family="DejaVu Sans Mono, monospace" font-size="8.4" font-weight="400" fill="#5a6672" text-anchor="start">WEB: web:&quot;allowed&quot; → /webconfig + /control → /runs token → /search /read → durable web.taint → 409 web_tainted for ingest, uploads, skills.</text>
+<text x="40.0" y="1338.0" font-family="DejaVu Sans Mono, monospace" font-size="8.2" font-weight="400" fill="#5a6672" text-anchor="start">Host-owned: the SvelteKit web client (pnpm dev or optional WEB_CONTAINER), marketplace/ bundles and secrets/llm_key_kek. Compose declares only caddy, oltp and sandbox-manager; the manager creates all three sandbox containers.</text>
+<text x="40.0" y="1350.0" font-family="DejaVu Sans Mono, monospace" font-size="8.2" font-weight="400" fill="#5a6672" text-anchor="start">Sources: docker-compose.yml · caddy/Caddyfile · sandbox-manager/sandbox_manager.py · agent/{server,tools,agent,ingest,sidecar,websearch}.ts ·</text>
+<text x="40.0" y="1362.0" font-family="DejaVu Sans Mono, monospace" font-size="8.2" font-weight="400" fill="#5a6672" text-anchor="start">frontend/src · marketplace/ · e2e-test/ · CHANGELOG.md [Unreleased]</text>
+<text x="1560.0" y="1362.0" font-family="DejaVu Sans Mono, monospace" font-size="8.2" font-weight="400" fill="#5a6672" text-anchor="end">docs/diagrams/c4_containers.py · generated SVG</text>
 </svg>
 </body>
 </html>

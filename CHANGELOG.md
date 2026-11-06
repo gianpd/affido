@@ -47,6 +47,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   had introduced. Deploying on a host without gVisor now requires installing
   it (`runsc`) before the stack starts.
 
+- `docs/diagrams/c4-containers.html` is regenerated from the current topology:
+  three manager-created containers per user (agent, key sidecar, web-search
+  node), BYOK key custody and delivery, the operator search stack, the judge
+  audit path, unified ingestion and the security boundary invariants.
+  `docs/diagrams/README.md` maps every Unreleased entry to its place in the
+  diagram; draft-only RFCs (0010, 0015, 0019) are labelled "no code" instead
+  of being drawn as containers. The README's published-port and SvelteKit
+  version claims are corrected to match the compose file and `package.json`.
+
 ### Security
 
 - Key delivery hop (2026-10 review, RFC 0013 §6.4 P0.3/P0.4): the manager
