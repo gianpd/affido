@@ -105,6 +105,19 @@ export type CitationView = {
 	readonly status: "attribution_verified" | string;
 };
 
+/** Why a run ended `unanswered` with an upstream failure, when the sandbox
+ * itself answered. The sandbox being unreachable never produces an envelope:
+ * the web tier sees a failed fetch and reports it as a `SandboxError`. */
+export type PromptFailure = {
+	readonly kind: "provider_timeout" | "provider_unreachable";
+	/** The provider id the run was configured with (`deepseek`, `custom`, …). */
+	readonly provider: string;
+	/** The sidecar's transport cause: `no_response`, `dns_failure`,
+	 * `connect_timeout`, `connect_failure`, `tls_failure`, `network_error`;
+	 * null when the error body carried none. */
+	readonly reason: string | null;
+};
+
 /** The `/prompt` response envelope. `evidence` is produced by the server, never typed by the model. */
 export type PromptResult = {
 	readonly agent: string;
@@ -112,6 +125,9 @@ export type PromptResult = {
 	readonly reason: string | null;
 	/** The settlement's stored detail, e.g. the provider error behind `model_error`. */
 	readonly reasonDetail: string | null;
+	/** The classified upstream failure, or null when the run failed for another
+	 * reason (bad key, quota, context overflow) or did not fail. */
+	readonly failure: PromptFailure | null;
 	readonly answer: string | null;
 	readonly submissionId: number;
 	readonly requestId: string | null;

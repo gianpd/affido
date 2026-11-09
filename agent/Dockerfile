@@ -21,7 +21,7 @@ RUN npm ci --omit=dev --ignore-scripts
 RUN rm -rf /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
 
-COPY server.ts types.ts harness.ts model.ts tools.ts agent.ts http.ts trace.ts corpus.ts sidecar.ts \
+COPY server.ts types.ts harness.ts model.ts upstream-failure.ts tools.ts agent.ts http.ts trace.ts corpus.ts sidecar.ts \
      storage.ts quota-env.ts \
      websearch.ts web-tools.ts web-protocol.ts uploads.ts skills.ts artifacts.ts citation-store.ts citation-judge.ts \
      judge.ts judge-model.ts workspace-store.ts \

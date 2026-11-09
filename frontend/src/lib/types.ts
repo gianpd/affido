@@ -215,12 +215,23 @@ export type ArtifactView = {
 	modifiedAt: string;
 };
 
+/** Why a run ended `unanswered` with an upstream failure, when the sandbox
+ * itself answered: the sandbox being unreachable never produces an envelope,
+ * it surfaces as a `SandboxError` from the fetch. */
+export type PromptFailure = {
+	kind: 'provider_timeout' | 'provider_unreachable';
+	provider: string;
+	reason: string | null;
+};
+
 export type PromptResult = {
 	agent: string;
 	status: string;
 	reason: string | null;
 	/** The settlement's stored detail, e.g. the provider error behind `model_error`. */
 	reasonDetail: string | null;
+	/** Absent on images that predate the upstream-failure classification. */
+	failure?: PromptFailure | null;
 	answer: string | null;
 	submissionId: number;
 	requestId: string | null;

@@ -107,7 +107,10 @@ type Fixture = {
 	cleanup: () => Promise<void>;
 };
 
-const withSidecar = async (test: (fixture: Fixture) => Promise<void>): Promise<void> => {
+const withSidecar = async (
+	test: (fixture: Fixture) => Promise<void>,
+	options: { upstreamHeadersTimeoutMs?: number } = {},
+): Promise<void> => {
 	const upstream = await startFakeUpstream();
 	const upstreamBase = `http://127.0.0.1:${upstream.port}/v1`;
 	const catalog = await mkdtemp(join(tmpdir(), "sidecar-catalog-"));
@@ -118,7 +121,7 @@ const withSidecar = async (test: (fixture: Fixture) => Promise<void>): Promise<v
 			providers: [{ id: "fake-cat", name: "Fake catalog entry", baseUrl: upstreamBase, builtin: true, models: [{ id: "m" }] }],
 		}),
 	);
-	const sidecar = await createSidecarServer({ port: 0, catalogPath: join(catalog, "catalog.json") });
+	const sidecar = await createSidecarServer({ port: 0, catalogPath: join(catalog, "catalog.json"), ...options });
 	const sidecarBase = `http://127.0.0.1:${sidecar.port}`;
 	process.env.SIDECAR_URL = sidecarBase;
 	try {
@@ -324,8 +327,32 @@ test("upstream failures relay verbatim; a dead upstream is 502 with a stable cod
 		upstream.close();
 		const dead = await post(sidecarBase, `/custom-endpoint/~/${encodeURIComponent(upstreamBase)}/chat/completions`);
 		assert.equal(dead.status, 502);
-		assert.equal((JSON.parse(dead.text) as { error: string }).error, "upstream_unreachable");
+		const deadBody = JSON.parse(dead.text) as { error: string; reason?: string };
+		assert.equal(deadBody.error, "upstream_unreachable");
+		// The stable transport cause the agent classifies; a closed loopback port
+		// refuses the connection, it does not time out.
+		assert.equal(deadBody.reason, "connect_failure");
 	});
+});
+
+test("an upstream that never sends headers is a named 504 inside the prompt cap", async () => {
+	await withSidecar(
+		async ({ sidecarBase, upstream, upstreamBase }) => {
+			await post(sidecarBase, "/config", { provider: "custom-endpoint", modelId: "m", apiKey: KEY, baseUrl: upstreamBase });
+			// The handler never writes: the call hangs in the headers phase.
+			upstream.once(() => {});
+			const started = Date.now();
+			const response = await post(sidecarBase, `/custom-endpoint/~/${encodeURIComponent(upstreamBase)}/chat/completions`);
+			assert.equal(response.status, 504);
+			assert.deepEqual(JSON.parse(response.text), {
+				error: "upstream_timeout",
+				reason: "no_response",
+				message: "the pinned upstream sent no response headers within 1s",
+			});
+			assert.ok(Date.now() - started < 2_000, "the timeout fires, not the client");
+		},
+		{ upstreamHeadersTimeoutMs: 300 },
+	);
 });
 
 // ── the agent side: buildProvider sidecar mode and configureProvider ─────────

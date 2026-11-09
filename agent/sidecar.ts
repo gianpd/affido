@@ -29,6 +29,16 @@ import { json, readBody } from "./http.ts";
 
 const DEFAULT_PORT = 8081;
 const DEFAULT_CATALOG = "/app/provider-catalog.json";
+/** Headers-phase deadline for one upstream call.
+ *
+ * Why 30s: pi-durable retries a retryable model error three times
+ * (baseDelayMs 2000, doubling, so 14s of backoff), and the web tier aborts
+ * `/prompt` at 180s. Four attempts of 30s plus backoff is ~134s, so the named
+ * 504 reaches the user instead of a client-side "sandbox unreachable". A
+ * provider that needs longer than this to send response headers is already
+ * beyond a usable chat turn. The timer covers headers only: once the stream
+ * starts it is cleared, because a long generation is legitimate. */
+const UPSTREAM_HEADERS_TIMEOUT_MS = 30_000;
 
 export type SidecarLog = (...args: unknown[]) => void;
 
@@ -201,6 +211,34 @@ const STRIPPED_RESPONSE_HEADERS = new Set([
 	"keep-alive",
 ]);
 
+/** Codes of a failed fetch: the nested `cause` is an Error, or an
+ * AggregateError carrying one code per resolved address. */
+const causeCodes = (error: unknown): readonly string[] => {
+	const codes: string[] = [];
+	const walk = (candidate: unknown): void => {
+		if (typeof candidate !== "object" || candidate === null) return;
+		const { code, errors } = candidate as { code?: unknown; errors?: unknown };
+		if (typeof code === "string") codes.push(code);
+		if (Array.isArray(errors)) for (const inner of errors) walk(inner);
+	};
+	walk(typeof error === "object" && error !== null ? (error as { cause?: unknown }).cause : undefined);
+	return codes;
+};
+
+const DNS_CODES = new Set(["EAI_AGAIN", "ENOTFOUND"]);
+const CONNECT_TIMEOUT_CODES = new Set(["UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "ETIMEDOUT"]);
+const TLS_CODE = /^(?:ERR_TLS|ERR_SSL|CERT_|UNABLE_TO_|DEPTH_ZERO_|SELF_SIGNED_|ERR_CERT)/;
+
+/** The stable `reason` riding the error body. The agent maps it to a prompt
+ * failure kind so the UI never has to parse free text. */
+const failureReason = (error: unknown): string => {
+	const codes = causeCodes(error);
+	if (codes.some((code) => DNS_CODES.has(code))) return "dns_failure";
+	if (codes.some((code) => TLS_CODE.test(code))) return "tls_failure";
+	if (codes.some((code) => CONNECT_TIMEOUT_CODES.has(code))) return "connect_timeout";
+	return codes.length > 0 ? "connect_failure" : "network_error";
+};
+
 /** `{provider}/~/{encoded-real-base}/{rest}` of a proxy path. */
 const parseProxyPath = (pathname: string): { provider: string; realBase: string; rest: string } | null => {
 	const segments = pathname.split("/");
@@ -220,15 +258,19 @@ const parseProxyPath = (pathname: string): { provider: string; realBase: string;
 export class ProxyRefused extends Error {
 	readonly status: number;
 	readonly code: string;
+	/** Machine-readable transport cause (`dns_failure`, `connect_timeout`, …);
+	 * null when the refusal is not a failed upstream call. */
+	readonly reason: string | null;
 
-	constructor(status: number, code: string, message: string) {
+	constructor(status: number, code: string, message: string, reason: string | null = null) {
 		super(message);
 		this.status = status;
 		this.code = code;
+		this.reason = reason;
 	}
 }
 
-const proxy = async (req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> => {
+const proxy = async (req: IncomingMessage, res: ServerResponse, url: URL, headersTimeoutMs: number): Promise<void> => {
 	if (slot === null) throw new ProxyRefused(503, "not_configured", "the sidecar holds no provider config");
 	const parsed = parseProxyPath(url.pathname);
 	if (parsed === null)
@@ -245,7 +287,7 @@ const proxy = async (req: IncomingMessage, res: ServerResponse, url: URL): Promi
 	const target = new URL(slot.upstream);
 	target.pathname = target.pathname.replace(/\/+$/, "") + (parsed.rest === "" ? "" : `/${parsed.rest}`);
 	target.search = url.search;
-	await relayPinned(req, res, target);
+	await relayPinned(req, res, target, headersTimeoutMs);
 };
 
 /** RFC 0018 §4: POST /judge/decisions — the fixed route the coherence judge
@@ -254,7 +296,7 @@ const proxy = async (req: IncomingMessage, res: ServerResponse, url: URL): Promi
  * header come from the slot exactly as for chat calls, and the body rides
  * through verbatim. Served only for a provider whose catalog entry pins a
  * decisions endpoint; today that is openrouter alone. */
-const judgeDecisions = async (req: IncomingMessage, res: ServerResponse, catalogPath: string): Promise<void> => {
+const judgeDecisions = async (req: IncomingMessage, res: ServerResponse, catalogPath: string, headersTimeoutMs: number): Promise<void> => {
 	if (slot === null) throw new ProxyRefused(503, "not_configured", "the sidecar holds no provider config");
 	const current = slot;
 	const entry = (await loadCatalog(catalogPath)).find((candidate) => candidate.id === current.provider);
@@ -262,13 +304,13 @@ const judgeDecisions = async (req: IncomingMessage, res: ServerResponse, catalog
 		throw new ProxyRefused(404, "no_decisions_endpoint", `provider "${current.provider}" pins no decisions endpoint`);
 	if (current.apiKey === null)
 		throw new ProxyRefused(503, "not_configured", `provider "${current.provider}" carries no key (faux stays direct)`);
-	await relayPinned(req, res, new URL(entry.decisionsUrl));
+	await relayPinned(req, res, new URL(entry.decisionsUrl), headersTimeoutMs);
 };
 
 /** Strip inbound credentials, stamp the slot's key, forward to the pinned
  * target and relay the response unbuffered — the shared core of the chat
  * proxy and the judge route. The target is always sidecar-pinned (R3). */
-const relayPinned = async (req: IncomingMessage, res: ServerResponse, target: URL): Promise<void> => {
+const relayPinned = async (req: IncomingMessage, res: ServerResponse, target: URL, headersTimeoutMs: number): Promise<void> => {
 	if (slot === null || slot.apiKey === null) throw new ProxyRefused(503, "not_configured", "no keyed slot");
 	const headers: Record<string, string> = {};
 	for (const [name, value] of Object.entries(req.headers)) {
@@ -287,6 +329,16 @@ const relayPinned = async (req: IncomingMessage, res: ServerResponse, target: UR
 	res.on("close", () => {
 		if (!res.writableFinished) controller.abort();
 	});
+	// Headers-phase deadline, cleared as soon as the fetch resolves: a provider
+	// that never answers becomes a named 504 the agent can classify, while a long
+	// streamed generation stays untouched.
+	const headersDeadline = new AbortController();
+	let headersTimedOut = false;
+	const timer = setTimeout(() => {
+		headersTimedOut = true;
+		headersDeadline.abort();
+	}, headersTimeoutMs);
+	timer.unref();
 	let upstream: Response;
 	try {
 		upstream = await fetch(target, {
@@ -295,12 +347,27 @@ const relayPinned = async (req: IncomingMessage, res: ServerResponse, target: UR
 			body: method === "GET" || method === "HEAD" ? undefined : Readable.toWeb(req),
 			duplex: "half",
 			redirect: "error", // a redirect would carry the stamped header off the pinned host
-			signal: controller.signal,
+			signal: AbortSignal.any([controller.signal, headersDeadline.signal]),
 		});
 	} catch (error) {
 		req.resume(); // drain the inbound body so the socket can be reused
-		const reason = error instanceof Error ? error.message : String(error);
-		throw new ProxyRefused(502, "upstream_unreachable", `pinned upstream did not answer: ${reason}`);
+		if (controller.signal.aborted) {
+			// The client went away: there is no response to write, and a timeout
+			// that fires at the same moment has nobody left to tell.
+			if (!res.headersSent) res.destroy();
+			return;
+		}
+		if (headersTimedOut)
+			throw new ProxyRefused(
+				504,
+				"upstream_timeout",
+				`the pinned upstream sent no response headers within ${Math.max(1, Math.round(headersTimeoutMs / 1000))}s`,
+				"no_response",
+			);
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new ProxyRefused(502, "upstream_unreachable", `pinned upstream did not answer: ${detail}`, failureReason(error));
+	} finally {
+		clearTimeout(timer);
 	}
 	const relay: Record<string, string> = {};
 	upstream.headers.forEach((value, name) => {
@@ -336,8 +403,11 @@ export const createSidecarServer = async (options: {
 	readonly port?: number;
 	readonly catalogPath?: string;
 	readonly log?: SidecarLog;
+	/** Headers-phase deadline per proxied call; tests shrink it. */
+	readonly upstreamHeadersTimeoutMs?: number;
 }): Promise<SidecarServer> => {
 	const catalogPath = options.catalogPath ?? DEFAULT_CATALOG;
+	const headersTimeoutMs = options.upstreamHeadersTimeoutMs ?? UPSTREAM_HEADERS_TIMEOUT_MS;
 	const log = options.log ?? (() => {});
 	const server = createServer((req, res) => {
 		const url = new URL(req.url ?? "/", "http://sidecar");
@@ -376,15 +446,21 @@ export const createSidecarServer = async (options: {
 					});
 				}
 				if (req.method === "POST" && url.pathname === "/judge/decisions") {
-					return await judgeDecisions(req, res, catalogPath);
+					return await judgeDecisions(req, res, catalogPath, headersTimeoutMs);
 				}
-				return await proxy(req, res, url);
+				return await proxy(req, res, url, headersTimeoutMs);
 			} catch (error) {
 				if (error instanceof ConfigError)
 					return json(res, error.status, { error: error.code, message: error.message });
 				if (error instanceof ProxyRefused) {
-					if (error.code !== "upstream_unreachable") log(`proxy refused: ${error.code}`);
-					if (!res.headersSent) return json(res, error.status, { error: error.code, message: error.message });
+					if (error.code !== "upstream_unreachable" && error.code !== "upstream_timeout")
+						log(`proxy refused: ${error.code}`);
+					if (!res.headersSent)
+						return json(res, error.status, {
+							error: error.code,
+							...(error.reason === null ? {} : { reason: error.reason }),
+							message: error.message,
+						});
 					res.destroy();
 					return;
 				}

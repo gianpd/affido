@@ -26,6 +26,7 @@ import type { JudgeTarget } from "./judge.ts";
 import { judgeTargetOf } from "./judge-model.ts";
 import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, PromptResult, ProviderConfig, RunCitations, StorageQuotaPort, WebMode } from "./types.ts";
 import { configureProvider } from "./model.ts";
+import { classifyProviderFailure } from "./upstream-failure.ts";
 import { IngestPipeline } from "./ingest.ts";
 
 /** The registry every `ContainerAgent` runs on: the coding tools, the citation
@@ -261,21 +262,26 @@ export class ContainerAgent implements AgentApi {
 			// Read the run's exit through the read-only trace path: a nested
 			// `trace()` reuses the open conversation and never writes.
 			const state = await this.#harness.trace((source) => source.runState(conversation.id, runId, this.#context));
-			const envelope = await this.#envelope(state, strict, runId, answer, settled.status, settled.status === "unanswered" ? settled.reason : null);
+			const reason = settled.status === "unanswered" ? settled.reason : null;
+			// The stored detail says WHY a model_error happened; the reason alone says nothing.
+			const reasonDetail =
+				settled.status === "unanswered"
+					? typeof settled.detail === "string"
+						? settled.detail
+						: settled.detail === undefined
+							? null
+							: JSON.stringify(settled.detail)
+					: null;
+			const envelope = await this.#envelope(state, strict, runId, answer, settled.status, reason);
 			await this.#harness.refreshStats();
 			return {
 				agent: this.#name,
 				status: settled.status,
-				reason: settled.status === "unanswered" ? settled.reason : null,
-				// The stored detail says WHY a model_error happened; the reason alone says nothing.
-				reasonDetail:
-					settled.status === "unanswered"
-						? typeof settled.detail === "string"
-							? settled.detail
-							: settled.detail === undefined
-								? null
-								: JSON.stringify(settled.detail)
-						: null,
+				reason,
+				reasonDetail,
+				// RFC 0013 §6.1: the sidecar's error body is the only place that knows a
+				// provider failed, as opposed to the sandbox being unreachable.
+				failure: classifyProviderFailure(reasonDetail, this.#model.provider),
 				answer: envelope.answer,
 				submissionId: settled.id,
 				requestId: requestId ?? null,

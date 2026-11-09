@@ -38,6 +38,22 @@ export class SandboxError extends Error {
 
 type SandboxRequestInit = Omit<RequestInit, 'signal'> & { timeoutMs?: number };
 
+/** A failed fetch means one of two different things: the sandbox never
+ * answered (unreachable), or it is still working when our deadline expired
+ * (timeout). Only the first is a broken sandbox; the second says nothing about
+ * the network and the run may still be finishing. */
+const fetchFailure = (error: unknown, timeoutMs: number): SandboxError => {
+	if (error instanceof Error && error.name === 'TimeoutError') {
+		return new SandboxError(
+			504,
+			'sandbox_timeout',
+			`the sandbox did not answer within ${Math.round(timeoutMs / 1000)}s; the run may still be finishing`
+		);
+	}
+	const reason = error instanceof Error ? error.message : String(error);
+	return new SandboxError(503, 'sandbox_unreachable', `sandbox is unreachable: ${reason}`);
+};
+
 const managerHeaders = (): HeadersInit => ({
 	'content-type': 'application/json',
 	...(MANAGER_TOKEN ? { 'x-manager-token': MANAGER_TOKEN } : {})
@@ -98,15 +114,15 @@ async function sandboxFetch<T>(
 	}
 
 	let response: Response;
+	const timeoutMs = init.timeoutMs ?? SANDBOX_REQUEST_TIMEOUT_MS;
 	try {
 		response = await fetch(url, {
 			...init,
 			headers,
-			signal: AbortSignal.timeout(init.timeoutMs ?? SANDBOX_REQUEST_TIMEOUT_MS)
+			signal: AbortSignal.timeout(timeoutMs)
 		});
 	} catch (error) {
-		const reason = error instanceof Error ? error.message : String(error);
-		throw new SandboxError(503, 'sandbox_unreachable', `sandbox is unreachable: ${reason}`);
+		throw fetchFailure(error, timeoutMs);
 	}
 
 	const text = await response.text();
@@ -381,8 +397,7 @@ export const downloadSandboxArtifact = async (
 			signal: AbortSignal.timeout(SANDBOX_REQUEST_TIMEOUT_MS)
 		});
 	} catch (error) {
-		const reason = error instanceof Error ? error.message : String(error);
-		throw new SandboxError(503, 'sandbox_unreachable', `sandbox is unreachable: ${reason}`);
+		throw fetchFailure(error, SANDBOX_REQUEST_TIMEOUT_MS);
 	}
 	if (!response.ok) {
 		const body = (await response.json().catch(() => ({}))) as { error?: string; message?: string };
@@ -444,6 +459,9 @@ export const sandboxErrorMessage = (error: unknown): string => {
 	if (error instanceof SandboxError) {
 		if (error.code === 'sandbox_unreachable' || error.code === 'manager_unavailable') {
 			return 'The agent sandbox is not reachable. Start the control plane (docker compose up -d) and try again.';
+		}
+		if (error.code === 'sandbox_timeout') {
+			return 'The sandbox did not answer in time. The run may still be finishing: retry, or open the trace before starting over.';
 		}
 		return error.message;
 	}

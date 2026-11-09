@@ -159,6 +159,20 @@ const scriptableConversation = (
 	} as unknown as Conversation;
 };
 
+/** A conversation whose one submission settles `unanswered` with `detail`, the
+ * shape pi-durable stores for a `model_error`. */
+const unansweredConversation = (detail: string): Conversation => {
+	const tx: FakeTx = { doc: () => ({ annotations: {}, publishRejections: {}, plain: null, published: null }), entry: () => undefined };
+	return {
+		id: 1 as ConversationId,
+		commit: async (handler: (tx: FakeTx) => unknown) => handler(tx),
+		submit: async () => ({
+			id: 5 as SubmissionId,
+			wait: async () => ({ id: 5 as SubmissionId, status: "unanswered" as const, reason: "model_error", detail }),
+		}),
+	} as unknown as Conversation;
+};
+
 const fakeConversation = (items: readonly EntryRecord[], hasMore = false): Conversation =>
 	({
 		id: 1 as ConversationId,
@@ -226,9 +240,10 @@ function fakeTraceSource(items = [entry(2, "pi.user", "hi"), entry(3, "pi.assist
 
 // models/sessionDb are only read when building the default DurableHarness; with
 // a harness injected they never leave this call.
-const makeAgent = async (harness: HarnessLifecycle) => {
+const makeAgent = async (harness: HarnessLifecycle, provider?: string) => {
 	const workspace = await mkdtemp(join(tmpdir(), "agent-test-"));
-	const { models, credentials, model } = await createModel();
+	const { models, credentials, model: defaultModel } = await createModel();
+	const model = provider === undefined ? defaultModel : { provider, modelId: defaultModel.modelId };
 	const agent = new ContainerAgent({
 		name: "test",
 		workspace,
@@ -329,7 +344,32 @@ test("a /skill_name prompt carries the server-built hint in the stored content",
 	assert.equal((drafts.at(-1) as { content?: unknown }).content, "what is 2+2");
 	assert.deepEqual(plain.artifacts, []);
 });
-	test("the container section states the closed toolbox (RFC 0009 D3): every sandbox knows unpdf", () => {
+	test("an unanswered run classifies the sidecar's provider failure, leaves other errors raw", async () => {
+	const timedOut = new FakeLifecycle(
+		fakeTraceSource(),
+		unansweredConversation(
+			'504: {"error":"upstream_timeout","reason":"no_response","message":"the pinned upstream sent no response headers within 30s"}',
+		),
+	);
+	const { agent: timeoutAgent } = await makeAgent(timedOut, "deepseek");
+	const timeout = await timeoutAgent.prompt("hello", "req-upstream-1", "off");
+	assert.equal(timeout.status, "unanswered");
+	assert.equal(timeout.reason, "model_error");
+	assert.deepEqual(timeout.failure, { kind: "provider_timeout", provider: "deepseek", reason: "no_response" });
+
+	// A provider error that is not a transport failure keeps its raw detail and
+	// no classification: the UI must not blame the network for a bad key.
+	const unauthorized = new FakeLifecycle(
+		fakeTraceSource(),
+		unansweredConversation("401: Incorrect API key provided"),
+	);
+	const { agent: keyAgent } = await makeAgent(unauthorized, "openai");
+	const badKey = await keyAgent.prompt("hello", "req-upstream-2", "off");
+	assert.equal(badKey.failure, null);
+	assert.equal(badKey.reasonDetail, "401: Incorrect API key provided");
+});
+
+test("the container section states the closed toolbox (RFC 0009 D3): every sandbox knows unpdf", () => {
 	// Server-built facts, present with no skill installed. Without the toolbox
 	// paragraph the model reaches for pdftotext or Python and reports a PDF as
 	// unreadable; the paragraph must name both baked libraries, the NODE_PATH

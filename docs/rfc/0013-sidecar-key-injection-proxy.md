@@ -299,6 +299,28 @@ prompt-injected agent can call the sidecar, and that is fine: the call is
 indistinguishable from a legitimate model request, goes to the pinned upstream
 only, and returns provider output, not key material.
 
+**Upstream failure classification (amendment).** A provider that cannot be
+reached must not be reported as a dead sandbox. `relayPinned` bounds the
+headers phase at 30 s and clears the timer once headers arrive, so a long
+streamed generation is untouched. The budget leaves the named error inside
+the web tier's 180 s `/prompt` cap even after pi-durable's retry policy
+(3 retries, 2 s base delay doubling: ~134 s worst case). A failure before
+headers is a JSON error body with a stable `reason`:
+
+| Status | `error` | `reason` | Meaning |
+|---|---|---|---|
+| 502 | `upstream_unreachable` | `dns_failure`, `connect_timeout`, `connect_failure`, `tls_failure`, `network_error` | the pinned upstream never accepted a connection |
+| 504 | `upstream_timeout` | `no_response` | connected, no response headers within the deadline |
+
+The agent classifies the settlement detail (pi-ai renders it as
+`<status>: {…}`) into `PromptResult.failure {kind, provider, reason}`:
+`provider_timeout` or `provider_unreachable`. No match means `failure: null`
+and the raw `reasonDetail` — a bad key, quota, or context overflow is not a
+network problem. The web tier gives provider failures their own sentence and
+reserves "sandbox unreachable" for a failed fetch; a `/prompt` that exceeds
+`SANDBOX_REQUEST_TIMEOUT_MS` is `sandbox_timeout` instead, because the run
+may still be finishing.
+
 ### 6.2 Agent (`agent/model.ts`, `agent/tools.ts`)
 
 - `buildProvider` gains a sidecar mode: for a delivered `{provider, modelId}`

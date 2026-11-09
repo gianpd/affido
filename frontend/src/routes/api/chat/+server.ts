@@ -6,6 +6,7 @@ import {
 	type UIMessageChunk
 } from 'ai';
 import { chunkText } from '#lib/chat-text';
+import { unansweredMessage } from '#lib/chat-failure';
 import { db } from '#lib/server/db';
 import { chatMessage } from '#lib/server/db/schema';
 import { promptSandbox, sandboxErrorMessage } from '#lib/server/sandbox';
@@ -173,11 +174,7 @@ export const POST: RequestHandler = async (event) => {
 					.where(eq(chatMessage.id, userMessage.id));
 			}
 
-			const answer =
-				result.answer ??
-				(result.status === 'unanswered'
-					? `The agent did not answer: ${result.reason ?? 'unknown reason'}${result.reasonDetail ? ` — ${result.reasonDetail}` : ''}.`
-					: 'The agent finished without a text answer.');
+			const answer = unansweredMessage(result);
 
 			// The server-built evidence fields (RFC 0006 §5.1): stored as a data part,
 			// streamed to the UI, and rendered by the Files used panel. The artifact

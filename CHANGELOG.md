@@ -8,6 +8,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Provider failures are classified instead of surfacing as a dead sandbox.
+  The key sidecar now bounds the provider's headers phase (30 s, cleared once
+  the stream starts) and answers `504 upstream_timeout` or `502
+  upstream_unreachable` with a stable `reason` (`dns_failure`,
+  `connect_timeout`, `connect_failure`, `tls_failure`, `network_error`).
+  `/prompt` carries `failure {kind, provider, reason}`, the chat names the
+  provider and the transport cause, and the web tier reports a prompt that
+  exceeded its own deadline as `sandbox_timeout` instead of "unreachable".
+  Bad key, quota, and context-overflow errors keep their raw detail.
+
 - Judge audit in the traces UI: `GET /inspect?report=citations` now returns the
   per-pair `verdicts` of each judged run, and the traces page renders them as
   summary badges plus a line/citation/verdict/score/latency/truncated table.
