@@ -11,6 +11,7 @@
 	import * as Empty from '#lib/components/ui/empty';
 	import * as Table from '#lib/components/ui/table';
 	import { formatBytes, formatCost, formatDate, formatNumber, shortId } from '#lib/format';
+	import StorageUsage from '#lib/components/storage-usage.svelte';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -85,6 +86,8 @@
 			</Card.Root>
 		{/each}
 	</div>
+
+	<StorageUsage report={data.storage} />
 
 	<Card.Root class="border-primary/20 bg-accent/40">
 		<Card.Content class="flex flex-col gap-4">

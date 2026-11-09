@@ -30,6 +30,7 @@ import { Judge, type JudgeTarget } from "./judge.ts";
 import { registerJudgeProvider } from "./judge-model.ts";
 import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import { IngestPipeline } from "./ingest.ts";
+import { StorageQuota } from "./storage.ts";
 import {
 	ArtifactTool,
 	CitationsTool,
@@ -58,6 +59,7 @@ import {
 	SessionTool,
 	SkillsFileTool,
 	StatusTool,
+	StorageTool,
 	SwitchSessionTool,
 	UploadFileTool,
 	VerifySkillTool,
@@ -124,6 +126,10 @@ if (JUDGE_MODE !== "off") {
 	);
 }
 
+// RFC 0022: one disk quota for the whole sandbox. The agent's tool calls and
+// every HTTP staging route are admitted against the same measurement.
+const storageQuota = new StorageQuota({ workspace: WORKSPACE, sessionDb: SESSION_DB });
+
 const agent = new ContainerAgent({
 	name: AGENT,
 	workspace: WORKSPACE,
@@ -138,15 +144,17 @@ const agent = new ContainerAgent({
 	judgeMode: JUDGE_MODE,
 	context,
 	log,
+	storageQuota,
 });
 judgeTargetOfRun = () => agent.judgeTarget();
 
 // One pipeline for every staging and deletion entry point (RFC 0014 R1).
-const pipeline = new IngestPipeline(WORKSPACE);
+const pipeline = new IngestPipeline(WORKSPACE, storageQuota);
 
 const tools: HttpTool[] = [
 	new HealthTool(),
 	new StatusTool(),
+	new StorageTool(storageQuota),
 	new SessionTool(),
 	new InspectTool(),
 	new EntryTool(),
@@ -157,17 +165,17 @@ const tools: HttpTool[] = [
 	new DerivedTextTool(),
 	new CitationsTool(),
 	new DeleteRawTool(pipeline),
-	new CreateUploadDirTool(WORKSPACE),
+	new CreateUploadDirTool(WORKSPACE, storageQuota),
 	new UploadFileTool(pipeline),
 	new ListUploadsTool(WORKSPACE),
 	new DeleteUploadTool(pipeline),
-	new SkillsFileTool(WORKSPACE),
+	new SkillsFileTool(WORKSPACE, storageQuota),
 	new ListSkillsTool(WORKSPACE),
 	new VerifySkillTool(WORKSPACE),
-	new DeleteSkillTool(WORKSPACE),
+	new DeleteSkillTool(WORKSPACE, storageQuota),
 	new ListArtifactsTool(WORKSPACE),
 	new ArtifactTool(WORKSPACE),
-	new DeleteArtifactsTool(WORKSPACE),
+	new DeleteArtifactsTool(WORKSPACE, storageQuota),
 	new PromptTool(),
 	new ConfigTool(),
 	new WebConfigTool(),

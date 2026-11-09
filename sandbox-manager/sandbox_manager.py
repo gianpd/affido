@@ -27,12 +27,15 @@ import json
 import logging
 import os
 import re
+import secrets
 import socket
 import ssl
+import string
 import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -131,6 +134,26 @@ MANAGER_CONTAINER = os.getenv("MANAGER_CONTAINER", "sandbox-manager")  # for net
 CADDY_CONTAINER   = os.getenv("CADDY_CONTAINER")  # compose container_name of caddy
 WEB_CONTAINER     = os.getenv("WEB_CONTAINER")  # optional: SvelteKit app that calls /resolve
 AUTH_COOKIE_NAME  = os.getenv("AUTH_COOKIE_NAME", "better-auth.session_token")
+# ── machine identity surface (RFC 0023) ─────────────────────────────────────
+# Four routes for server-to-server callers (worldGraph): register, login,
+# logout and the email/name fields on /whoami. They are gated by a scoped
+# X-Identity-Key, never by MANAGER_TOKEN: the key can mint an identity, not
+# create/stop/inspect a sandbox. The manager stays the only writer of the
+# better-auth tables and the web app keeps calling auth.api.* in-process.
+IDENTITY_API_KEY = os.getenv("IDENTITY_API_KEY", "")
+# Rotation: both keys are accepted while the caller switches over.
+IDENTITY_API_KEY_PREVIOUS = os.getenv("IDENTITY_API_KEY_PREVIOUS", "")
+IDENTITY_MIN_KEY_CHARS = 32
+# BETTER_AUTH_SECRET seals the session cookie; ORIGIN picks the cookie name
+# (https -> __Secure-) exactly like better-auth's createCookieGetter. Neither
+# is ever logged. Missing either one makes the routes answer
+# identity_unavailable instead of serving a cookie the web app cannot verify.
+BETTER_AUTH_SECRET = os.getenv("BETTER_AUTH_SECRET", "")
+ORIGIN            = os.getenv("ORIGIN", "")
+IDENTITY_SESSION_TTL = datetime.timedelta(days=7)  # better-auth's expiresIn
+IDENTITY_LOGIN_PER_MINUTE = int(os.getenv("IDENTITY_LOGIN_PER_MINUTE", "5"))
+IDENTITY_REGISTER_PER_HOUR = int(os.getenv("IDENTITY_REGISTER_PER_HOUR", "10"))
+IDENTITY_MAX_BODY = 16 * 1024
 # ── BYOK (RFC 0012) ─────────────────────────────────────────────────────────
 # 32-byte key-encryption key for provider_key ciphertext. Mounted read-only
 # into this container only (compose: ./secrets/llm_key_kek). Raw or base64;
@@ -422,6 +445,43 @@ def try_claim(user_id: str) -> bool:
 
 
 # ── identity on the browser path: session cookie, never a client user_id ────
+def _cookie_base_name() -> str:
+    """The better-auth cookie name without a secure prefix."""
+    return AUTH_COOKIE_NAME.removeprefix("__Secure-")
+
+
+def identity_cookie_name() -> str:
+    """better-auth's cookie name for the configured origin (RFC 0023 §4.2).
+
+    createCookieGetter prefixes __Secure- when baseURL is https and not when
+    it is http; the manager must mint the exact name getSession reads.
+    """
+    prefix = "__Secure-" if ORIGIN.lower().startswith("https://") else ""
+    return prefix + _cookie_base_name()
+
+
+def session_token(handler: BaseHTTPRequestHandler) -> str | None:
+    """The unguessable token part of the presented better-auth cookie."""
+    cookie = http.cookies.SimpleCookie()
+    try:
+        cookie.load(handler.headers.get("Cookie") or "")
+    except http.cookies.CookieError:
+        return None
+    base = _cookie_base_name()
+    morsel = (
+        cookie.get(identity_cookie_name())
+        or cookie.get(AUTH_COOKIE_NAME)
+        or cookie.get("__Secure-" + base)
+        or cookie.get(base)
+    )
+    if morsel is None:
+        return None
+    # better-auth signs the cookie as "<token>.<hmac>". The token is the
+    # unguessable database credential; the signature only protects it in
+    # transit, so the lookup uses the token part.
+    return urllib.parse.unquote(morsel.value).split(".", 1)[0] or None
+
+
 def user_from_session(handler: BaseHTTPRequestHandler) -> str | None:
     """Validate the better-auth session cookie against the OLTP.
 
@@ -430,15 +490,9 @@ def user_from_session(handler: BaseHTTPRequestHandler) -> str | None:
     that path. Names follow better-auth's defaults and are pinned down
     together with the user_table shape (§9, item 1).
     """
-    cookie = http.cookies.SimpleCookie()
-    cookie.load(handler.headers.get("Cookie") or "")
-    morsel = cookie.get(AUTH_COOKIE_NAME) or cookie.get("__Secure-" + AUTH_COOKIE_NAME)
-    if morsel is None:
+    token = session_token(handler)
+    if token is None:
         return None
-    # better-auth signs the cookie as "<token>.<hmac>". The token is the
-    # unguessable database credential; the signature only protects it in
-    # transit, so the lookup uses the token part.
-    token = urllib.parse.unquote(morsel.value).split(".", 1)[0]
     with db() as conn:
         row = conn.execute(
             'SELECT "userId" FROM "session" '
@@ -446,6 +500,307 @@ def user_from_session(handler: BaseHTTPRequestHandler) -> str | None:
             (token,),
         ).fetchone()
     return row["userId"] if row else None
+
+
+def session_identity(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
+    """Session + user fields for GET /whoami (RFC 0023 §6).
+
+    LEFT JOIN: the e2e seeds session rows without a user row (no foreign key
+    in the auth schema), and a missing `user` table must not break the
+    browser path that only needs userId. Email and name stay absent there.
+    """
+    token = session_token(handler)
+    if token is None:
+        return None
+    with db() as conn:
+        try:
+            row = conn.execute(
+                'SELECT s."userId" AS user_id, u."email" AS email, u."name" AS name '
+                'FROM "session" s LEFT JOIN "user" u ON u."id" = s."userId" '
+                'WHERE s."token" = %s AND s."expiresAt" > now()',
+                (token,),
+            ).fetchone()
+        except psycopg.errors.UndefinedTable:
+            conn.rollback()
+            row = conn.execute(
+                'SELECT "userId" AS user_id FROM "session" '
+                'WHERE "token" = %s AND "expiresAt" > now()',
+                (token,),
+            ).fetchone()
+    return dict(row) if row else None
+
+
+# ── machine identity: the write half of better-auth (RFC 0023) ─────────────
+# A manager-side caller authenticates with X-Identity-Key and the password
+# crosses once, server-to-server, to be hashed at the trust boundary that owns
+# the DB. The scrypt parameters and the cookie signature are better-auth's,
+# byte for byte (@better-auth/utils@0.5.0 password.node / better-call crypto).
+
+_ID_ALPHABET = string.ascii_letters + string.digits
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_identity_hash: list[str] = []
+
+
+def identity_keys() -> tuple[str, ...]:
+    """Configured keys that are long enough to be a secret. A shorter value
+    is ignored, so the routes fail closed with 401 instead of accepting a
+    weak credential."""
+    return tuple(
+        key
+        for key in (IDENTITY_API_KEY, IDENTITY_API_KEY_PREVIOUS)
+        if len(key) >= IDENTITY_MIN_KEY_CHARS
+    )
+
+
+def identity_key_ok(provided: str) -> bool:
+    """Constant-time over every configured key (rotation accepts two).
+
+    Bytes, not str: hmac.compare_digest rejects non-ASCII str input, and a
+    non-ASCII header must be a plain 401, not a 500.
+    """
+    provided_bytes = provided.encode("utf-8", "replace")
+    ok = False
+    for key in identity_keys():
+        ok |= hmac.compare_digest(provided_bytes, key.encode("utf-8"))
+    return ok
+
+
+def identity_ready() -> bool:
+    return bool(BETTER_AUTH_SECRET) and bool(ORIGIN)
+
+
+def _random_alnum(length: int) -> str:
+    return "".join(secrets.choice(_ID_ALPHABET) for _ in range(length))
+
+
+def _scrypt_key(password: str, salt: str) -> bytes:
+    """@better-auth/utils' node path: NFKC, salt as its hex STRING, N=16384,
+    r=16, p=1, dkLen=64, maxmem=128*N*r*2."""
+    return hashlib.scrypt(
+        unicodedata.normalize("NFKC", password).encode("utf-8"),
+        salt=salt.encode("utf-8"),
+        n=16384,
+        r=16,
+        p=1,
+        dklen=64,
+        maxmem=128 * 16384 * 16 * 2,
+    )
+
+
+def hash_password(password: str, salt: str | None = None) -> str:
+    """`salt:key`, 32 hex chars of salt and 128 of key, like better-auth."""
+    salt = salt or os.urandom(16).hex()
+    return f"{salt}:{_scrypt_key(password, salt).hex()}"
+
+
+def verify_password(stored: str, password: str) -> bool:
+    """True when the plaintext reproduces the stored salt:key. A malformed
+    or foreign hash is simply a failed login, never an exception."""
+    salt, sep, key = stored.partition(":")
+    if not sep or not salt or not key:
+        return False
+    try:
+        computed = _scrypt_key(password, salt).hex()
+    except (TypeError, ValueError):
+        return False
+    return hmac.compare_digest(computed, key)
+
+
+def identity_dummy_hash() -> str:
+    """One valid hash for the unknown-email path: login then costs a scrypt
+    either way, so response time does not enumerate accounts."""
+    if not _identity_hash:
+        _identity_hash.append(hash_password("identity-dummy-password"))
+    return _identity_hash[0]
+
+
+def sealed_cookie(token: str, secret: str | None = None) -> str:
+    """better-auth's signed cookie, URL-encoded like encodeURIComponent.
+
+    signCookieValue: base64(HMAC-SHA256(secret, token)), appended after a dot,
+    then the whole value is percent-encoded. The name follows ORIGIN.
+    """
+    signature = base64.b64encode(
+        hmac.new(
+            (secret if secret is not None else BETTER_AUTH_SECRET).encode(),
+            token.encode(),
+            hashlib.sha256,
+        ).digest()
+    ).decode()
+    value = urllib.parse.quote(f"{token}.{signature}", safe="")
+    return f"{identity_cookie_name()}={value}"
+
+
+def identity_email(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ManagerError("invalid_input", "email is required", 400)
+    email = value.strip().lower()  # RFC 0023 §5: one account per address
+    if len(email) > 254 or not _EMAIL_RE.match(email):
+        raise ManagerError("invalid_input", "email is not valid", 400)
+    return email
+
+
+def identity_password(value: Any) -> str:
+    if not isinstance(value, str) or not 8 <= len(value) <= 128:
+        raise ManagerError("invalid_input", "password must be 8-128 characters", 400)
+    return value
+
+
+def identity_name(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ManagerError("invalid_input", "name is required", 400)
+    name = value.strip()
+    if not 1 <= len(name) <= 200:
+        raise ManagerError("invalid_input", "name must be 1-200 characters", 400)
+    return name
+
+
+def identity_result(user_id: str, email: str, name: str, token: str) -> dict[str, Any]:
+    return {
+        "user": {"id": user_id, "email": email, "name": name},
+        "session": {"cookie": sealed_cookie(token)},
+    }
+
+
+def identity_register(
+    email: str, password: str, name: str, ip: str, user_agent: str
+) -> dict[str, Any]:
+    """user + account + session in ONE transaction (RFC 0023 §3)."""
+    user_id = _random_alnum(32)
+    token = _random_alnum(32)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    expires = now + IDENTITY_SESSION_TTL
+    password_hash = hash_password(password)
+    try:
+        with db() as conn:
+            with conn.transaction():
+                conn.execute(
+                    'INSERT INTO "user" ("id", "name", "email", "emailVerified",'
+                    ' "image", "createdAt", "updatedAt")'
+                    " VALUES (%s, %s, %s, false, NULL, %s, %s)",
+                    (user_id, name, email, now, now),
+                )
+                conn.execute(
+                    'INSERT INTO "account" ("id", "accountId", "providerId",'
+                    ' "userId", "password", "createdAt", "updatedAt")'
+                    " VALUES (%s, %s, 'credential', %s, %s, %s, %s)",
+                    (_random_alnum(32), user_id, user_id, password_hash, now, now),
+                )
+                conn.execute(
+                    'INSERT INTO "session" ("id", "token", "userId", "expiresAt",'
+                    ' "ipAddress", "userAgent", "createdAt", "updatedAt")'
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (_random_alnum(32), token, user_id, expires, ip, user_agent, now, now),
+                )
+    except psycopg.errors.UniqueViolation as exc:
+        # The only realistic unique violation is user.email. Anything else
+        # (a token/ID collision) is an outage, not a taken address.
+        constraint = getattr(exc.diag, "constraint_name", "") or ""
+        if "email" not in constraint:
+            log.exception("identity register hit a non-email unique constraint")
+            raise ManagerError("identity_unavailable", "the identity store is unavailable", 503)
+        raise ManagerError("email_taken", "an account with this email already exists", 409)
+    except psycopg.Error:
+        # Never include the statement or the parameters: they carry the hash.
+        log.exception("identity register failed")
+        raise ManagerError("identity_unavailable", "the identity store is unavailable", 503)
+    return identity_result(user_id, email, name, token)
+
+
+def identity_login(
+    email: str, password: str, ip: str, user_agent: str
+) -> dict[str, Any]:
+    try:
+        with db() as conn:
+            row = conn.execute(
+                'SELECT u."id" AS id, u."email" AS email, u."name" AS name,'
+                ' a."password" AS password FROM "user" u'
+                ' JOIN "account" a ON a."userId" = u."id"'
+                " WHERE lower(u.\"email\") = %s AND a.\"providerId\" = 'credential'"
+                ' ORDER BY a."createdAt" DESC LIMIT 1',
+                (email,),
+            ).fetchone()
+    except psycopg.Error:
+        log.exception("identity login lookup failed")
+        raise ManagerError("identity_unavailable", "the identity store is unavailable", 503)
+    if row is None:
+        verify_password(identity_dummy_hash(), password)
+        raise ManagerError("invalid_credentials", "email or password is incorrect", 401)
+    if not row["password"] or not verify_password(row["password"], password):
+        raise ManagerError("invalid_credentials", "email or password is incorrect", 401)
+    token = _random_alnum(32)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        with db() as conn:
+            conn.execute(
+                'INSERT INTO "session" ("id", "token", "userId", "expiresAt",'
+                ' "ipAddress", "userAgent", "createdAt", "updatedAt")'
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    _random_alnum(32), token, row["id"], now + IDENTITY_SESSION_TTL,
+                    ip, user_agent, now, now,
+                ),
+            )
+    except psycopg.Error:
+        log.exception("identity login session insert failed")
+        raise ManagerError("identity_unavailable", "the identity store is unavailable", 503)
+    return identity_result(row["id"], row["email"], row["name"], token)
+
+
+def identity_logout(handler: BaseHTTPRequestHandler) -> None:
+    """Delete the presented session; every answer is 204, so a stale cookie
+    cannot be used to test whether a token still exists."""
+    token = session_token(handler)
+    if token is None:
+        return
+    try:
+        with db() as conn:
+            conn.execute('DELETE FROM "session" WHERE "token" = %s', (token,))
+    except psycopg.Error:
+        log.exception("identity logout failed")
+        raise ManagerError("identity_unavailable", "the identity store is unavailable", 503)
+
+
+class _RateWindows:
+    """In-process sliding windows: one manager process, low QPS."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._hits: dict[tuple[str, str], list[float]] = {}
+
+    def allow(self, bucket: str, key: str, limit: int, window_s: float) -> tuple[bool, int]:
+        now = time.time()
+        slot = (bucket, key)
+        with self._lock:
+            hits = [t for t in self._hits.get(slot, ()) if now - t < window_s]
+            if len(hits) >= limit:
+                self._hits[slot] = hits
+                return False, max(1, int(window_s - (now - hits[0])))
+            hits.append(now)
+            self._hits[slot] = hits
+            return True, 0
+
+    def reset(self) -> None:
+        with self._lock:
+            self._hits.clear()
+
+
+_identity_windows = _RateWindows()
+IDENTITY_ROUTES = frozenset({"/identity/register", "/identity/login", "/identity/logout"})
+
+
+def client_ip(handler: BaseHTTPRequestHandler) -> str:
+    """Rate-limit key. Caddy appends the real client to X-Forwarded-For; the
+    last hop is the one it added. A malformed value falls back to the peer."""
+    peer = handler.client_address[0]
+    forwarded = handler.headers.get("X-Forwarded-For") or ""
+    hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+    if hops:
+        try:
+            return str(ipaddress.ip_address(hops[-1]))
+        except ValueError:
+            pass
+    return peer
 
 
 # ── BYOK: provider keys, catalog, delivery (RFC 0012) ───────────────────────
@@ -1839,6 +2194,117 @@ class Handler(BaseHTTPRequestHandler):
     def send_error(self, exc: ManagerError) -> None:
         self.send(exc.status, {"error": exc.code, "message": str(exc)})
 
+    # ── machine identity surface (RFC 0023) ─────────────────────────────────
+    def send_identity(
+        self, code: int, payload: Any, headers: dict[str, str] | None = None
+    ) -> None:
+        self.send(code, payload, {"Cache-Control": "no-store", **(headers or {})})
+
+    def send_identity_error(
+        self, exc: ManagerError, headers: dict[str, str] | None = None
+    ) -> None:
+        self.send_identity(
+            exc.status, {"code": exc.code, "message": str(exc)}, headers
+        )
+
+    def send_empty(self, code: int) -> None:
+        self.send_response(code)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def identity_body(self, raw: bytes) -> dict[str, Any]:
+        try:
+            body = json.loads(raw or b"{}")
+        except Exception:
+            raise ManagerError("invalid_input", "request body is not valid JSON", 400)
+        if not isinstance(body, dict):
+            raise ManagerError("invalid_input", "request body must be a JSON object", 400)
+        return body
+
+    def identity_post(self) -> None:
+        """POST /identity/register|login|logout. Key first, then the walls:
+        no Origin (server-to-server only), a scoped key, a configured secret,
+        then the per-IP window. Every answer is no-store."""
+        path = urllib.parse.urlsplit(self.path).path
+        # Read the body before any early return: leaving Content-Length bytes
+        # unread desyncs the next request on a keep-alive connection.
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.close_connection = True
+            return self.send_identity(
+                400,
+                {"code": "invalid_input", "message": "invalid Content-Length"},
+                {"Connection": "close"},
+            )
+        if length < 0 or length > IDENTITY_MAX_BODY:
+            self.close_connection = True
+            return self.send_identity(
+                400,
+                {"code": "invalid_input", "message": "request body is too large"},
+                {"Connection": "close"},
+            )
+        raw = self.rfile.read(length) if length else b""
+        if path not in IDENTITY_ROUTES:
+            return self.send_identity(404, {"code": "not_found", "message": "not found"})
+        # A browser always sends Origin on a cross-origin POST; this surface is
+        # machine-only. Caddy deliberately does NOT strip it, so this check is
+        # live through the gateway (RFC 0023 §5).
+        if "Origin" in self.headers:
+            return self.send_identity_error(
+                ManagerError("forbidden_origin", "machine callers only: Origin must be absent", 403)
+            )
+        if not identity_key_ok(self.headers.get("X-Identity-Key") or ""):
+            return self.send_identity_error(
+                ManagerError("unauthorized", "bad or missing X-Identity-Key", 401)
+            )
+        if not identity_ready():
+            log.error(
+                "identity routes are called but BETTER_AUTH_SECRET/ORIGIN are not configured"
+            )
+            return self.send_identity_error(
+                ManagerError("identity_unavailable", "identity is not configured", 503)
+            )
+        ip = client_ip(self)
+        user_agent = (self.headers.get("User-Agent") or "")[:512]
+        if path == "/identity/logout":
+            try:
+                identity_logout(self)
+            except ManagerError as exc:
+                return self.send_identity_error(exc)
+            return self.send_empty(204)
+        limit, window = (
+            (IDENTITY_REGISTER_PER_HOUR, 3600.0)
+            if path == "/identity/register"
+            else (IDENTITY_LOGIN_PER_MINUTE, 60.0)
+        )
+        allowed, retry = _identity_windows.allow(path, ip, limit, window)
+        if not allowed:
+            return self.send_identity_error(
+                ManagerError("rate_limited", "too many requests", 429),
+                {"Retry-After": str(retry)},
+            )
+        try:
+            body = self.identity_body(raw)
+            email = identity_email(body.get("email"))
+            password = identity_password(body.get("password"))
+            if path == "/identity/register":
+                result = identity_register(
+                    email, password, identity_name(body.get("name")), ip, user_agent
+                )
+                return self.send_identity(201, result)
+            result = identity_login(email, password, ip, user_agent)
+            return self.send_identity(200, result)
+        except ManagerError as exc:
+            return self.send_identity_error(exc)
+        except Exception:
+            # Never echo the exception: it can carry statement parameters.
+            log.exception("identity request failed")
+            return self.send_identity_error(
+                ManagerError("identity_unavailable", "the identity store is unavailable", 503)
+            )
+
     # ── BYOK identity (RFC 0012 §5.3 + review clarification) ─────────────────
     # One explicit rule for PUT/DELETE /providers/config: a valid session
     # cookie is the only identity and any body user_id is ignored; with no
@@ -1939,10 +2405,23 @@ class Handler(BaseHTTPRequestHandler):
         endpoint; /whoami never provisions (unlike /resolve)."""
         try:
             if self.path.startswith("/whoami"):
-                user = user_from_session(self)
-                if user is None:
-                    return self.send(401, {"error": "invalid session"})
-                return self.send(200, {"user_id": user})
+                try:
+                    identity = session_identity(self)
+                except psycopg.Error:
+                    log.exception("whoami lookup failed")
+                    return self.send_identity(
+                        503,
+                        {"code": "identity_unavailable", "message": "the identity store is unavailable"},
+                    )
+                if identity is None:
+                    return self.send(
+                        401, {"error": "invalid session"}, {"Cache-Control": "no-store"}
+                    )
+                payload: dict[str, Any] = {"user_id": identity["user_id"]}
+                for field in ("email", "name"):
+                    if identity.get(field):
+                        payload[field] = identity[field]
+                return self.send(200, payload, {"Cache-Control": "no-store"})
             if self.path.startswith("/providers/catalog"):
                 self.read_user(self.user_id(), require_user=False)
                 return self.send(200, {"version": 1, "providers": provider_catalog()})
@@ -2081,6 +2560,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {"status": "ok"})
         if self.rejected_sandbox_peer():
             return self.send(403, {"error": "sandbox peers cannot call the manager"})
+        path = urllib.parse.urlsplit(self.path).path
+        if path.startswith("/identity/"):
+            # The route exists but only accepts POST: 405 lets a doctor tell
+            # "route missing" (404 from the gateway catch-all) from "route
+            # present" without creating an account.
+            if path in IDENTITY_ROUTES:
+                return self.send_identity(
+                    405,
+                    {"code": "method_not_allowed", "message": "use POST"},
+                    {"Allow": "POST"},
+                )
+            return self.send_identity(404, {"code": "not_found", "message": "not found"})
         if self.path.startswith("/whoami") or self.path.startswith("/providers/"):
             return self.providers_get()
         if not self.authorized():
@@ -2125,6 +2616,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.rejected_sandbox_peer():
             return self.send(403, {"error": "sandbox peers cannot call the manager"})
+        if urllib.parse.urlsplit(self.path).path.startswith("/identity/"):
+            return self.identity_post()
         if not self.authorized():
             return self.send(401, {"error": "bad or missing X-Manager-Token"})
         length = int(self.headers.get("Content-Length") or 0)
@@ -2262,6 +2755,23 @@ def main() -> None:
         LISTEN_ADDR, LISTEN_PORT, AGENT_IMAGE, STOP_AFTER_S, AGENT_EGRESS,
         "on" if MANAGER_TOKEN else "OFF",
     )
+    if identity_keys() and identity_ready():
+        log.info("identity surface: on (%s key(s), cookie=%s)",
+                 len(identity_keys()), identity_cookie_name())
+    elif IDENTITY_API_KEY and not identity_keys():
+        log.error(
+            "IDENTITY_API_KEY is shorter than %d characters: every identity request"
+            " is rejected with 401",
+            IDENTITY_MIN_KEY_CHARS,
+        )
+    elif IDENTITY_API_KEY:
+        # Never log the key or the secret: only the missing piece.
+        log.warning(
+            "identity surface: configured key but BETTER_AUTH_SECRET/ORIGIN missing;"
+            " /identity/* answers identity_unavailable"
+        )
+    else:
+        log.info("identity surface: off (IDENTITY_API_KEY is empty)")
     try:
         load_kek()
         log.info("BYOK KEK loaded from %s", LLM_KEK_FILE)

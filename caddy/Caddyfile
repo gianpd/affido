@@ -3,6 +3,23 @@
 # upstream in X-Sandbox-Endpoint, so Caddy has no static agent routes.
 
 :80 {
+	# RFC 0023: the machine identity surface. worldGraph is the only caller;
+	# the scoped X-Identity-Key gates it inside the manager (never MANAGER_TOKEN
+	# and never a sandbox route). Caddy must NOT strip Origin here: the manager
+	# rejects any request that carries one, and that check is the CSRF wall a
+	# browser would otherwise be able to reach with a leaked key.
+	@identity path /identity/*
+	handle @identity {
+		reverse_proxy sandbox-manager:8090
+	}
+
+	# GET /whoami is public on the gateway for machine callers (session cookie
+	# only, no manager token). The /providers/* block below reuses it as its
+	# forward_auth target.
+	handle /whoami {
+		reverse_proxy sandbox-manager:8090
+	}
+
 	# RFC 0012 §5.3: the browser path of the BYOK endpoints. forward_auth runs
 	# /whoami (session-only, never provisions) BEFORE the proxy hop, so a
 	# cookieless browser request can never reach the manager's write handlers.

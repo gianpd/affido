@@ -9,6 +9,15 @@ import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import type { CitationRunReport, CitationsTraceReport } from "./citation-report.ts";
 import type { ArtifactView } from "./artifacts.ts";
 import type { TraceEntryDetail, TraceQuery, TraceReport } from "./trace.ts";
+import type { StorageReport } from "./storage.ts";
+
+/** RFC 0022: the per-sandbox disk quota. The agent and the HTTP tools share
+ * one instance, so a write through either path invalidates the same measurement. */
+export interface StorageQuotaPort {
+	report(): Promise<StorageReport>;
+	ensureCapacity(requestedBytes: number): Promise<StorageReport>;
+	invalidate(): void;
+}
 
 export type Log = (...args: unknown[]) => void;
 
@@ -56,6 +65,8 @@ export type AgentOptions = {
 	readonly judgeMode?: JudgeMode;
 	readonly context: Context;
 	readonly log: Log;
+	/** RFC 0022: shared disk quota; absent in tests that inject a fake lifecycle. */
+	readonly storageQuota?: StorageQuotaPort;
 	/** Lifecycle to run on; defaults to a DurableHarness built from these options. */
 	readonly harness?: HarnessLifecycle;
 };

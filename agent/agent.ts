@@ -9,6 +9,7 @@ import type { CredentialStore, MutableModels } from "@earendil-works/pi-ai";
 import { AssistantEntry, createRegistry, defineExtension, section } from "@earendil-works/pi-durable";
 import type { ConversationId, EntryId, SubmissionDraft } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { QuotaExecutionEnv } from "./quota-env.ts";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { citationExtension } from "./citation-tools.ts";
 import { placeCurrentRun, type CitationRunState } from "./citation-run.ts";
@@ -23,7 +24,7 @@ import type { CitationsTraceReport } from "./citation-report.ts";
 import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import type { JudgeTarget } from "./judge.ts";
 import { judgeTargetOf } from "./judge-model.ts";
-import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, PromptResult, ProviderConfig, RunCitations, WebMode } from "./types.ts";
+import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, PromptResult, ProviderConfig, RunCitations, StorageQuotaPort, WebMode } from "./types.ts";
 import { configureProvider } from "./model.ts";
 import { IngestPipeline } from "./ingest.ts";
 
@@ -90,6 +91,8 @@ export class ContainerAgent implements AgentApi {
 	#judge: CitationJudge | null;
 	#judgeMode: JudgeMode;
 	#store: WorkspaceCitationStore;
+	/** RFC 0022: shared with the HTTP tools; absent when a fake lifecycle is injected. */
+	#storageQuota: StorageQuotaPort | undefined;
 	#models: MutableModels;
 	#credentials: CredentialStore;
 	/** sha256(key)[:12] of the delivered key, or null; the only key-derived
@@ -111,7 +114,7 @@ export class ContainerAgent implements AgentApi {
 	#webControl: string | null = null;
 
 	constructor(
-		{ name, workspace, sessionDb, idleMs, models, credentials, model, thinkingLevel, citationsDefault, judge, judgeMode, context, log, harness }: AgentOptions,
+		{ name, workspace, sessionDb, idleMs, models, credentials, model, thinkingLevel, citationsDefault, judge, judgeMode, context, log, harness, storageQuota }: AgentOptions,
 	) {
 		this.#name = name;
 		this.#workspace = workspace;
@@ -122,6 +125,7 @@ export class ContainerAgent implements AgentApi {
 		this.#citationsDefault = citationsDefault ?? "off";
 		this.#judge = judge ?? null;
 		this.#judgeMode = judgeMode ?? "off";
+		this.#storageQuota = storageQuota;
 		this.#models = models;
 		this.#credentials = credentials;
 		// A separate environment for the file API; same local file system id as the tools.
@@ -150,8 +154,12 @@ export class ContainerAgent implements AgentApi {
 				openOptions: {
 					models,
 					registry,
-					// The Harness builds one environment per tool call, always rooted in the workspace.
-					env: (target) => new NodeExecutionEnv({ cwd: target.cwd ?? workspace }),
+					// RFC 0022: one environment per tool call, always rooted in the
+					// workspace and admitted against the sandbox's disk quota.
+					env: (target) =>
+						storageQuota === undefined
+							? new NodeExecutionEnv({ cwd: target.cwd ?? workspace })
+							: new QuotaExecutionEnv({ cwd: target.cwd ?? workspace }, storageQuota),
 				},
 				rootOptions: {
 					agent: { model, cwd: workspace, thinkingLevel: thinkingLevel ?? "off" },
@@ -204,6 +212,9 @@ export class ContainerAgent implements AgentApi {
 		citations: CitationMode | undefined,
 		web: WebMode = "off",
 	): Promise<PromptResult> {
+		// RFC 0022: a full quota admits no new run, so the model cannot keep
+		// writing through a long turn. This is a filesystem read, not an activation.
+		await this.#storageQuota?.ensureCapacity(0);
 		// §5.9: the mode is a property of the question. The request field wins;
 		// `CITATIONS_DEFAULT=required` covers requests that omit it. Explicit "off" beats the default.
 		const strict = citations === "required" || (citations === undefined && this.#citationsDefault === "required");

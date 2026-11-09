@@ -10,6 +10,7 @@ Run inside the manager image (verify.sh):
 from __future__ import annotations
 
 import base64
+import http.client
 import http.server
 import io
 import json
@@ -768,6 +769,296 @@ class WebsearchAuthorisationTest(unittest.TestCase):
         sm.agent_post = lambda *args, **kwargs: None
         # No raise: chat and uploads must keep working without the node.
         sm.deliver_websearch_control("user-a", "node-a", "agent-a")
+
+
+class IdentityCryptoTest(unittest.TestCase):
+    """RFC 0023 §4: the password hash and the sealed cookie are better-auth's
+    formats, golden-vectored cross-language. A drift here silently breaks
+    every account the manager creates."""
+
+    GOLDEN_HASH = (
+        "00112233445566778899aabbccddeeff:"
+        "f5b22309b28fe412c82a4b2cab57498b8f8a42c849af16cb908974048f61c139"
+        "33421858db3a8f111430bdc493c7cef90f61f904061c77206e3820a2e8b11bc2"
+    )
+    GOLDEN_COOKIE = (
+        "better-auth.session_token=TOKENaaaaaaaaaaaaaaaaaaaaaaaaaaaa."
+        "Xq2d1kPZRjP0gBzmdZjnv64vU89%2F1WahS6ao%2FekCtfU%3D"
+    )
+
+    def setUp(self) -> None:
+        self.saved = (sm.ORIGIN, sm.IDENTITY_API_KEY, sm.IDENTITY_API_KEY_PREVIOUS)
+        sm.ORIGIN = "http://localhost:5174"
+
+    def tearDown(self) -> None:
+        sm.ORIGIN, sm.IDENTITY_API_KEY, sm.IDENTITY_API_KEY_PREVIOUS = self.saved
+
+    def test_golden_scrypt_hash_and_verification(self) -> None:
+        self.assertEqual(
+            sm.hash_password("correct horse battery staple", "00112233445566778899aabbccddeeff"),
+            self.GOLDEN_HASH,
+        )
+        self.assertTrue(sm.verify_password(self.GOLDEN_HASH, "correct horse battery staple"))
+        self.assertFalse(sm.verify_password(self.GOLDEN_HASH, "wrong"))
+        self.assertFalse(sm.verify_password("not-a-hash", "correct horse battery staple"))
+
+    def test_password_is_normalized_nfkc_before_hashing(self) -> None:
+        # U+FB01 LATIN SMALL LIGATURE FI normalizes to "fi" in both runtimes.
+        self.assertEqual(
+            sm.hash_password("ﬁ", "00112233445566778899aabbccddeeff"),
+            sm.hash_password("fi", "00112233445566778899aabbccddeeff"),
+        )
+
+    def test_golden_signed_cookie(self) -> None:
+        self.assertEqual(
+            sm.sealed_cookie("TOKENaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "test-secret-0123456789abcdef"),
+            self.GOLDEN_COOKIE,
+        )
+
+    def test_cookie_name_follows_origin_scheme(self) -> None:
+        sm.ORIGIN = "https://affido.example"
+        self.assertTrue(sm.sealed_cookie("t", "s").startswith("__Secure-better-auth.session_token="))
+
+    def test_key_rotation_accepts_both_and_ignores_short_values(self) -> None:
+        sm.IDENTITY_API_KEY = "a" * 32
+        sm.IDENTITY_API_KEY_PREVIOUS = "b" * 32
+        self.assertTrue(sm.identity_key_ok("a" * 32))
+        self.assertTrue(sm.identity_key_ok("b" * 32))
+        self.assertFalse(sm.identity_key_ok("c" * 32))
+        self.assertFalse(sm.identity_key_ok("é" * 32))  # non-ASCII -> 401, not 500
+        sm.IDENTITY_API_KEY = "too-short"
+        sm.IDENTITY_API_KEY_PREVIOUS = ""
+        self.assertEqual(sm.identity_keys(), ())
+        self.assertFalse(sm.identity_key_ok("too-short"))
+
+    def test_email_is_lowercased_and_validated(self) -> None:
+        self.assertEqual(sm.identity_email("  Elena@Example.COM "), "elena@example.com")
+        for bad in (None, "", "nope", "a@b", "a b@c.d", 42):
+            with self.subTest(bad=bad):
+                with self.assertRaises(sm.ManagerError) as ctx:
+                    sm.identity_email(bad)
+                self.assertEqual(ctx.exception.code, "invalid_input")
+
+
+class IdentitySurfaceHttpTest(unittest.TestCase):
+    """RFC 0023 §5-§6: the HTTP contract of the identity routes. The DB write
+    functions are stubbed; the e2e suite exercises the real rows. What is
+    tested here is the gate order (Origin, key, configuration, rate), the
+    405/JSON/no-store answers a doctor relies on, and the response shapes."""
+
+    KEY = "k" * 40
+
+    def setUp(self) -> None:
+        names = (
+            "IDENTITY_API_KEY", "IDENTITY_API_KEY_PREVIOUS", "BETTER_AUTH_SECRET",
+            "ORIGIN", "IDENTITY_LOGIN_PER_MINUTE", "IDENTITY_REGISTER_PER_HOUR",
+            "identity_register", "identity_login", "identity_logout",
+            "session_identity", "is_sandbox_peer",
+        )
+        self.saved = {name: getattr(sm, name) for name in names}
+        sm.IDENTITY_API_KEY = self.KEY
+        sm.IDENTITY_API_KEY_PREVIOUS = ""
+        sm.BETTER_AUTH_SECRET = "test-secret-0123456789abcdef"
+        sm.ORIGIN = "http://localhost:5174"
+        sm.IDENTITY_LOGIN_PER_MINUTE = 2
+        sm.IDENTITY_REGISTER_PER_HOUR = 2
+        sm.is_sandbox_peer = lambda peer: False
+        sm._identity_windows.reset()
+        self.calls: list[tuple] = []
+
+        def fake_register(email: str, password: str, name: str, ip: str, ua: str) -> dict:
+            self.calls.append(("register", email, password, name, ip, ua))
+            return sm.identity_result("u1", email, name, "tok")
+
+        def fake_login(email: str, password: str, ip: str, ua: str) -> dict:
+            self.calls.append(("login", email, password, ip, ua))
+            if password != "correct horse battery staple":
+                raise sm.ManagerError("invalid_credentials", "email or password is incorrect", 401)
+            return sm.identity_result("u1", email, "Elena", "tok")
+
+        def fake_logout(handler: object) -> None:
+            self.calls.append(("logout",))
+
+        def fake_identity(handler: object) -> dict | None:
+            cookie = handler.headers.get("Cookie") or ""
+            if "session=good" in cookie:
+                return {"user_id": "u1", "email": "elena@example.com", "name": "Elena"}
+            if "session=orphan" in cookie:
+                return {"user_id": "u2", "email": None, "name": None}
+            return None
+
+        sm.identity_register = fake_register
+        sm.identity_login = fake_login
+        sm.identity_logout = fake_logout
+        sm.session_identity = fake_identity
+        self.server = sm.ManagerHTTPServer(("127.0.0.1", 0), sm.Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+        for name, value in self.saved.items():
+            setattr(sm, name, value)
+        sm._identity_windows.reset()
+
+    def request(
+        self, method: str, path: str, body: object | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, dict[str, str], bytes]:
+        conn = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_address[1], timeout=10
+        )
+        payload = None if body is None else json.dumps(body).encode()
+        hdrs = {"Content-Type": "application/json", **(headers or {})}
+        conn.request(method, path, body=payload, headers=hdrs)
+        response = conn.getresponse()
+        data = response.read()
+        result = (response.status, dict(response.getheaders()), data)
+        conn.close()
+        return result
+
+    def json(self, data: bytes) -> dict:
+        return json.loads(data or b"{}")
+
+    def test_get_on_the_three_routes_is_405_json_no_store(self) -> None:
+        for path in ("/identity/register", "/identity/login", "/identity/logout"):
+            with self.subTest(path=path):
+                status, headers, data = self.request("GET", path)
+                self.assertEqual(status, 405)
+                self.assertEqual(headers.get("Allow"), "POST")
+                self.assertEqual(headers.get("Cache-Control"), "no-store")
+                self.assertEqual(self.json(data)["code"], "method_not_allowed")
+
+    def test_unknown_identity_path_is_404_and_errors_are_no_store(self) -> None:
+        status, headers, data = self.request("POST", "/identity/nope", body={})
+        self.assertEqual(status, 404)
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+
+    def test_wrong_key_and_origin_write_nothing(self) -> None:
+        status, _, data = self.request(
+            "POST", "/identity/register",
+            body={"email": "a@b.co", "password": "password1", "name": "A"},
+            headers={"X-Identity-Key": "wrong"},
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(self.json(data)["code"], "unauthorized")
+        status, _, data = self.request(
+            "POST", "/identity/register",
+            body={"email": "a@b.co", "password": "password1", "name": "A"},
+            headers={"X-Identity-Key": self.KEY, "Origin": "http://localhost:5174"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self.json(data)["code"], "forbidden_origin")
+        self.assertEqual(self.calls, [])
+
+    def test_register_login_logout_contract(self) -> None:
+        status, headers, data = self.request(
+            "POST", "/identity/register",
+            body={"email": " Elena@Example.COM ", "password": "correct horse battery staple", "name": " Elena "},
+            headers={"X-Identity-Key": self.KEY},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+        body = self.json(data)
+        self.assertEqual(body["user"], {"id": "u1", "email": "elena@example.com", "name": "Elena"})
+        self.assertTrue(body["session"]["cookie"].startswith("better-auth.session_token="))
+        self.assertEqual(self.calls[0][1:4], ("elena@example.com", "correct horse battery staple", "Elena"))
+
+        status, _, data = self.request(
+            "POST", "/identity/login",
+            body={"email": "elena@example.com", "password": "correct horse battery staple"},
+            headers={"X-Identity-Key": self.KEY},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(self.json(data)["session"]["cookie"])
+
+        status, headers, data = self.request(
+            "POST", "/identity/logout", body={},
+            headers={"X-Identity-Key": self.KEY, "Cookie": "better-auth.session_token=tok.sig"},
+        )
+        self.assertEqual(status, 204)
+        self.assertEqual(data, b"")
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+
+    def test_invalid_input_and_bad_credentials(self) -> None:
+        status, _, data = self.request(
+            "POST", "/identity/register",
+            body={"email": "elena@example.com", "password": "short", "name": "Elena"},
+            headers={"X-Identity-Key": self.KEY},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(self.json(data)["code"], "invalid_input")
+        status, _, data = self.request(
+            "POST", "/identity/login",
+            body={"email": "elena@example.com", "password": "not-the-password"},
+            headers={"X-Identity-Key": self.KEY},
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(self.json(data)["code"], "invalid_credentials")
+
+    def test_oversized_body_is_400_and_closes(self) -> None:
+        status, headers, data = self.request(
+            "POST", "/identity/register",
+            body={"email": "x" * 20000, "password": "password12", "name": "A"},
+            headers={"X-Identity-Key": self.KEY},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(headers.get("Connection"), "close")
+        self.assertEqual(self.json(data)["code"], "invalid_input")
+        self.assertEqual(self.calls, [])
+
+    def test_missing_secret_answers_identity_unavailable(self) -> None:
+        sm.BETTER_AUTH_SECRET = ""
+        status, _, data = self.request(
+            "POST", "/identity/login",
+            body={"email": "elena@example.com", "password": "password12"},
+            headers={"X-Identity-Key": self.KEY},
+        )
+        self.assertEqual(status, 503)
+        self.assertEqual(self.json(data)["code"], "identity_unavailable")
+
+    def test_rate_limit_is_per_route_and_ip(self) -> None:
+        body = {"email": "elena@example.com", "password": "not-the-password"}
+        for _ in range(2):
+            status, _, _ = self.request(
+                "POST", "/identity/login", body=body,
+                headers={"X-Identity-Key": self.KEY},
+            )
+            self.assertEqual(status, 401)
+        status, headers, data = self.request(
+            "POST", "/identity/login", body=body,
+            headers={"X-Identity-Key": self.KEY},
+        )
+        self.assertEqual(status, 429)
+        self.assertEqual(self.json(data)["code"], "rate_limited")
+        self.assertIn("Retry-After", headers)
+
+    def test_whoami_adds_email_and_name_and_is_no_store(self) -> None:
+        status, headers, data = self.request(
+            "GET", "/whoami", headers={"Cookie": "session=good"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+        self.assertEqual(
+            self.json(data),
+            {"user_id": "u1", "email": "elena@example.com", "name": "Elena"},
+        )
+        status, headers, data = self.request("GET", "/whoami")
+        self.assertEqual(status, 401)
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+        # A session row without a user row keeps working (e2e seeds them).
+        status, _, data = self.request("GET", "/whoami", headers={"Cookie": "session=orphan"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.json(data), {"user_id": "u2"})
+
+    def test_client_ip_uses_the_last_forwarded_hop(self) -> None:
+        class Fake:
+            client_address = ("10.0.0.5", 1234)
+            headers = {"X-Forwarded-For": "203.0.113.9, 198.51.100.7"}
+
+        self.assertEqual(sm.client_ip(Fake()), "198.51.100.7")  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

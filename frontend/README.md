@@ -73,8 +73,13 @@ cp .env.example .env
 # set BETTER_AUTH_SECRET (32+ random characters); DATABASE_URL is pre-filled
 pnpm install
 pnpm db:migrate
-pnpm dev
+pnpm dev            # http://localhost:5174
 ```
+
+The dev server is pinned to `http://localhost:5174` (`ORIGIN` and `strictPort`
+in `vite.config.ts`). When the manager's `/identity/*` surface is enabled, the
+root `.env` must carry the same `BETTER_AUTH_SECRET` and `ORIGIN`: the manager
+seals the session cookie and this app verifies it.
 
 `pnpm db:migrate` is safe against a database the e2e suite already used: the
 migration creates the four-column seeded `session` table only when absent and

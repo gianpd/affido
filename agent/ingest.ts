@@ -34,6 +34,7 @@ import {
 	uploadsDocIdOf,
 } from "./corpus.ts";
 import { UPLOADS_DIR } from "./uploads.ts";
+import type { StorageQuotaPort } from "./types.ts";
 
 /** Discriminated by target, never by caller: one class, two roots (RFC 0014 §5.1). */
 export type IngestTarget =
@@ -234,14 +235,19 @@ const collectTreeFiles = async (rootAbsolute: string): Promise<readonly string[]
 
 export class IngestPipeline {
 	readonly #workspace: string;
+	readonly #quota: StorageQuotaPort | undefined;
 
-	constructor(workspace: string) {
+	constructor(workspace: string, quota?: StorageQuotaPort) {
 		this.#workspace = workspace;
+		this.#quota = quota;
 	}
 
 	/** Stage bytes and decide admission, in the fixed order, for every caller. */
 	async stage(input: { readonly bytes: Uint8Array; readonly target: IngestTarget }): Promise<Staged> {
 		const bytes = Buffer.from(input.bytes);
+		// RFC 0022: refuse before the first byte lands. Derived text and the
+		// registry sidecar may add more; the next check sees those too.
+		await this.#quota?.ensureCapacity(bytes.byteLength);
 		const sourceSha256 = sha256(bytes);
 		if (input.target.kind === "document") {
 			const docId = safeDocId(input.target.docId);
@@ -272,6 +278,7 @@ export class IngestPipeline {
 					at: Date.now(),
 				},
 			});
+			this.#quota?.invalidate();
 			return {
 				docId,
 				path: stagedPath,
@@ -309,6 +316,7 @@ export class IngestPipeline {
 				at: Date.now(),
 			},
 		});
+		this.#quota?.invalidate();
 		return {
 			docId,
 			path: stagedPath,
@@ -337,6 +345,7 @@ export class IngestPipeline {
 				force: true,
 			});
 		}
+		this.#quota?.invalidate();
 	}
 
 	/** Every staged document at or below one tree path, with its registry keys:

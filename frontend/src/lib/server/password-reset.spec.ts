@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { deliverResetLink, pendingResetLink, RESET_LINK_TTL_MS } from '#lib/server/password-reset';
 
-const url = 'http://localhost:5173/api/auth/reset-password/abc?callbackURL=%2Flogin%2Freset';
+const url = 'http://localhost:5174/api/auth/reset-password/abc?callbackURL=%2Flogin%2Freset';
 
 describe('password reset link delivery', () => {
 	it('keeps the link only when inline delivery is on', () => {

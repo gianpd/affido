@@ -9,6 +9,7 @@ import type {
 	CitationsReport,
 	PromptResult,
 	SandboxStatus,
+	StorageReport,
 	TraceEntryDetail,
 	TraceReport
 } from '#lib/types';
@@ -186,6 +187,11 @@ export const inspectEntrySandbox = (event: RequestEvent, id: number): Promise<Tr
 
 export const statusSandbox = (event: RequestEvent): Promise<SandboxStatus> =>
 	sandboxFetch<SandboxStatus>(event, '/status', { timeoutMs: 5000 });
+
+/** RFC 0022: the live disk report of the user's sandbox. The agent route is
+ * plain filesystem work and never opens the Harness. */
+export const storageSandbox = (event: RequestEvent): Promise<StorageReport> =>
+	sandboxFetch<StorageReport>(event, '/storage', { timeoutMs: 5000 });
 
 /** Start a new context in the sandbox conversation; older entries stay on disk. */
 export const resetSandbox = (

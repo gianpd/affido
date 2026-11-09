@@ -255,6 +255,21 @@ export type SandboxStatus = {
 	inFlight: number;
 };
 
+/** `GET /storage` (RFC 0022): one sandbox's disk quota, measured over both
+ * durable volumes. `availableBytes` is min(quota - used, host free space). */
+export type StorageReport = {
+	quotaBytes: number;
+	usedBytes: number;
+	availableBytes: number;
+	/** Free bytes of the host filesystem behind the volumes; null if unreadable. */
+	hostFreeBytes: number | null;
+	usedPercent: number;
+	state: 'ok' | 'warning' | 'critical' | 'full';
+	/** True when the entry cap cut the scan short; usedBytes is then a lower bound. */
+	partial: boolean;
+	checkedAt: number;
+};
+
 /** One row of the chat's session history (RFC 0008): a conversation with its
  * chat rows, newest activity first. The active conversation appears even when
  * it has no messages yet. */

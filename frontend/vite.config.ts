@@ -5,6 +5,10 @@ import adapter from '@sveltejs/adapter-auto';
 import { sveltekit } from '@sveltejs/kit/vite';
 
 export default defineConfig({
+	// ORIGIN in frontend/.env pins better-auth's base URL to this port. Fail
+	// loudly instead of drifting to the next free port: a mismatch breaks
+	// cookies and password-reset links silently.
+	server: { port: 5174, strictPort: true },
 	plugins: [
 		tailwindcss(),
 		sveltekit({

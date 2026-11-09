@@ -13,7 +13,7 @@ import {
 	verifySkill,
 } from "./skills.ts";
 import { listArtifactTree, readArtifact, removeArtifactPath } from "./artifacts.ts";
-import type { CitationMode } from "./types.ts";
+import type { CitationMode, StorageQuotaPort } from "./types.ts";
 import { InvalidTraceQueryError, parseTraceQuery, UnknownConversationError, UnknownEntryError } from "./trace.ts";
 import type { TraceQuery } from "./trace.ts";
 import type { AgentApi, ToolRequest, WebMode } from "./types.ts";
@@ -74,6 +74,22 @@ export class StatusTool extends HttpTool {
 
 	handle({ agent }: ToolRequest): unknown {
 		return agent.status();
+	}
+}
+
+/** RFC 0022: the live disk report of this sandbox (quota, used, available,
+ * alert state). Plain filesystem work: never activates the agent, so a
+ * monitoring probe cannot defeat the idle pause. */
+export class StorageTool extends HttpTool {
+	readonly #quota: StorageQuotaPort;
+
+	constructor(quota: StorageQuotaPort) {
+		super("storage", "GET", "/storage");
+		this.#quota = quota;
+	}
+
+	handle(_request: ToolRequest): Promise<unknown> {
+		return this.#quota.report();
 	}
 }
 
@@ -160,16 +176,21 @@ export class ReadFileTool extends HttpTool {
  * read the RFC 0016 taint document when the process cache is cold. */
 export class CreateUploadDirTool extends HttpTool {
 	readonly #workspace: string;
+	readonly #quota: StorageQuotaPort | undefined;
 
-	constructor(workspace: string) {
+	constructor(workspace: string, quota?: StorageQuotaPort) {
 		super("uploads_dir", "POST", "/uploads/dir");
 		this.#workspace = workspace;
+		this.#quota = quota;
 	}
 
 	async handle({ req, agent }: ToolRequest): Promise<unknown> {
 		await requireNoWebTaint(agent);
+		await this.#quota?.ensureCapacity(0);
 		const body = await readBody(req);
-		return createUploadDir({ workspace: this.#workspace, path: typeof body.path === "string" ? body.path : "" });
+		const created = await createUploadDir({ workspace: this.#workspace, path: typeof body.path === "string" ? body.path : "" });
+		this.#quota?.invalidate();
+		return created;
 	}
 }
 
@@ -237,22 +258,27 @@ export class DeleteUploadTool extends HttpTool {
  * an injected page). */
 export class SkillsFileTool extends HttpTool {
 	readonly #workspace: string;
+	readonly #quota: StorageQuotaPort | undefined;
 
-	constructor(workspace: string) {
+	constructor(workspace: string, quota?: StorageQuotaPort) {
 		super("skills_file", "POST", "/skills/file");
 		this.#workspace = workspace;
+		this.#quota = quota;
 	}
 
 	async handle({ req, url, agent }: ToolRequest): Promise<unknown> {
 		await requireNoWebTaint(agent);
 		const bytes = await readRawBody(req, MAX_UPLOAD_BYTES);
 		if (bytes.length === 0) throw new HttpError(400, { error: "empty_body", message: "the skill file is empty" });
-		return installSkillFile({
+		await this.#quota?.ensureCapacity(bytes.length);
+		const installed = await installSkillFile({
 			workspace: this.#workspace,
 			skill: url.searchParams.get("skill") ?? "",
 			path: url.searchParams.get("path") ?? "",
 			bytes,
 		});
+		this.#quota?.invalidate();
+		return installed;
 	}
 }
 
@@ -292,14 +318,18 @@ export class VerifySkillTool extends HttpTool {
 /** Remove one installed skill subtree; missing is not an error (R2). */
 export class DeleteSkillTool extends HttpTool {
 	readonly #workspace: string;
+	readonly #quota: StorageQuotaPort | undefined;
 
-	constructor(workspace: string) {
+	constructor(workspace: string, quota?: StorageQuotaPort) {
 		super("skills_delete", "DELETE", "/skills");
 		this.#workspace = workspace;
+		this.#quota = quota;
 	}
 
-	handle({ url }: ToolRequest): unknown {
-		return removeSkill({ workspace: this.#workspace, skill: url.searchParams.get("skill") ?? "" });
+	async handle({ url }: ToolRequest): Promise<unknown> {
+		const removed = await removeSkill({ workspace: this.#workspace, skill: url.searchParams.get("skill") ?? "" });
+		this.#quota?.invalidate();
+		return removed;
 	}
 }
 
@@ -348,14 +378,18 @@ export class ArtifactTool extends HttpTool {
 /** Remove a file or a whole subtree under `artifacts/`; missing is not an error. */
 export class DeleteArtifactsTool extends HttpTool {
 	readonly #workspace: string;
+	readonly #quota: StorageQuotaPort | undefined;
 
-	constructor(workspace: string) {
+	constructor(workspace: string, quota?: StorageQuotaPort) {
 		super("artifacts_delete", "DELETE", "/artifacts");
 		this.#workspace = workspace;
+		this.#quota = quota;
 	}
 
-	handle({ url }: ToolRequest): unknown {
-		return removeArtifactPath({ workspace: this.#workspace, path: url.searchParams.get("path") ?? "" });
+	async handle({ url }: ToolRequest): Promise<unknown> {
+		const removed = await removeArtifactPath({ workspace: this.#workspace, path: url.searchParams.get("path") ?? "" });
+		this.#quota?.invalidate();
+		return removed;
 	}
 }
 
