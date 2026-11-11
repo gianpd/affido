@@ -32,21 +32,22 @@ the tokens ship in `src/routes/layout.css` and the brand art in `static/brand/`
 
 ## Routes
 
-| Route                    | Purpose                                                  |
-| ------------------------ | -------------------------------------------------------- |
-| `/`                      | Landing page; redirects signed-in users to `/dashboard`  |
-| `/login`                 | Sign in and create account tabs                          |
-| `/login/forgot`          | Requests a single-use password-reset link                |
-| `/login/reset?token=...` | Sets a new password and revokes every session            |
-| `/logout`                | POST only; clears the better-auth session                |
-| `/dashboard`             | Overview: documents, corpus, traces, usage, quick prompt |
-| `/dashboard/documents`   | Upload or paste text documents, view, delete, search     |
-| `/dashboard/corpus`      | Corpus collections and per-corpus document membership    |
-| `/dashboard/chat`        | AI SDK chat with the user's sandbox                      |
-| `/dashboard/traces`      | Every captured snapshot of every conversation            |
-| `/dashboard/traces/[id]` | Decision graph, entries, live tasks, submissions, raw    |
-| `/api/chat`              | Streams the sandbox answer as a UI message stream        |
-| `/api/chat/reset`        | Starts a new agent context and clears the visible chat   |
+| Route                      | Purpose                                                  |
+| -------------------------- | -------------------------------------------------------- |
+| `/`                        | Landing page; redirects signed-in users to `/dashboard`  |
+| `/login`                   | Sign in and create account tabs                          |
+| `/login/forgot`            | Requests a single-use password-reset link                |
+| `/login/reset?token=...`   | Sets a new password and revokes every session            |
+| `/logout`                  | POST only; clears the better-auth session                |
+| `/dashboard`               | Overview: documents, corpus, traces, usage, quick prompt |
+| `/dashboard/documents`     | Upload or paste text documents, view, delete, search     |
+| `/dashboard/corpus`        | Corpus collections and per-corpus document membership    |
+| `/dashboard/chat`          | AI SDK chat with the user's sandbox                      |
+| `/dashboard/traces`        | Every captured snapshot of every conversation            |
+| `/dashboard/traces/[id]`   | Decision graph, entries, live tasks, submissions, raw    |
+| `/api/chat`                | Streams the sandbox answer as a UI message stream        |
+| `/api/chat/new-session`    | Starts a separate agent conversation (RFC 0008)          |
+| `/api/chat/switch-session` | Resumes a previous conversation as the active one        |
 
 ## Setup
 
@@ -144,9 +145,12 @@ arrives as a `data-citations` part on the assistant message and persists with
 it. Quote links open the document preview scrolled to the cited line
 (`/dashboard/documents?doc=<id>#L<line>`).
 
-**New session** calls `/api/chat/reset`, which posts `/reset` to the sandbox and
-drops the user's `chat_message` rows. The sandbox records a `pi.reset` entry and
-starts a new model context; older entries stay in storage and on the trace page.
+**New session** calls `/api/chat/new-session`, which posts `/session/new` to the
+sandbox (RFC 0008): a separate conversation starts and becomes the active one.
+Nothing is deleted — the previous conversation keeps its entries, its chat rows
+and its usage, and stays on the session list and the trace page. **Resume**
+calls `/api/chat/switch-session`, which posts `/session/switch` to repoint the
+sandbox's active-conversation pointer at an existing conversation.
 
 ## Trace capture
 
@@ -194,8 +198,9 @@ regenerate the file.
 
 ## Scope
 
-- One root conversation per sandbox. A new session resets the model context in
-  that conversation; the agent does not create additional conversations yet.
+- Multiple conversations per sandbox (RFC 0008): New session starts a separate
+  conversation, Resume switches the active one back. The agent's `/reset`
+  route (same conversation, fresh model context) has no UI entry point.
 - Documents are text only (up to 10 MB, the same cap the sandbox enforces). The agent does not currently read the
   Postgres document table; it reads its workspace through the file API.
 - The trace page shows the snapshot captured by this app, not a live tail.

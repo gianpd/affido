@@ -209,12 +209,6 @@ export const statusSandbox = (event: RequestEvent): Promise<SandboxStatus> =>
 export const storageSandbox = (event: RequestEvent): Promise<StorageReport> =>
 	sandboxFetch<StorageReport>(event, '/storage', { timeoutMs: 5000 });
 
-/** Start a new context in the sandbox conversation; older entries stay on disk. */
-export const resetSandbox = (
-	event: RequestEvent
-): Promise<{ agent: string; conversationId: number; entries: number }> =>
-	sandboxFetch(event, '/reset', { method: 'POST' });
-
 /** Start a separate sandbox conversation (RFC 0008); the previous one stays readable. */
 export const newSessionSandbox = (
 	event: RequestEvent
