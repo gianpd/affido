@@ -7,16 +7,19 @@ import { join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import type { CredentialStore, MutableModels } from "@earendil-works/pi-ai";
 import { AssistantEntry, createRegistry, defineExtension, section } from "@earendil-works/pi-durable";
-import type { ConversationId, EntryId, SubmissionDraft } from "@earendil-works/pi-durable";
+import type { ConversationId, EntryId, Extension, SubmissionDraft } from "@earendil-works/pi-durable";
+import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { QuotaExecutionEnv } from "./quota-env.ts";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { citationExtension } from "./citation-tools.ts";
-import { placeCurrentRun, type CitationRunState } from "./citation-run.ts";
+import { placeCurrentRun, type CitationRunState, type McpRunGrant } from "./citation-run.ts";
 import { WorkspaceCitationStore } from "./workspace-store.ts";
 import { DurableHarness, type HarnessLifecycle } from "./harness.ts";
 import { HttpError, textOf, workspacePath } from "./http.ts";
 import { readWebTaintTx, webToolsExtension, websearchUrl } from "./web-tools.ts";
+import { mcpToolsExtension, type McpRuntime } from "./mcp-tools.ts";
+import type { McpManifestServer } from "./mcp/catalog.ts";
 import { buildSkillHint, renderSkillsSection } from "./skills.ts";
 import { describeArtifacts, snapshotArtifacts } from "./artifacts.ts";
 import { TraceReader, type TraceEntryDetail, type TraceQuery, type TraceReport, type TraceSource } from "./trace.ts";
@@ -24,7 +27,7 @@ import type { CitationsTraceReport } from "./citation-report.ts";
 import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import type { JudgeTarget } from "./judge.ts";
 import { judgeTargetOf } from "./judge-model.ts";
-import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, PromptResult, ProviderConfig, RunCitations, StorageQuotaPort, WebMode } from "./types.ts";
+import type { AgentOptions, AgentApi, CitationMode, CitationView, Log, McpConfig, McpMode, PromptResult, ProviderConfig, RunCitations, StorageQuotaPort, WebMode } from "./types.ts";
 import { configureProvider } from "./model.ts";
 import { classifyProviderFailure } from "./upstream-failure.ts";
 import { IngestPipeline } from "./ingest.ts";
@@ -50,6 +53,16 @@ export const createAgentRegistry = (options: {
 	readonly workspace: string;
 	readonly store: WorkspaceCitationStore;
 	readonly onWebTaint?: () => void;
+	/** RFC 0024 §8: the MCP surface, built for the deployment subset. Absent
+	 * (or an empty deployment) leaves the whole surface off — no tool_search,
+	 * no mcp__ tools, zero cost (D6). When present, both the deferred tools and
+	 * the `tool_search` extension are installed; the conversation agent
+	 * document decides whether tool_search is selected (agent.ts). */
+	readonly mcp?: {
+		readonly deployment: readonly McpManifestServer[];
+		readonly runtime: () => McpRuntime | null;
+		readonly onTaint?: () => void;
+	};
 	/** RFC 0017/0018: the coherence judge (d1.1 via OpenRouter by default),
 	 * absent when `CITATION_JUDGE=off` or no OpenRouter credential backs
 	 * the run. */
@@ -64,6 +77,10 @@ export const createAgentRegistry = (options: {
 	// RFC 0016 §5: web_search and web_read over the isolated search node; the
 	// extension also owns the conversation-scoped taint gate (§6).
 	registry.install(webToolsExtension({ onTaint: options.onWebTaint }));
+	if (options.mcp !== undefined && options.mcp.deployment.length > 0) {
+		registry.install(mcpToolsExtension(options.mcp));
+		registry.install(createToolSearchExtension());
+	}
 	registry.install(
 		defineExtension({
 			name: "container",
@@ -113,9 +130,19 @@ export class ContainerAgent implements AgentApi {
 	 * resolve time. In-memory only; it is what makes a run registration
 	 * unforgeable by a bash child of the sandbox. */
 	#webControl: string | null = null;
+	/** RFC 0024: the MCP deployment subset (MCP_SERVERS ∩ catalog), fixed at
+	 * boot; the extension's tools exist for exactly these servers. */
+	readonly #mcpDeployment: readonly McpManifestServer[];
+	/** RFC 0024 §7.2: the runtime config the manager delivers on every resolve.
+	 * In-memory only, like the web control token. */
+	#mcp: McpRuntime | null = null;
+	/** RFC 0024 D6: the tool_search extension, installed when the deployment
+	 * subset is non-empty and selected per conversation while the user has at
+	 * least one server enabled. */
+	readonly #toolSearch: Extension | null;
 
 	constructor(
-		{ name, workspace, sessionDb, idleMs, models, credentials, model, thinkingLevel, citationsDefault, judge, judgeMode, context, log, harness, storageQuota }: AgentOptions,
+		{ name, workspace, sessionDb, idleMs, models, credentials, model, thinkingLevel, citationsDefault, judge, judgeMode, context, log, harness, storageQuota, mcpDeployment }: AgentOptions,
 	) {
 		this.#name = name;
 		this.#workspace = workspace;
@@ -129,6 +156,8 @@ export class ContainerAgent implements AgentApi {
 		this.#storageQuota = storageQuota;
 		this.#models = models;
 		this.#credentials = credentials;
+		this.#mcpDeployment = mcpDeployment ?? [];
+		this.#toolSearch = this.#mcpDeployment.length > 0 ? createToolSearchExtension() : null;
 		// A separate environment for the file API; same local file system id as the tools.
 		this.#apiEnv = new NodeExecutionEnv({ cwd: workspace });
 		// One citation store per agent: the corpus index is lazy and shared (RFC 0006 §5.2).
@@ -142,6 +171,16 @@ export class ContainerAgent implements AgentApi {
 			store: this.#store,
 			judge: this.#judge,
 			judgeMode: this.#judgeMode,
+			mcp:
+				this.#mcpDeployment.length > 0
+					? {
+							deployment: this.#mcpDeployment,
+							runtime: () => this.#mcp,
+							onTaint: () => {
+								this.#webTouched = true;
+							},
+						}
+					: undefined,
 			onWebTaint: () => {
 				this.#webTouched = true;
 			},
@@ -190,6 +229,11 @@ export class ContainerAgent implements AgentApi {
 			// RFC 0016 §7: whether the manager delivered the web control token.
 			// A boolean, never the token.
 			webControl: this.#webControl !== null,
+			// RFC 0024 §7.2: whether the MCP runtime config was delivered and how
+			// many servers the user enabled. Ids only, never tokens.
+			mcpConfigured: this.#mcp !== null,
+			mcpServers: this.#mcp?.servers.length ?? 0,
+			mcpDeployment: this.#mcpDeployment.map((server) => server.id),
 			workspace: this.#workspace,
 			sessionDb: this.#sessionDb,
 			conversationId: this.#harness.conversationId,
@@ -212,6 +256,8 @@ export class ContainerAgent implements AgentApi {
 		requestId: string | undefined,
 		citations: CitationMode | undefined,
 		web: WebMode = "off",
+		mcpWrite: McpMode = "off",
+		mcpAdmission: string | undefined = undefined,
 	): Promise<PromptResult> {
 		// RFC 0022: a full quota admits no new run, so the model cannot keep
 		// writing through a long turn. This is a filesystem read, not an activation.
@@ -221,6 +267,9 @@ export class ContainerAgent implements AgentApi {
 		const strict = citations === "required" || (citations === undefined && this.#citationsDefault === "required");
 		// RFC 0016 §7: web is opt-in per submission, never a standing capability.
 		const webAllowed = web === "allowed";
+		// RFC 0024 D7: the write tier is opt-in per submission; the node decides
+		// whether the admission stamp makes it real (T9).
+		const mcpAllowed = mcpWrite === "allowed";
 		const runId = requestId ?? `run-${crypto.randomUUID()}`;
 		// RFC 0009 D4: a leading `/name` becomes a server-built hint inside the
 		// stored content — durable, visible in the trace, never model-invented.
@@ -237,6 +286,11 @@ export class ContainerAgent implements AgentApi {
 			// node only accepts the registration with the manager-delivered
 			// control token, and returns the per-run token the tools must send.
 			const webToken = webAllowed ? await this.#registerWebRun(runId) : null;
+			// RFC 0024 §7.3: register with the MCP node whenever it is configured —
+		// read tools need the run token too. The admission header is relayed
+		// here and dropped: it never lands in a document, a trace entry or the
+		// prompt, and the pointer stores only the node's verdict (§4.2).
+			const mcpGrant = await this.#registerMcpRun(runId, mcpAllowed, mcpAdmission);
 			const artifactBaseline = await placeCurrentRun(
 				conversation,
 				runId,
@@ -244,6 +298,7 @@ export class ContainerAgent implements AgentApi {
 				prompt,
 				baseline,
 				{ web: webAllowed, webToken },
+				mcpGrant,
 				this.#context,
 			);
 			const draft: SubmissionDraft = strict
@@ -292,6 +347,7 @@ export class ContainerAgent implements AgentApi {
 				citations: envelope.citations,
 				citationsMode: strict ? "required" : "free",
 				webMode: webAllowed ? "allowed" : "off",
+				mcpMode: mcpAllowed ? "allowed" : "off",
 				runId,
 				artifacts,
 			};
@@ -328,6 +384,50 @@ export class ContainerAgent implements AgentApi {
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
 			this.#log(`web run registration failed: ${reason}`);
+			return null;
+		}
+	}
+
+	/** Register one run with the MCP node (RFC 0024 §7.1). Uses the
+	 * manager-delivered control token and relays the Caddy admission header;
+	 * stores the node's verdict (write or read-only), never the request.
+	 * Returns null when MCP is unavailable: the prompt still runs, and the
+	 * mcp__ tools answer a named error. */
+	async #registerMcpRun(runId: string, write: boolean, admission: string | undefined): Promise<McpRunGrant> {
+		const runtime = this.#mcp;
+		if (runtime === null) {
+			this.#log("mcp run not registered: no runtime config (manager delivery missing)");
+			return null;
+		}
+		const headers: Record<string, string> = {
+			"content-type": "application/json",
+			"x-control-token": runtime.controlToken,
+			"x-run-id": runId,
+		};
+		if (admission !== undefined) headers["x-mcp-admission"] = admission;
+		try {
+			const response = await fetch(`${runtime.gatewayUrl}/runs`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ write }),
+				redirect: "error",
+				signal: AbortSignal.timeout(5_000),
+			});
+			if (!response.ok) {
+				this.#log(`mcp run registration refused: ${response.status}`);
+				return null;
+			}
+			const body = (await response.json()) as { runToken?: unknown; write?: unknown };
+			if (typeof body.runToken !== "string" || body.runToken === "") {
+				this.#log("mcp run registration returned no token");
+				return null;
+			}
+			// The effective grant, not the requested one: a missing or wrong stamp
+			// registers read-only and the tools say so at call time (D7).
+			return { runToken: body.runToken, write: body.write === true };
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			this.#log(`mcp run registration failed: ${reason}`);
 			return null;
 		}
 	}
@@ -509,6 +609,75 @@ export class ContainerAgent implements AgentApi {
 		this.#webControl = controlToken;
 		// Never echo the token: only the fact that the delivery landed.
 		return { agent: this.#name, webControl: true };
+	}
+
+	/** RFC 0024 §7.2: apply the delivered MCP runtime config and align the
+	 * conversation's tool selection with it — `tool_search` is selected while
+	 * the user has at least one enabled server, deselected otherwise (D6). The
+	 * reconfigure joins the DurableHarness serialization chain, so an
+	 * in-flight prompt keeps its current selection and the next one sees the
+	 * new state. No credential is present in this payload at all.
+	 *
+	 * The manager delivers this on every resolve; a delivery that changes
+	 * nothing must not activate the agent, or a status poll through Caddy
+	 * would defeat the idle pause (the RFC 0016 D10 rule). */
+	async configureMcp(config: McpConfig) {
+		if (typeof config.gatewayUrl !== "string" || !/^https?:\/\//.test(config.gatewayUrl)) {
+			throw new HttpError(400, { error: "invalid_mcp_config", message: "gatewayUrl must be an http(s) URL" });
+		}
+		if (typeof config.controlToken !== "string" || !(32 <= config.controlToken.length && config.controlToken.length <= 128)) {
+			throw new HttpError(400, { error: "invalid_control_token", message: "controlToken must be 32-128 characters" });
+		}
+		if (!Array.isArray(config.servers) || config.servers.some((id) => typeof id !== "string")) {
+			throw new HttpError(400, { error: "invalid_mcp_config", message: "servers must be an array of server ids" });
+		}
+		const known = new Set(this.#mcpDeployment.map((server) => server.id));
+		const servers = config.servers.filter((id) => known.has(id));
+		const dropped = config.servers.length - servers.length;
+		if (dropped > 0) this.#log(`mcpconfig dropped ${dropped} server id(s) outside the deployment subset`);
+		const gatewayUrl = config.gatewayUrl.replace(/\/+$/, "");
+		const current = this.#mcp;
+		if (
+			current !== null &&
+			current.gatewayUrl === gatewayUrl &&
+			current.controlToken === config.controlToken &&
+			current.servers.length === servers.length &&
+			current.servers.every((id, index) => id === servers[index])
+		) {
+			// Idempotent replay: nothing to store, nothing to reconfigure, no
+			// activation (the pause stays possible between resolves).
+			return { agent: this.#name, mcp: { servers: [...servers], toolSearch: servers.length > 0 }, unchanged: true };
+		}
+		this.#mcp = { gatewayUrl, controlToken: config.controlToken, servers };
+		const toolSearch = this.#toolSearch;
+		if (toolSearch !== null) {
+			// The stored edit replaces the previous one, so both directions work:
+			// enabled -> the host default (tool_search selected), none -> removed.
+			const change = servers.length > 0 ? { extensions: null } : { extensions: { remove: [toolSearch] } };
+			await this.#harness.activate(async (conversation) => {
+				await conversation.configure(change, this.#context);
+			});
+		}
+		return { agent: this.#name, mcp: { servers: [...servers], toolSearch: servers.length > 0 } };
+	}
+
+	/** RFC 0024 §7.2: the status view of GET /mcp. In-memory state only: this
+	 * route must never activate the agent (D10, the RFC 0016 rule). */
+	mcpStatus() {
+		return {
+			agent: this.#name,
+			node: this.#mcp?.gatewayUrl ?? "",
+			configured: this.#mcp !== null,
+			enabled: this.#mcp?.servers ?? [],
+			toolSearch: (this.#mcp?.servers.length ?? 0) > 0,
+			deployment: this.#mcpDeployment.map((server) => ({
+				id: server.id,
+				title: server.title,
+				tools: server.tools.length,
+				write: server.tools.some((tool) => tool.tier === "write"),
+				authRequired: server.auth.required,
+			})),
+		};
 	}
 
 	/** RFC 0018 §3: the classifier model the coherence judge runs on, resolved

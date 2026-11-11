@@ -13,11 +13,30 @@ cd "$(dirname "$0")"
 # the manager reads these at container start (see docker-compose.yml).
 export STOP_AFTER_S="${STOP_AFTER_S:-25}"
 export EVICT_TICK_S="${EVICT_TICK_S:-2}"
+# The identity e2e performs several logins in one minute. Keep the production
+# defaults for interactive stacks, but never let a back-to-back gate run trip
+# its own throttle; the rate limiter itself is covered by the manager tests.
+export IDENTITY_LOGIN_PER_MINUTE="${IDENTITY_LOGIN_PER_MINUTE:-60}"
+export IDENTITY_REGISTER_PER_HOUR="${IDENTITY_REGISTER_PER_HOUR:-100}"
 
 COMPOSE=(docker compose)
 
 pass() { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s\n' "$1"; exit 1; }
+
+# The manager does real work at boot (catalog extraction, network checks), and
+# every later `up -d` that changes its env recreates it: the next suite must
+# not race that window with a 502. Poll its /healthz until it answers.
+wait_manager() {
+	for _ in $(seq 1 30); do
+		if "${COMPOSE[@]}" exec -T sandbox-manager python3 -c \
+			"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2)" >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 1
+	done
+	fail "sandbox-manager did not become ready"
+}
 
 # RFC 0012: the KEK of the BYOK provider keys. Compose mounts it read-only into
 # the manager only; docker would turn a missing file into a directory, so it
@@ -50,6 +69,37 @@ ensure_manager_token() {
 	fi
 }
 
+has_env_value() { # name: an empty assignment does not count
+	grep -qE "^$1=.+" .env 2>/dev/null
+}
+
+append_env() { # name value
+	if [ -f .env ] && [ -n "$(tail -c 1 .env 2>/dev/null)" ]; then
+		printf '\n' >> .env
+	fi
+	printf '%s=%s\n' "$1" "$2" >> .env
+	chmod 600 .env
+}
+
+ensure_identity_config() {
+	# RFC 0023: the manager seals better-auth cookies, so it needs the same
+	# secret the web app verifies with. Copy frontend/.env's dev secret when it
+	# exists; otherwise generate one (the e2e verifies signatures with it).
+	if ! has_env_value BETTER_AUTH_SECRET; then
+		local secret=""
+		if [ -f frontend/.env ]; then
+			secret="$(sed -n 's/^BETTER_AUTH_SECRET=//p' frontend/.env | tail -1 | tr -d '"' | tr -d "'")"
+		fi
+		[ -n "${secret}" ] || secret="$(openssl rand -base64 32)"
+		append_env BETTER_AUTH_SECRET "${secret}"
+		pass "added BETTER_AUTH_SECRET to .env (matched to frontend/.env when present)"
+	fi
+	if ! has_env_value IDENTITY_API_KEY; then
+		append_env IDENTITY_API_KEY "$(openssl rand -base64 32)"
+		pass "created IDENTITY_API_KEY in .env (scoped X-Identity-Key)"
+	fi
+}
+
 require_runsc() {
 	# gVisor is mandatory (the sidecar key delivery is cleartext HTTP on the
 	# per-user bridge; under runc a root agent with CAP_NET_RAW can ARP-spoof
@@ -72,6 +122,17 @@ export SEARXNG_URL="http://e2e-fake-search:8080"
 export CAMOFOX_URL="http://e2e-fake-search:9377"
 export CAMOFOX_API_KEY="e2e-camofox-key"
 export WEBSEARCH_IN="${WEBSEARCH_IN:-websearch-in}"
+
+# RFC 0024: the MCP node dials operator-reviewed MCP servers. The gate offers
+# the catalog's `fake` entry (never on a real deployment) and runs the e2e
+# stand-in on `mcp-in`; MCP_ADMISSION_KEY is the secret Caddy stamps on
+# /prompt and the manager delivers to every node. Both shared networks are
+# created here with exactly the shape the manager would create them with, so
+# its fail-closed shape checks see the intended topology.
+export MCP_SERVERS="${MCP_SERVERS:-fake}"
+export MCP_ADMISSION_KEY="${MCP_ADMISSION_KEY:-$(openssl rand -hex 32)}"
+export MCP_IN="${MCP_IN:-mcp-in}"
+export MCP_OUT="${MCP_OUT:-mcp-out}"
 
 echo "== typecheck: server.ts must pass tsc --noEmit =="
 (
@@ -125,9 +186,31 @@ docker run -d --name e2e-fake-search --network "${WEBSEARCH_IN}" --restart unles
 	affido-e2e-fake-search >/dev/null || fail "fake search stack did not start"
 pass "websearch-in (internal) and the e2e fake SearXNG/Camofox are up"
 
+echo "== mcp (RFC 0024): operator network + fake MCP server =="
+if ! docker network inspect "${MCP_IN}" >/dev/null 2>&1; then
+	docker network create --internal \
+		--opt com.docker.network.bridge.enable_ip_masquerade=false \
+		--label pi-affido-mcp=1 "${MCP_IN}" >/dev/null
+fi
+if ! docker network inspect "${MCP_OUT}" >/dev/null 2>&1; then
+	docker network create \
+		--opt com.docker.network.bridge.enable_icc=false \
+		--label pi-affido-mcp=1 "${MCP_OUT}" >/dev/null
+fi
+[[ "$(docker network inspect -f '{{.Internal}}' "${MCP_IN}")" == "true" ]] \
+	|| fail "${MCP_IN} must be --internal: the MCP node's operator leg has no egress"
+[[ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.enable_icc"}}' "${MCP_OUT}")" == "false" ]] \
+	|| fail "${MCP_OUT} must disable inter-container traffic (T7)"
+docker build -q -t affido-e2e-fake-mcp ./e2e-test/fake-mcp >/dev/null || fail "fake MCP server build failed"
+docker rm -f e2e-fake-mcp >/dev/null 2>&1 || true
+docker run -d --name e2e-fake-mcp --network "${MCP_IN}" --network-alias e2e-fake-mcp \
+	--restart unless-stopped affido-e2e-fake-mcp >/dev/null || fail "fake MCP server did not start"
+pass "mcp-in (internal) + mcp-out (icc off) and the e2e fake MCP server are up"
+
 echo "== build and start the control plane =="
 ensure_kek
 ensure_manager_token
+ensure_identity_config
 require_runsc
 # Start from a clean control plane: the BYOK phase below recreates the manager
 # twice more per run, and back-to-back runs on containerd-store daemons can
@@ -142,6 +225,7 @@ require_runsc
 # docker-compose.override.yml may point interactive stacks elsewhere; this
 # override holds only for this invocation.
 AGENT_IMAGE=affido-agent:latest AGENT_EGRESS=off "${COMPOSE[@]}" up -d --build >/dev/null
+wait_manager
 pass "caddy, oltp and sandbox-manager are up"
 
 echo "== manager unit tests: BYOK crypto and baseUrl rules (RFC 0012 M1) =="
@@ -154,6 +238,12 @@ echo "== RFC 0003: happy path + parallel responses =="
 
 echo "== RFC 0016: web-search node, tool contract, taint gate =="
 ./e2e-test/websearch.sh
+
+echo "== RFC 0024: MCP node, manifest authority, write gate, taint, revocation =="
+./e2e-test/mcp.sh
+
+echo "== RFC 0023: machine identity surface (register/login/logout/whoami) =="
+./e2e-test/identity.sh
 
 echo "== RFC 0012 M1/M4: /providers API in the default (egress-off) stack =="
 ./e2e-test/providers.sh
@@ -176,24 +266,26 @@ docker run -d --name e2e-fake-upstream --network "${AGENTS_NET}" --restart unles
 	affido-e2e-fake-upstream >/dev/null || fail "fake upstream did not start"
 AGENT_IMAGE=affido-agent:latest AGENT_EGRESS=open PROVIDER_DEV_HTTP=1 FAKE_UPSTREAM_CONTAINER=e2e-fake-upstream \
 	"${COMPOSE[@]}" up -d >/dev/null || fail "BYOK stack did not start"
+wait_manager
 ./e2e-test/byok.sh
 
 echo "== restore the default (keyless, egress-off) stack =="
 docker rm -f e2e-fake-upstream >/dev/null
-# The fake search stack is e2e-only; the network stays (a manager-owned
-# network, harmless when no services are attached).
+# The fake search and MCP stacks are e2e-only; the networks stay (manager-owned
+# networks, harmless when no services are attached).
 docker rm -f e2e-fake-search >/dev/null 2>&1 || true
+docker rm -f e2e-fake-mcp >/dev/null 2>&1 || true
 # Pin AGENT_EGRESS=off like the keyless phases above: the BYOK phase exported
 # it open in this process, and an operator .env may carry open too — without
 # the pin the "restored" stack keeps NAT egress and the security negatives
 # (internet_reachable) fail on any later standalone re-run. Drop the e2e search
-# URLs too, so the restored manager points at the operator's services (or the
-# defaults) rather than at the fake stack that was just removed.
+# and MCP surface too, so the restored manager points at the operator's
+# services (or the defaults) rather than at the fake stacks just removed.
 (
-	unset SEARXNG_URL CAMOFOX_URL CAMOFOX_API_KEY
+	unset SEARXNG_URL CAMOFOX_URL CAMOFOX_API_KEY MCP_SERVERS MCP_ADMISSION_KEY
 	AGENT_IMAGE=affido-agent:latest AGENT_EGRESS=off "${COMPOSE[@]}" up -d >/dev/null
 )
-pass "stack restored: faux default, no fake upstream, operator search URLs"
+pass "stack restored: faux default, no fake upstream, operator search and MCP surfaces"
 
 echo
 echo "ALL CHECKS PASSED"

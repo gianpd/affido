@@ -6,6 +6,7 @@ import type { AgentChange, EntryId, HarnessOptions, ModelRef } from "@earendil-w
 import type { CredentialStore, ModelThinkingLevel, MutableModels } from "@earendil-works/pi-ai";
 import type { HarnessLifecycle } from "./harness.ts";
 import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
+import type { McpManifestServer } from "./mcp/catalog.ts";
 import type { CitationRunReport, CitationsTraceReport } from "./citation-report.ts";
 import type { ArtifactView } from "./artifacts.ts";
 import type { TraceEntryDetail, TraceQuery, TraceReport } from "./trace.ts";
@@ -67,6 +68,10 @@ export type AgentOptions = {
 	readonly log: Log;
 	/** RFC 0022: shared disk quota; absent in tests that inject a fake lifecycle. */
 	readonly storageQuota?: StorageQuotaPort;
+	/** RFC 0024 §8: the MCP deployment subset (MCP_SERVERS ∩ catalog), resolved
+	 * by the bootstrap (server.ts) before construction so the registry can
+	 * register the deferred tools at boot. Empty/absent: no MCP surface. */
+	readonly mcpDeployment?: readonly McpManifestServer[];
 	/** Lifecycle to run on; defaults to a DurableHarness built from these options. */
 	readonly harness?: HarnessLifecycle;
 };
@@ -89,6 +94,21 @@ export type CitationMode = "required" | "off";
 /** RFC 0016 §7: whether the user authorised web search for one submission.
  * Default `"off"`; the model can never set it. */
 export type WebMode = "allowed" | "off";
+
+/** RFC 0024 §7: whether the user authorised MCP write-tier tools for one
+ * submission (the composer's "allow changes"). Default `"off"`. The grant
+ * itself is only real if the node saw the Caddy admission stamp. */
+export type McpMode = "allowed" | "off";
+
+/** The POST /mcpconfig payload (RFC 0024 §7.2): the manager delivery that
+ * carries the node's URL, the run-registration control token and the
+ * user-enabled server ids. No credential travels here: the node holds the
+ * tokens, and the admission key is only ever Caddy -> agent header -> node. */
+export type McpConfig = {
+	readonly gatewayUrl: string;
+	readonly controlToken: string;
+	readonly servers: readonly string[];
+};
 
 /** One citation of a reply, as the envelope reports it (R6). */
 export type CitationView = {
@@ -141,6 +161,9 @@ export type PromptResult = {
 	readonly citationsMode: "required" | "free";
 	/** The web authorisation of this submission, as the user chose it. */
 	readonly webMode: WebMode;
+	/** RFC 0024 §7: the MCP write authorisation of this submission, as the user
+	 * chose it (the node may still have registered the run read-only). */
+	readonly mcpMode: McpMode;
 	readonly runId: string | null;
 	/** Files this run created or changed under `artifacts/` (RFC 0009 R7),
 	 * server-built like `evidence`: re-derived from disk at response time. */
@@ -170,6 +193,10 @@ export interface AgentApi {
 		requestId: string | undefined,
 		citations: CitationMode | undefined,
 		web?: WebMode,
+		mcpWrite?: McpMode,
+		/** RFC 0024 §4.2/D7: the Caddy-stamped admission header, relayed into the
+		 * run registration and dropped. Only PromptTool sets it. */
+		mcpAdmission?: string,
 	): Promise<PromptResult>;
 	/** One run's citations, re-verified (R11). */
 	citations(runId: string): Promise<RunCitations>;
@@ -188,6 +215,13 @@ export interface AgentApi {
 	/** RFC 0016 §7: the manager delivers the node's control token, in memory
 	 * only. Without it no run can be registered for web. */
 	configureWeb(controlToken: string): Promise<unknown>;
+	/** RFC 0024 §7.2: the manager delivers the MCP runtime config (node URL,
+	 * control token, user-enabled servers) and the conversation's tool_search
+	 * selection follows — serialized with prompts on the same chain. */
+	configureMcp(config: McpConfig): Promise<unknown>;
+	/** RFC 0024 §7.2: enabled servers, node health, tool counts. Reads the
+	 * in-memory runtime only: a status poll never activates the agent. */
+	mcpStatus(): unknown;
 	reset(): Promise<unknown>;
 	pause(): Promise<unknown>;
 }

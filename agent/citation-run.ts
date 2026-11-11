@@ -96,19 +96,26 @@ export const CitationRunDocs = defineDocFamily<CitationRunState, RunSeed>({
 /** The run the current submission placed; tools and hooks read this pointer.
  * RFC 0016 §7 adds the per-run web authorisation: `web` is the user's choice,
  * `webToken` is the node's registration token (null when web was not requested
- * or the node was unavailable). Neither is ever writable by the model. */
+ * or the node was unavailable). RFC 0024 §7.3 adds the same pair for MCP:
+ * `mcp` carries the node's run token and whether the run may write. None of
+ * the three is ever writable by the model. */
 export const CurrentRunDoc = defineDoc<{
 	runId: string | null;
 	strict: boolean;
 	web: boolean;
 	webToken: string | null;
+	mcp: { runToken: string; write: boolean } | null;
 }>({
 	scope: "conversation",
 	history: "latest",
 	fork: "current",
 	kind: "citations.current",
-	version: 1,
-	initial: () => ({ runId: null, strict: false, web: false, webToken: null }),
+	version: 2,
+	initial: () => ({ runId: null, strict: false, web: false, webToken: null, mcp: null }),
+	migrate: (value, fromVersion) => {
+		if (fromVersion < 2) value.mcp = null;
+		return value as { runId: string | null; strict: boolean; web: boolean; webToken: string | null; mcp: { runToken: string; write: boolean } | null };
+	},
 });
 
 export type CurrentRun = {
@@ -118,6 +125,9 @@ export type CurrentRun = {
 	readonly web: boolean;
 	/** The node's per-run token; null means web is not usable in this run. */
 	readonly webToken: string | null;
+	/** RFC 0024 §7.3: the MCP node's per-run token and write grant; null means
+	 * MCP tools are not usable in this run. */
+	readonly mcp: { readonly runToken: string; readonly write: boolean } | null;
 };
 
 /** Committed document reads with the full snapshot overloads (as `Session` declares them). */
@@ -132,7 +142,14 @@ export const readCurrentRun = async (
 	const pointer = await reader.snapshot(CurrentRunDoc, conversationId, context);
 	if (pointer === undefined || pointer.runId === null) return null;
 	// Documents stored before RFC 0016 have neither field: absent means "web off".
-	return { runId: pointer.runId, strict: pointer.strict, web: pointer.web === true, webToken: pointer.webToken ?? null };
+	// Before RFC 0024 there is no mcp grant: absent means the same as null.
+	return {
+		runId: pointer.runId,
+		strict: pointer.strict,
+		web: pointer.web === true,
+		webToken: pointer.webToken ?? null,
+		mcp: pointer.mcp ?? null,
+	};
 };
 
 /** One run's state as stored, or `undefined` when the run id never existed. */
@@ -169,6 +186,11 @@ export const mutateRun = async (
  * run is fresh, the stored one on an idempotent replay. */
 export type WebRunGrant = { readonly web: boolean; readonly webToken: string | null };
 
+/** RFC 0024 §7.3: the MCP grant of one admission. `write` mirrors what the
+ * node accepted (false when the admission stamp was missing), and the tools
+ * read it — never a model argument. */
+export type McpRunGrant = { readonly runToken: string; readonly write: boolean } | null;
+
 export const placeCurrentRun = async (
 	conversation: Conversation,
 	runId: string,
@@ -176,6 +198,7 @@ export const placeCurrentRun = async (
 	prompt: string,
 	artifactBaseline: ArtifactBaseline,
 	web: WebRunGrant,
+	mcp: McpRunGrant,
 	context: Context,
 ): Promise<ArtifactBaseline> =>
 	conversation.commit(async (tx) => {
@@ -184,6 +207,7 @@ export const placeCurrentRun = async (
 		pointer.strict = strict;
 		pointer.web = web.web;
 		pointer.webToken = web.webToken;
+		pointer.mcp = mcp;
 		const run = await tx.doc(CitationRunDocs, conversation.id, runId, { runId, strict, prompt });
 		// A replayed requestId (idempotent submit) must not reset the run: only a
 		// doc that never accumulated anything takes the prompt. The artifact

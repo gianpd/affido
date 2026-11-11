@@ -1,0 +1,64 @@
+{
+	"version": 1,
+	"servers": [
+		{
+			"id": "fake",
+			"title": "E2E fake MCP server",
+			"url": "http://e2e-fake-mcp:9410/mcp",
+			"host": "e2e-fake-mcp",
+			"network": "mcp-in",
+			"auth": { "kind": "bearer", "required": true },
+			"limits": { "timeoutMs": 5000, "maxResultBytes": 65536, "maxResultChars": 2000, "requestsPerMinute": 60, "concurrency": 2 },
+			"tools": [
+				{
+					"name": "echo",
+					"description": "Echo its text argument back. Read-only e2e probe tool.",
+					"tier": "read",
+					"parameters": {
+						"type": "object",
+						"properties": {
+							"text": { "type": "string", "description": "Text to echo (max 500 characters)", "maxLength": 500 }
+						},
+						"required": [],
+						"additionalProperties": false
+					}
+				},
+				{
+					"name": "save_note",
+					"description": "Save a note on the server (write tier): the e2e write-gate probe. Has an effect by declaration, so it needs the per-run changes authorisation.",
+					"tier": "write",
+					"parameters": {
+						"type": "object",
+						"properties": {
+							"text": { "type": "string", "description": "The note to save", "maxLength": 500 }
+						},
+						"required": ["text"],
+						"additionalProperties": false
+					}
+				},
+				{
+					"name": "flood",
+					"description": "Return a result far over the character budget: the e2e truncation probe.",
+					"tier": "read",
+					"parameters": {
+						"type": "object",
+						"properties": {},
+						"required": [],
+						"additionalProperties": false
+					}
+				},
+				{
+					"name": "stall",
+					"description": "Sleep past the per-call timeout, then answer: the e2e timeout probe.",
+					"tier": "read",
+					"parameters": {
+						"type": "object",
+						"properties": {},
+						"required": [],
+						"additionalProperties": false
+					}
+				}
+			]
+		}
+	]
+}

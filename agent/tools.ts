@@ -13,10 +13,10 @@ import {
 	verifySkill,
 } from "./skills.ts";
 import { listArtifactTree, readArtifact, removeArtifactPath } from "./artifacts.ts";
-import type { CitationMode, StorageQuotaPort } from "./types.ts";
+import type { CitationMode, McpConfig, StorageQuotaPort } from "./types.ts";
 import { InvalidTraceQueryError, parseTraceQuery, UnknownConversationError, UnknownEntryError } from "./trace.ts";
 import type { TraceQuery } from "./trace.ts";
-import type { AgentApi, ToolRequest, WebMode } from "./types.ts";
+import type { AgentApi, McpMode, ToolRequest, WebMode } from "./types.ts";
 
 export class HttpTool {
 	readonly name: string;
@@ -420,7 +420,19 @@ export class PromptTool extends HttpTool {
 			}
 			web = body.web;
 		}
-		return agent.prompt(prompt, requestId, citations, web);
+		let mcpWrite: McpMode | undefined;
+		if (body.mcpWrite !== undefined) {
+			if (body.mcpWrite !== "allowed" && body.mcpWrite !== "off") {
+				throw new HttpError(400, { error: "invalid_mcp_write", message: 'mcpWrite must be "allowed" or "off"' });
+			}
+			mcpWrite = body.mcpWrite;
+		}
+		// RFC 0024 §4.2/D7: Caddy stamps the admission header on /prompt and strips
+		// any client copy. The agent relays it into the MCP run registration and
+		// drops it; it is never validated here and never stored.
+		const rawAdmission = req.headers["x-mcp-admission"];
+		const admission = typeof rawAdmission === "string" && rawAdmission !== "" ? rawAdmission : undefined;
+		return agent.prompt(prompt, requestId, citations, web, mcpWrite, admission);
 	}
 }
 
@@ -554,6 +566,43 @@ export class WebConfigTool extends HttpTool {
 			});
 		}
 		return agent.configureWeb(controlToken);
+	}
+}
+
+/** RFC 0024 §7.2: the manager delivers the MCP runtime config on every
+ * resolve — the node's URL, the run-registration control token and the
+ * user-enabled server ids. Activates the agent: the conversation's tool
+ * selection follows on the serialization chain. No credential and never the
+ * admission key: those travel manager -> node only. */
+export class McpConfigTool extends HttpTool {
+	constructor() {
+		super("mcpconfig", "POST", "/mcpconfig");
+	}
+
+	async handle({ req, agent }: ToolRequest): Promise<unknown> {
+		const body = await readBody(req);
+		const servers = body.servers;
+		if (servers !== undefined && !Array.isArray(servers)) {
+			throw new HttpError(400, { error: "invalid_mcp_config", message: "servers must be an array of server ids" });
+		}
+		return agent.configureMcp({
+			gatewayUrl: typeof body.gatewayUrl === "string" ? body.gatewayUrl : "",
+			controlToken: typeof body.controlToken === "string" ? body.controlToken : "",
+			servers: Array.isArray(servers) ? (servers.filter((id): id is string => typeof id === "string")) : [],
+		});
+	}
+}
+
+/** RFC 0024 §7.2: enabled servers, node health, tool counts. Reads the
+ * in-memory cache only: never activates, so a status poll cannot defeat the
+ * idle pause (the RFC 0016 D10 rule, already in place for the web node). */
+export class McpStatusTool extends HttpTool {
+	constructor() {
+		super("mcp", "GET", "/mcp");
+	}
+
+	handle({ agent }: ToolRequest): unknown {
+		return agent.mcpStatus();
 	}
 }
 

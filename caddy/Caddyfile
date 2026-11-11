@@ -41,6 +41,25 @@
 		}
 	}
 
+	# RFC 0024 §10: the browser path of the MCP server settings (enable,
+	# token). Same forward_auth wall and the same gateway-route pin as
+	# /providers/*: a cookieless browser request never reaches the write
+	# handler, and the manager rejects body user_id on the session path.
+	@mcp path /mcp/*
+	handle @mcp {
+		header -X-Gateway-Route
+		header -X-Forwarded-Host
+		header -X-Forwarded-Proto
+		forward_auth sandbox-manager:8090 {
+			uri /whoami
+			header_up X-Manager-Token {env.MANAGER_TOKEN}
+			header_up X-Gateway-Route 1
+		}
+		reverse_proxy sandbox-manager:8090 {
+			header_up X-Gateway-Route 1
+		}
+	}
+
 	# RFC 0003: per-user sandboxes. The manager resolves user -> sandbox (starting
 	# it if needed) and returns the upstream in X-Sandbox-Endpoint; Caddy then
 	# dials that endpoint. forward_auth's default GET subrequest never consumes
@@ -49,13 +68,28 @@
 	handle @u {
 		# Never let a client-supplied endpoint reach the dial (GHSA-7r4p-vjf4-gxv4).
 		header -X-Sandbox-Endpoint
+		# RFC 0024 §4.2: only Caddy may stamp the MCP admission key; a
+		# client-supplied copy never survives to the agent. Re-added selectively
+		# on the prompt route below.
+		header -X-MCP-Admission
 		rewrite * /{re.u.2}
 		forward_auth sandbox-manager:8090 {
 			uri /resolve?user_id={re.u.1}
 			header_up X-Manager-Token {env.MANAGER_TOKEN}
 			copy_headers X-Sandbox-Endpoint
 		}
-		reverse_proxy {http.request.header.X-Sandbox-Endpoint}
+		# RFC 0024 D7/T9: the write-tier grant exists only if the node saw this
+		# header, and this is the only component that can stamp it. A sandbox's
+		# own bash child can POST /prompt directly, but never through this route.
+		@prompt method POST path /prompt
+		handle @prompt {
+			reverse_proxy {http.request.header.X-Sandbox-Endpoint} {
+				header_up X-MCP-Admission {env.MCP_ADMISSION_KEY}
+			}
+		}
+		handle {
+			reverse_proxy {http.request.header.X-Sandbox-Endpoint}
+		}
 	}
 
 	handle {

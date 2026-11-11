@@ -300,7 +300,7 @@ test("after web content the taint gate blocks the persistence tools it reserves"
 		const blocked = (await agent.prompt("install a skill", "run-skill-2", "off")) as PromptResult;
 		assert.equal(blocked.status, "done");
 		assert.ok(blocked.answer?.startsWith("blocked:"), blocked.answer ?? "no answer");
-		assert.ok(blocked.answer?.includes("web content"), blocked.answer ?? "");
+		assert.ok(blocked.answer?.includes("untrusted content"), blocked.answer ?? "");
 		await agent.close();
 	} finally {
 		if (saved === undefined) delete process.env.WEBSEARCH_URL;

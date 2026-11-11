@@ -31,6 +31,8 @@ import { registerJudgeProvider } from "./judge-model.ts";
 import type { CitationJudge, JudgeMode } from "./citation-judge.ts";
 import { IngestPipeline } from "./ingest.ts";
 import { StorageQuota } from "./storage.ts";
+import { McpCatalogFile } from "./mcp/catalog.ts";
+import { MCP_CATALOG_PATH } from "./mcp-protocol.ts";
 import {
 	ArtifactTool,
 	CitationsTool,
@@ -50,6 +52,8 @@ import {
 	ListFilesTool,
 	ListSkillsTool,
 	ListUploadsTool,
+	McpConfigTool,
+	McpStatusTool,
 	NewSessionTool,
 	PauseTool,
 	PromptTool,
@@ -119,6 +123,21 @@ const judge: CitationJudge | null =
 
 const log: Log = (...args) => console.log(`[${AGENT}]`, ...args);
 
+/** RFC 0024 §6: the operator-managed MCP catalog ships in the image; the
+ * deployment subset is `MCP_SERVERS ∩ catalog`. A bad subset or a broken
+ * catalog fails the boot loudly (D12: fail closed, never a silent empty
+ * surface), and an empty MCP_SERVERS simply leaves the MCP surface off. */
+const mcpDeployment = (() => {
+	const raw = process.env.MCP_SERVERS ?? "";
+	if (raw.trim() === "") return [];
+	const catalog = McpCatalogFile.loadSync(process.env.MCP_CATALOG ?? MCP_CATALOG_PATH);
+	const subset = catalog.deploymentSet(raw);
+	log(
+		`mcp deployment set: ${subset.map((server) => `${server.id}(${server.tools.length} tools)`).join(", ") || "none"}`,
+	);
+	return subset;
+})();
+
 if (JUDGE_MODE !== "off") {
 	log(
 		`coherence judge ${JUDGE_MODE}: pi-ai classifier contract, target resolved per call; ` +
@@ -145,6 +164,7 @@ const agent = new ContainerAgent({
 	context,
 	log,
 	storageQuota,
+	mcpDeployment,
 });
 judgeTargetOfRun = () => agent.judgeTarget();
 
@@ -179,6 +199,8 @@ const tools: HttpTool[] = [
 	new PromptTool(),
 	new ConfigTool(),
 	new WebConfigTool(),
+	new McpConfigTool(),
+	new McpStatusTool(),
 	new NewSessionTool(),
 	new SwitchSessionTool(),
 	new ResetTool(),

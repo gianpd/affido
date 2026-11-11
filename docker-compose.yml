@@ -6,7 +6,8 @@
 			"container_name": "caddy",
 			"ports": ["${CADDY_BIND:-127.0.0.1}:18080:80"],
 			"environment": {
-				"MANAGER_TOKEN": "${MANAGER_TOKEN:-dev-manager-token}"
+				"MANAGER_TOKEN": "${MANAGER_TOKEN:-dev-manager-token}",
+				"MCP_ADMISSION_KEY": "${MCP_ADMISSION_KEY:-}"
 			},
 			"volumes": ["./caddy/Caddyfile:/etc/caddy/Caddyfile:ro"],
 			"depends_on": ["sandbox-manager"],
@@ -53,7 +54,7 @@
 				"AGENT_IDLE_MS": "${AGENT_IDLE_MS:-5000}",
 				"AGENT_CITATIONS_DEFAULT": "${AGENT_CITATIONS_DEFAULT:-}",
 				"AGENT_EGRESS": "${AGENT_EGRESS:-off}",
-				"AGENT_DNS": "${AGENT_DNS:-1.1.1.1}",
+				"AGENT_DNS": "${AGENT_DNS:-1.0.0.1}",
 				"PROVIDER_DEV_HTTP": "${PROVIDER_DEV_HTTP:-}",
 				"FAKE_UPSTREAM_CONTAINER": "${FAKE_UPSTREAM_CONTAINER:-}",
 				"WEBSEARCH_IN": "${WEBSEARCH_IN:-websearch-in}",
@@ -62,7 +63,13 @@
 				"CAMOFOX_URL": "${CAMOFOX_URL:-http://camofox-browser:9377}",
 				"CAMOFOX_API_KEY": "${CAMOFOX_API_KEY:-}",
 				"WEBSEARCH_MEMORY": "${WEBSEARCH_MEMORY:-192m}",
-				"WEBSEARCH_CPUS": "${WEBSEARCH_CPUS:-0.5}"
+				"WEBSEARCH_CPUS": "${WEBSEARCH_CPUS:-0.5}",
+				"MCP_SERVERS": "${MCP_SERVERS:-}",
+				"MCP_IN": "${MCP_IN:-mcp-in}",
+				"MCP_OUT": "${MCP_OUT:-mcp-out}",
+				"MCP_ADMISSION_KEY": "${MCP_ADMISSION_KEY:-}",
+				"MCP_MEMORY": "${MCP_MEMORY:-192m}",
+				"MCP_CPUS": "${MCP_CPUS:-0.5}"
 			},
 			"volumes": [
 				"/var/run/docker.sock:/var/run/docker.sock",

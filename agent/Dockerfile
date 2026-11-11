@@ -23,10 +23,17 @@ RUN rm -rf /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
 
 COPY server.ts types.ts harness.ts model.ts upstream-failure.ts tools.ts agent.ts http.ts trace.ts corpus.ts sidecar.ts \
      storage.ts quota-env.ts \
-     websearch.ts web-tools.ts web-protocol.ts uploads.ts skills.ts artifacts.ts citation-store.ts citation-judge.ts \
+     websearch.ts web-tools.ts web-protocol.ts mcp-protocol.ts mcp-tools.ts mcp-gateway.ts uploads.ts skills.ts artifacts.ts citation-store.ts citation-judge.ts \
      judge.ts judge-model.ts workspace-store.ts \
      citation-run.ts citation-tools.ts citation-report.ts citation-gate-demo.ts ingest.ts \
      scripts/gen-provider-catalog.mjs ./
+COPY mcp/ ./mcp/
+COPY catalog/ /app/catalog/
+# RFC 0024 D5 (as amended): the real catalog is operator-local and gitignored;
+# a fresh clone builds with the committed example (the e2e fake server only),
+# so the image always carries a valid catalog and the manager never extracts
+# a stale or missing one (mcp_catalog_unavailable stays a build error).
+RUN if [ ! -f /app/catalog/mcp.json ]; then cp /app/catalog/mcp.json.example /app/catalog/mcp.json; fi
 
 # RFC 0012 §5.1: the BYOK catalog is generated from pi-ai's static catalogs at
 # build time (same pinned version as the factories in model.ts). The manager

@@ -102,6 +102,25 @@ CAMOFOX_URL      = os.getenv("CAMOFOX_URL", "http://camofox-browser:9377")
 # Shared operator secret for Camofox's /evaluate. It never enters a sandbox:
 # only the node container receives it, and no tool echoes it.
 CAMOFOX_API_KEY  = os.getenv("CAMOFOX_API_KEY", "")
+# ── RFC 0024: the per-user MCP node ─────────────────────────────────────────
+# One `mcp-<user>` container per sandbox when MCP_SERVERS is non-empty: same
+# image, fourth entrypoint (node /app/mcp-gateway.ts). Three network legs: the
+# per-user internal network (the agent), mcp-in (operator-hosted servers,
+# internal) and mcp-out (third-party servers, NAT, inter-container traffic
+# disabled so tenants' nodes cannot reach each other there).
+MCP_PORT         = int(os.getenv("MCP_PORT", "8083"))
+MCP_MEMORY       = os.getenv("MCP_MEMORY", "192m")
+MCP_CPUS         = os.getenv("MCP_CPUS", "0.5")
+MCP_IN           = os.getenv("MCP_IN", "mcp-in")
+MCP_OUT          = os.getenv("MCP_OUT", "mcp-out")
+# The deployment subset of the operator catalog (agent/catalog/mcp.json,
+# extracted from the image like provider-catalog.json). Empty: no MCP surface.
+MCP_SERVERS_RAW  = os.getenv("MCP_SERVERS", "")
+# Caddy stamps this on /prompt (X-MCP-Admission); the manager delivers it to
+# the node with the server config. Missing key = no write run ever (R8, fail
+# closed), reads unaffected.
+MCP_ADMISSION_KEY = os.getenv("MCP_ADMISSION_KEY", "")
+MCP_CATALOG_PATH_IN_IMAGE = "/app/catalog/mcp.json"
 # RFC 0013 §6.4 P0.1: explicit seccomp profile (deny-list, EPERM) for the
 # ptrace_may_access-gated syscall family, shipped in this image and read
 # client-side by the docker CLI (the daemon never touches the host fs for
@@ -209,6 +228,12 @@ def websearch_name(user_id: str) -> str:
     return container_name(user_id) + "-websearch"
 
 
+def mcp_node_name(user_id: str) -> str:
+    """RFC 0024 §5: the per-user MCP node. Triple-homed on the user's network,
+    the operator MCP network and the third-party egress network."""
+    return container_name(user_id) + "-mcp"
+
+
 def network_name(user_id: str) -> str:
     """One bridge network per user: agents cannot reach each other's :8080."""
     return "pi-net-" + slug(user_id)
@@ -311,6 +336,143 @@ def websearch_service_hosts() -> dict[str, str]:
     return hosts
 
 
+# ── RFC 0024: MCP networks, catalog, host resolution ────────────────────────
+
+def ensure_mcp_networks() -> None:
+    """§5.1 D2: `mcp-in` is internal (operator servers, no NAT); `mcp-out` is a
+    plain bridge with inter-container traffic disabled, so every tenant's node
+    shares the egress leg without a tenant-to-tenant edge (T7). An existing
+    network with the wrong shape fails closed instead of weakening it."""
+    if not network_exists(MCP_IN):
+        docker(
+            "network", "create", "--internal",
+            "--opt", "com.docker.network.bridge.enable_ip_masquerade=false",
+            "--label", "pi-affido-mcp=1", MCP_IN,
+        )
+        invalidate_peer_cache()
+    internal = docker("network", "inspect", "-f", "{{.Internal}}", MCP_IN).strip()
+    if internal != "true":
+        raise RuntimeError(
+            f"{MCP_IN} exists but is not --internal: an MCP node attached to it"
+            " would gain a non-isolated leg (RFC 0024 D2). Recreate it --internal."
+        )
+    if not network_exists(MCP_OUT):
+        docker(
+            "network", "create",
+            "--opt", "com.docker.network.bridge.enable_icc=false",
+            "--label", "pi-affido-mcp=1", MCP_OUT,
+        )
+        invalidate_peer_cache()
+    icc = docker(
+        "network", "inspect", "-f",
+        "{{index .Options \"com.docker.network.bridge.enable_icc\"}}", MCP_OUT,
+    ).strip()
+    if icc != "false":
+        raise RuntimeError(
+            f"{MCP_OUT} exists but does not disable inter-container traffic: nodes"
+            " of different tenants could reach each other on it (RFC 0024 T7)."
+            " Recreate it with com.docker.network.bridge.enable_icc=false."
+        )
+
+
+_mcp_catalog_cache: dict[str, Any] | None = None
+
+
+def mcp_catalog() -> dict[str, dict[str, Any]]:
+    """The operator catalog by server id, extracted from AGENT_IMAGE once (the
+    provider-catalog precedent): the node reads its own copy from the same
+    image, so the two cannot drift. No static fallback — an image without the
+    file fails closed with mcp_catalog_unavailable."""
+    global _mcp_catalog_cache
+    if _mcp_catalog_cache is not None:
+        return _mcp_catalog_cache
+    try:
+        raw = docker(
+            "run", "--rm", "--network", "none", "--entrypoint", "cat",
+            AGENT_IMAGE, MCP_CATALOG_PATH_IN_IMAGE, timeout=60,
+        )
+        doc = json.loads(raw)
+        servers = doc["servers"]
+        if not isinstance(servers, list):
+            raise ValueError("catalog has no servers array")
+    except Exception as exc:
+        raise ManagerError(
+            "mcp_catalog_unavailable",
+            f"cannot read {MCP_CATALOG_PATH_IN_IMAGE} from {AGENT_IMAGE}"
+            f" ({type(exc).__name__}); rebuild affido-agent",
+        )
+    _mcp_catalog_cache = {entry["id"]: entry for entry in servers if "id" in entry}
+    return _mcp_catalog_cache
+
+
+def mcp_deployment() -> list[dict[str, Any]]:
+    """MCP_SERVERS intersected with the catalog. An id that is not in the
+    catalog is logged and dropped (the manager serves the valid subset; the
+    agent boot check then never trips, because the manager bakes only the
+    resolved ids into the container env)."""
+    wanted = [s.strip() for s in MCP_SERVERS_RAW.split(",") if s.strip()]
+    if not wanted:
+        return []
+    catalog = mcp_catalog()
+    deployment = []
+    for server_id in dict.fromkeys(wanted):  # dedupe, keep order
+        entry = catalog.get(server_id)
+        if entry is None:
+            log.warning("MCP_SERVERS lists %r which is not in the catalog: dropped", server_id)
+            continue
+        deployment.append(entry)
+    return deployment
+
+
+def mcp_service_hosts(deployment: list[dict[str, Any]]) -> dict[str, str]:
+    """§5.3: one baked /etc/hosts entry per catalog host, resolved now.
+
+    mcp-in hosts resolve to the container that holds the alias on MCP_IN (the
+    §14.4 runbook: `docker run --network mcp-in --network-alias <host>`); when
+    no container matches, the network's gateway is used — the operator runs
+    the server on the docker host itself (worldGraph under `uv run`), bound to
+    a port reachable on the bridge. mcp-out hosts resolve through DNS. The
+    allowlist stays structural either way: a host that is not in the catalog
+    never gets an entry and is unresolvable inside the node."""
+    hosts: dict[str, str] = {}
+    in_hosts = {
+        entry["host"] for entry in deployment
+        if entry.get("network") == "mcp-in" and entry.get("host")
+    }
+    if in_hosts and network_exists(MCP_IN):
+        ids = docker("ps", "-q", "--filter", f"network={MCP_IN}").split()
+        for start in range(0, len(ids), 25):
+            chunk = ids[start : start + 25]
+            doc = json.loads(docker("inspect", *chunk))
+            for container in doc:
+                net = (container.get("NetworkSettings") or {}).get("Networks") or {}
+                leg = net.get(MCP_IN) or {}
+                address = (leg.get("IPAddress") or "").split("/", 1)[0]
+                if not address:
+                    continue
+                names = {container.get("Name", "").lstrip("/")} | set(leg.get("Aliases") or [])
+                for host in in_hosts:
+                    if host in names:
+                        hosts[host] = address  # first match wins; operator's job to keep one
+    if in_hosts and network_exists(MCP_IN):
+        gateway = docker(
+            "network", "inspect", "-f", "{{(index .IPAM.Config 0).Gateway}}", MCP_IN
+        ).strip()
+        for host in in_hosts:
+            hosts.setdefault(host, gateway)  # operator-hosted on the docker host
+    for entry in deployment:
+        if entry.get("network") != "mcp-out" or not entry.get("host"):
+            continue
+        host = entry["host"]
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except socket.gaierror:
+            log.warning("mcp-out host %s does not resolve; the node will fail its calls", host)
+            continue
+        hosts[host] = infos[0][4][0]
+    return hosts
+
+
 def workspace_vol(user_id: str) -> str:
     return "pi-ws-" + slug(user_id)
 
@@ -363,6 +525,22 @@ CREATE TABLE IF NOT EXISTS provider_selection (
   model_id    text        NOT NULL,
   updated_at  timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id)
+);
+
+-- RFC 0024 §10.1: per-user MCP enablement and credentials. ciphertext is
+-- AES-256-GCM under the same KEK as provider_key but with its own AAD
+-- (user_id || "mcp:" || server_id), so an MCP token can never be decrypted
+-- as a provider key or swapped onto another owner. No FK, same note as
+-- provider_key: a user may connect a server before the first resolve.
+CREATE TABLE IF NOT EXISTS mcp_server (
+  user_id     text        NOT NULL,
+  server_id   text        NOT NULL,
+  enabled     boolean     NOT NULL DEFAULT false,
+  ciphertext  bytea,
+  nonce       bytea,
+  key_version integer     NOT NULL DEFAULT 1,
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, server_id)
 );
 """
 
@@ -971,6 +1149,79 @@ def provider_config_view(user_id: str) -> dict[str, Any]:
     }
 
 
+# ── RFC 0024 §10: per-user MCP credentials (encrypted under the same KEK) ──
+
+def mcp_key_aad(user_id: str, server_id: str) -> bytes:
+    """AAD binds each ciphertext to its owner and to the MCP domain: a row can
+    be swapped neither onto another user nor onto a provider_key (§10.1)."""
+    return user_id.encode() + b"mcp:" + server_id.encode()
+
+
+def mcp_token_encrypt(user_id: str, server_id: str, token: str) -> tuple[bytes, bytes]:
+    nonce = os.urandom(12)
+    ciphertext = AESGCM(load_kek()).encrypt(nonce, token.encode(), mcp_key_aad(user_id, server_id))
+    return ciphertext, nonce
+
+
+def mcp_token_decrypt(user_id: str, server_id: str, ciphertext: bytes, nonce: bytes) -> str:
+    try:
+        return AESGCM(load_kek()).decrypt(nonce, bytes(ciphertext), mcp_key_aad(user_id, server_id)).decode()
+    except Exception as exc:
+        raise ManagerError(
+            "kek_unavailable", f"mcp token ciphertext undecryptable ({type(exc).__name__})"
+        )
+
+
+def mcp_servers_get(user_id: str) -> list[dict[str, Any]]:
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM mcp_server WHERE user_id = %s ORDER BY server_id", (user_id,)
+        ).fetchall()
+
+
+def mcp_server_set(user_id: str, server_id: str, enabled: bool, token: str | None) -> None:
+    """Upsert one row. A token replaces the stored one; without a token the
+    stored ciphertext (if any) is kept, so `enabled` flips never lose a key."""
+    with db() as conn:
+        if token is not None:
+            ciphertext, nonce = mcp_token_encrypt(user_id, server_id, token)
+            conn.execute(
+                "INSERT INTO mcp_server (user_id, server_id, enabled, ciphertext, nonce)"
+                " VALUES (%s, %s, %s, %s, %s)"
+                " ON CONFLICT (user_id, server_id) DO UPDATE SET enabled = EXCLUDED.enabled,"
+                " ciphertext = EXCLUDED.ciphertext, nonce = EXCLUDED.nonce, updated_at = now()",
+                (user_id, server_id, enabled, psycopg.Binary(ciphertext), psycopg.Binary(nonce)),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO mcp_server (user_id, server_id, enabled) VALUES (%s, %s, %s)"
+                " ON CONFLICT (user_id, server_id) DO UPDATE SET enabled = EXCLUDED.enabled,"
+                " updated_at = now()",
+                (user_id, server_id, enabled),
+            )
+
+
+def mcp_servers_view(user_id: str) -> dict[str, Any]:
+    """The masked view of GET /mcp/servers: the deployment subset with each
+    server's user state. A token is never returned, only whether one exists."""
+    deployment = mcp_deployment()
+    rows = {row["server_id"]: row for row in mcp_servers_get(user_id)}
+    servers = []
+    for entry in deployment:
+        row = rows.get(entry["id"])
+        servers.append({
+            "id": entry["id"],
+            "title": entry.get("title", entry["id"]),
+            "network": entry.get("network"),
+            "authRequired": bool((entry.get("auth") or {}).get("required")),
+            "toolCount": len(entry.get("tools") or []),
+            "writeTools": sum(1 for t in (entry.get("tools") or []) if t.get("tier") == "write"),
+            "enabled": bool(row and row["enabled"]),
+            "hasToken": bool(row and row["ciphertext"]),
+        })
+    return {"servers": servers}
+
+
 _catalog_cache: list[dict[str, Any]] | None = None
 
 
@@ -1393,6 +1644,15 @@ def create_args(user_id: str, hosts: dict[str, str] | None = None) -> list[str]:
         # RFC 0016: the node the web tools dial. Inert for faux/keyless chat.
         "-e", f"WEBSEARCH_URL=http://{websearch_name(user_id)}:{WEBSEARCH_PORT}",
     ]
+    # RFC 0024 §6: the MCP surface exists only when the deployment offers
+    # servers. The subset is resolved against the catalog here, so a bad
+    # MCP_SERVERS id never reaches the agent's fail-loud boot check.
+    deployment = mcp_deployment()
+    if deployment:
+        args += [
+            "-e", "MCP_SERVERS=" + ",".join(entry["id"] for entry in deployment),
+            "-e", f"MCP_URL=http://{mcp_node_name(user_id)}:{MCP_PORT}",
+        ]
     if AGENT_CITATIONS_DEFAULT:
         # RFC 0006 §5.9: the mode of /prompt requests that omit the `citations`
         # field. Sandbox env is fixed at create; the per-request field always wins.
@@ -1501,6 +1761,45 @@ def websearch_create_args(
     return args
 
 
+def mcp_create_args(
+    user_id: str,
+    hosts: dict[str, str] | None = None,
+    peers: list[str] | None = None,
+) -> list[str]:
+    """RFC 0024 §5: the per-user MCP node.
+
+    Same per-user --internal network as the agent (the only edge into it); the
+    two shared MCP legs are attached by provision() after create. No volumes,
+    no published ports, read-only rootfs with a /tmp tmpfs (the node writes
+    nothing; M1). The control token is baked here from the manager's own
+    secret — docker create env, which no other container can read — so a bash
+    child of the sandbox (same subnet, different container) can never forge a
+    config delivery or win a first-set race. `MCP_PEERS` is the per-user
+    subnet, exactly like the web-search node."""
+    args = [
+        "create", "--name", mcp_node_name(user_id),
+        "--network", network_name(user_id),
+        "--label", "pi-sandbox-manager=1",
+        "--memory", MCP_MEMORY,
+        "--cpus", MCP_CPUS,
+        "--runtime", AGENT_RUNTIME,
+        "--security-opt", "no-new-privileges",
+        *hardening_args(),
+        "--read-only",
+        "--tmpfs", "/tmp:rw,size=16m,noexec",
+        "--workdir", "/app",
+        "-e", f"PORT={MCP_PORT}",
+        "-e", "MCP_PEERS=" + ",".join(peers or []),
+        "-e", f"MCP_CONTROL_TOKEN={mcp_control_token(user_id)}",
+        "-e", f"MCP_CATALOG={MCP_CATALOG_PATH_IN_IMAGE}",
+    ]
+    for name, ip in sorted((hosts or {}).items()):
+        args += ["--add-host", f"{name}:{ip}"]
+    # Same image, fourth entrypoint. No DNS: only catalog hosts are baked.
+    args += [AGENT_IMAGE, "sh", "-c", "ulimit -c 0 && exec node /app/mcp-gateway.ts"]
+    return args
+
+
 def control_plane_guests() -> list[str]:
     """Containers the manager attaches to every per-user network: the callers
     that must reach the agent (caddy, web) plus the optional e2e fake upstream
@@ -1598,6 +1897,32 @@ def websearch_post(container: str, path: str, payload: dict[str, Any], timeout: 
     return _container_post(container, WEBSEARCH_PORT, path, payload, timeout)
 
 
+def mcp_get(container: str, path: str, timeout: float = 3.0) -> dict[str, Any]:
+    return _container_get(container, MCP_PORT, path, timeout)
+
+
+def mcp_post(
+    container: str, path: str, payload: dict[str, Any],
+    token: str | None = None, timeout: float = 5.0,
+) -> dict[str, Any]:
+    """POST JSON to the MCP node. The config route carries the control token
+    the node's env already holds (RFC 0024 §7.1)."""
+    url = f"http://{container}:{MCP_PORT}{path}"
+    headers = {"content-type": "application/json"}
+    if token:
+        headers["X-Control-Token"] = token
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode(), method="POST", headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as exc:
+        raise ManagerError("delivery_failed", f"{container} {path} answered {exc.code}")
+    except urllib.error.URLError as exc:
+        raise ManagerError("delivery_failed", f"{container} {path} unreachable: {exc.reason}")
+
+
 def agent_alive(container: str) -> bool:
     try:
         agent_get(container, "/health", timeout=2.0)
@@ -1617,6 +1942,14 @@ def sidecar_alive(container: str) -> bool:
 def websearch_alive(container: str) -> bool:
     try:
         websearch_get(container, "/health", timeout=2.0)
+        return True
+    except Exception:
+        return False
+
+
+def mcp_alive(container: str) -> bool:
+    try:
+        mcp_get(container, "/health", timeout=2.0)
         return True
     except Exception:
         return False
@@ -1769,6 +2102,19 @@ def wait_healthy_websearch(container: str) -> dict[str, Any]:
     raise TimeoutError(f"{container} was not healthy within {timeout}s")
 
 
+def wait_healthy_mcp(container: str) -> dict[str, Any]:
+    """The MCP node's liveness: same optional, short-deadline rule as the
+    web-search node (RFC 0024's node is never on the chat path either)."""
+    timeout = min(READY_TIMEOUT_S, 10)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            return mcp_get(container, "/health")
+        except Exception:
+            time.sleep(0.25)
+    raise TimeoutError(f"{container} was not healthy within {timeout}s")
+
+
 def container_ip(net: str, container: str) -> str | None:
     """The IPv4 a container holds on one network (None when not connected)."""
     cp = subprocess.run(
@@ -1837,6 +2183,14 @@ def start_pair(user_id: str, container: str, sidecar: str) -> None:
         wait_healthy_websearch(websearch)
     except Exception as exc:
         log.warning("web-search node %s is unavailable: %s", websearch, exc)
+    if mcp_deployment():
+        # Same non-fatal rule: a down MCP node costs the mcp__ tools, never chat.
+        mcp = mcp_node_name(user_id)
+        try:
+            ensure_started(mcp)
+            wait_healthy_mcp(mcp)
+        except Exception as exc:
+            log.warning("mcp node %s is unavailable: %s", mcp, exc)
     ensure_started(sidecar)
     if AGENT_DNS:
         dns_rewrite(sidecar)
@@ -1885,6 +2239,13 @@ def provision(user_id: str) -> None:
         # SearXNG/Camofox are not attached yet; the node then fails its upstream
         # call with a named error instead of taking the sandbox down.
         ensure_websearch_networks()
+        # RFC 0024 D1: the MCP legs exist before any node references them; the
+        # catalog is read once here (docker run --rm, no network) so a broken
+        # image fails the provision loudly, never silently empty.
+        deployment = mcp_deployment()
+        if deployment:
+            ensure_mcp_networks()
+        mcp_hosts = mcp_service_hosts(deployment) if deployment else {}
         hosts = guest_ips(net)
         sidecar_recreated = False
         if docker_running(sidecar) is None:
@@ -1903,13 +2264,29 @@ def provision(user_id: str) -> None:
                 network_subnets(net),
             ))
             websearch_recreated = True
+        mcp = mcp_node_name(user_id)
+        mcp_recreated = False
+        if deployment and (docker_running(mcp) is None or created_net):
+            # Same recreate rule as the web-search node, plus §5.3/R5: a
+            # recreated node re-bakes every catalog host, so an address drift
+            # heals on the next provision.
+            if docker_running(mcp) is not None:
+                docker("rm", "-f", mcp, check=False)
+            docker(*mcp_create_args(user_id, mcp_hosts, network_subnets(net)))
+            mcp_recreated = True
         # (Re-)attach the shared search network. Idempotent; a manager restart
         # or a rebuilt websearch-in can leave the node detached.
         docker("network", "connect", WEBSEARCH_IN, websearch, check=False)
+        # (Re-)attach the MCP legs (D2): operator servers on mcp-in, the
+        # third-party egress leg on mcp-out. Idempotent for the same reason.
+        if deployment:
+            docker("network", "connect", MCP_IN, mcp, check=False)
+            docker("network", "connect", MCP_OUT, mcp, check=False)
         if (
             docker_running(container) is None
             or sidecar_recreated
             or websearch_recreated
+            or mcp_recreated
         ):
             # The agent's routes to the sidecar and the node are baked /etc/hosts
             # entries (runsc cannot use Docker's embedded DNS), fixed at create
@@ -1924,9 +2301,16 @@ def provision(user_id: str) -> None:
                 raise RuntimeError(f"sidecar {sidecar} has no address on {net}")
             if websearch_ip is None:
                 raise RuntimeError(f"web-search node {websearch} has no address on {net}")
+            baked = {**hosts, sidecar: sidecar_ip, websearch: websearch_ip}
+            if deployment:
+                ensure_started(mcp)
+                mcp_ip = container_ip(net, mcp)
+                if mcp_ip is None:
+                    raise RuntimeError(f"mcp node {mcp} has no address on {net}")
+                baked[mcp] = mcp_ip
             if docker_running(container) is not None:
                 docker("rm", "-f", container, check=False)
-            docker(*create_args(user_id, {**hosts, sidecar: sidecar_ip, websearch: websearch_ip}))
+            docker(*create_args(user_id, baked))
     start_pair(user_id, container, sidecar)
 
 
@@ -1962,6 +2346,72 @@ def deliver_websearch_control(user_id: str, websearch: str, container: str) -> N
         log.debug("web-search control delivery failed for %s: %s", user_id, exc)
 
 
+# ── RFC 0024 §7: per-user MCP delivery ──────────────────────────────────────
+
+def mcp_control_token(user_id: str) -> str:
+    """The MCP node's control token for one user, derived from MANAGER_TOKEN
+    (deterministic, so the manager can always mint the value it baked into the
+    node's env at create time) and never delivered to the agent's memory by
+    any path the sandbox shares: the agent gets it too (it must register runs),
+    but a bash child cannot read either container's env."""
+    if not MANAGER_TOKEN:
+        raise ManagerError("token_unavailable", "MANAGER_TOKEN is required for MCP authorisation")
+    return hmac.new(
+        MANAGER_TOKEN.encode(), b"mcp-node:" + user_id.encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def deliver_mcp_config(user_id: str, node: str, container: str) -> None:
+    """Rebuild the node's whole config on every resolve (idempotent, §10.2):
+    the user-enabled deployment servers with their decrypted tokens, plus the
+    admission key Caddy stamps. The agent gets the keyless half (node URL,
+    control token, enabled ids) — never a credential, never the admission key.
+    Fail-soft like the web-search delivery: MCP being down never costs chat."""
+    deployment = mcp_deployment()
+    if not deployment:
+        return
+    deployment_ids = {entry["id"] for entry in deployment}
+    catalog = mcp_catalog()
+    servers: list[dict[str, Any]] = []
+    enabled_ids: list[str] = []
+    for row in mcp_servers_get(user_id):
+        if not row["enabled"] or row["server_id"] not in deployment_ids:
+            continue
+        entry: dict[str, Any] = {
+            "id": row["server_id"],
+            "url": catalog[row["server_id"]]["url"],
+        }
+        if row["ciphertext"] is not None:
+            try:
+                entry["token"] = mcp_token_decrypt(
+                    user_id, row["server_id"], row["ciphertext"], row["nonce"]
+                )
+            except ManagerError as exc:
+                log.warning(
+                    "mcp token for %s/%s undecryptable, delivering without it: %s",
+                    user_id, row["server_id"], exc.code,
+                )
+        servers.append(entry)
+        enabled_ids.append(row["server_id"])
+    token = mcp_control_token(user_id)
+    payload: dict[str, Any] = {"servers": servers}
+    if MCP_ADMISSION_KEY:
+        payload["admissionKey"] = MCP_ADMISSION_KEY
+    try:
+        mcp_post(node, "/mcp/config", payload, token=token, timeout=4.0)
+        agent_post(
+            container, "/mcpconfig",
+            {
+                "gatewayUrl": f"http://{node}:{MCP_PORT}",
+                "controlToken": token,
+                "servers": enabled_ids,
+            },
+            timeout=3.0,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail-soft by design, never chat
+        log.debug("mcp config delivery failed for %s: %s", user_id, exc)
+
+
 # ── resolve: the only write path on the request hot path ────────────────────
 def wait_until_ready(user_id: str) -> dict[str, Any]:
     deadline = time.time() + READY_TIMEOUT_S
@@ -1992,11 +2442,14 @@ def resolve(user_id: str) -> dict[str, Any]:
     container = row["container_name"]
     sidecar = sidecar_name(user_id)
     websearch = websearch_name(user_id)
+    deployment = mcp_deployment()
+    mcp = mcp_node_name(user_id)
     ensure_guests(user_id)
     if (
         docker_running(container) is None
         or docker_running(sidecar) is None
         or docker_running(websearch) is None
+        or (deployment and docker_running(mcp) is None)
     ):
         provision(user_id)  # row exists but part of the group is gone: repair all, don't 503
     elif (
@@ -2018,6 +2471,11 @@ def resolve(user_id: str) -> dict[str, Any]:
     # RFC 0016 §7: the node and the agent must agree on the control token before
     # the prompt body reaches the agent; resolve runs first on every request.
     deliver_websearch_control(user_id, websearch, container)
+    # RFC 0024 §10.2: same ordering for the MCP config — the node's whole
+    # server set (credentials included) and the agent's keyless half land
+    # before the prompt, so a revocation is a resolve, never a restart (V9).
+    if deployment:
+        deliver_mcp_config(user_id, mcp, container)
 
     touch(user_id)
     return {
@@ -2057,9 +2515,11 @@ def eviction_tick() -> None:
             docker("stop", "--time", "10", container, check=False)
             # RFC 0013 R7 / RFC 0016 §4: the group evicts together — an idle
             # user's sidecar holds no key in RAM, the node holds no run tables,
-            # and idle cost stays zero.
+            # and idle cost stays zero. RFC 0024 §5: the MCP node joins the
+            # group eviction (no credentials in RAM for an idle user).
             docker("stop", "--time", "5", sidecar_name(user_id), check=False)
             docker("stop", "--time", "5", websearch_name(user_id), check=False)
+            docker("stop", "--time", "5", mcp_node_name(user_id), check=False)
             registry_set(user_id, "stopped")
 
 
@@ -2107,6 +2567,15 @@ def reconcile_tick() -> None:
             # hot path (the node is optional; tool calls fail soft meanwhile).
             log.warning("restarting unresponsive web-search node %s", websearch)
             docker("restart", websearch, check=False)
+        if mcp_deployment():
+            mcp = mcp_node_name(user_id)
+            if docker_running(mcp) is False:
+                # RFC 0024: same repair rule as the web-search node — the MCP
+                # node keeps no durable state either (D9: RAM only).
+                docker("start", mcp, check=False)
+            elif docker_running(mcp) is True and not mcp_alive(mcp):
+                log.warning("restarting unresponsive mcp node %s", mcp)
+                docker("restart", mcp, check=False)
         if agent_alive(container):
             _unhealthy[user_id] = 0
             continue
@@ -2400,6 +2869,21 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return "pending: delivery_failed"
 
+    def apply_mcp_live(self, user_id: str) -> str:
+        """RFC 0024 §10.2: a config change is one delivery away when the group
+        runs; otherwise the next resolve carries it. Best effort, same rule."""
+        row = registry_get(user_id)
+        if row is None:
+            return "no_sandbox"
+        container = row["container_name"]
+        if docker_running(container) is not True:
+            return "sandbox_stopped"
+        try:
+            deliver_mcp_config(user_id, mcp_node_name(user_id), container)
+            return "delivered"
+        except Exception:
+            return "pending: delivery_failed"
+
     def providers_get(self) -> None:
         """GET /whoami and GET /providers/* — behind the peer guard like every
         endpoint; /whoami never provisions (unlike /resolve)."""
@@ -2430,6 +2914,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(
                     200, provider_config_view(user), {"Cache-Control": "no-store"}
                 )
+            if self.path.startswith("/mcp/servers"):
+                user = self.read_user(self.user_id())
+                return self.send(200, mcp_servers_view(user), {"Cache-Control": "no-store"})
             return self.send(404, {"error": "not found"})
         except ManagerError as exc:
             return self.send_error(exc)
@@ -2512,6 +2999,54 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("PUT /providers/config failed")
             return self.send(500, {"error": "internal", "message": "provider config write failed"})
 
+    def mcp_put(self, body: dict[str, Any]) -> None:
+        """PUT /mcp/servers: enable/disable one catalog server for the caller,
+        optionally storing (or replacing) its credential. The server must be in
+        the deployment subset (D4: no user URL, ever); the token is encrypted
+        under the BYOK KEK with MCP-specific AAD and never leaves the manager
+        in plaintext again. The response is the masked view + delivery."""
+        try:
+            user_id, via_session = self.write_user(body)
+            if via_session and not self.write_origin_ok():
+                raise ManagerError("forbidden", "Origin does not match the serving origin", 403)
+            server_id = body.get("serverId")
+            enabled = body.get("enabled")
+            token = body.get("token")
+            if not isinstance(server_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", server_id or ""):
+                raise ManagerError("invalid_server", "serverId must be a catalog id", 400)
+            if not isinstance(enabled, bool):
+                raise ManagerError("invalid_enabled", "enabled must be a boolean", 400)
+            if token is not None and (not isinstance(token, str) or not (1 <= len(token) <= 4096)):
+                raise ManagerError("invalid_token", "token must be 1-4096 characters", 400)
+            deployment = mcp_deployment()
+            if server_id not in {entry["id"] for entry in deployment}:
+                raise ManagerError(
+                    "unknown_server",
+                    f"server '{server_id}' is not offered by this deployment (D4)",
+                           400,
+                )
+            entry = next(e for e in deployment if e["id"] == server_id)
+            if enabled and token is None:
+                row = next(
+                    (r for r in mcp_servers_get(user_id) if r["server_id"] == server_id), None,
+                )
+                if (entry.get("auth") or {}).get("required") and (row is None or row["ciphertext"] is None):
+                    raise ManagerError(
+                        "token_required",
+                        f"server '{server_id}' requires a bearer token; supply one to enable it",
+                        400,
+                    )
+            mcp_server_set(user_id, server_id, enabled, token)
+            delivery = self.apply_mcp_live(user_id)
+            view = mcp_servers_view(user_id)
+            view["delivery"] = delivery
+            return self.send(200, view)
+        except ManagerError as exc:
+            return self.send_error(exc)
+        except Exception:
+            log.exception("PUT /mcp/servers failed")
+            return self.send(500, {"error": "internal", "message": "mcp servers write failed"})
+
     def providers_delete(self) -> None:
         """DELETE /providers/config: clear selection; ?provider= also revokes
         that key; ?all=1 drops both tables' rows (§7.13 account deletion)."""
@@ -2572,7 +3107,7 @@ class Handler(BaseHTTPRequestHandler):
                     {"Allow": "POST"},
                 )
             return self.send_identity(404, {"code": "not_found", "message": "not found"})
-        if self.path.startswith("/whoami") or self.path.startswith("/providers/"):
+        if self.path.startswith("/whoami") or self.path.startswith("/providers/") or self.path.startswith("/mcp/"):
             return self.providers_get()
         if not self.authorized():
             return self.send(401, {"error": "bad or missing X-Manager-Token"})
@@ -2604,6 +3139,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(403, {"error": "sandbox peers cannot call the manager"})
         if self.path.startswith("/providers/"):
             return self.providers_put(self.read_json_body())
+        if self.path.startswith("/mcp/"):
+            return self.mcp_put(self.read_json_body())
         return self.send(404, {"error": "not found"})
 
     def do_DELETE(self) -> None:
@@ -2748,6 +3285,21 @@ def main() -> None:
         # a non-internal one must stop the boot, not silently weaken it.
         log.error("web-search networks are unusable: %s", exc)
         raise
+    if mcp_deployment():
+        try:
+            ensure_mcp_networks()
+        except Exception as exc:
+            # Same fail-closed rule: an MCP leg with the wrong shape must stop
+            # the boot, never quietly weaken the node's containment (D2/T7).
+            log.error("mcp networks are unusable: %s", exc)
+            raise
+        if not MCP_ADMISSION_KEY:
+            # R8: fail closed. Every run registers read-only until the operator
+            # sets the key; reads are unaffected and the stack still serves.
+            log.warning(
+                "MCP_SERVERS is set but MCP_ADMISSION_KEY is empty: no run can "
+                "authorize write-tier tools (fail closed, RFC 0024 R8)"
+            )
     start_loops()
     server = ManagerHTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)
     log.info(

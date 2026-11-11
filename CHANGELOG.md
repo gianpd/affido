@@ -8,6 +8,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- MCP client (RFC 0024): connected third-party MCP servers as per-user nodes.
+  The operator reviews a local catalog (`agent/catalog/mcp.json`, gitignored;
+  the committed example carries the e2e server — first real server worldGraph,
+  15 read-only tools); `MCP_SERVERS` selects the
+  deployment subset and the user enables servers with their own bearer token
+  (`PUT /mcp/servers`, AES-256-GCM in Postgres under the BYOK KEK). The agent
+  gets `mcp__<server>__<tool>` tools, deferred behind `tool_search`; a fourth
+  entrypoint (`mcp-gateway.ts`) runs the per-user node with no volumes, a
+  read-only rootfs and credentials in RAM only, triple-homed on the per-user
+  network, `mcp-in` (internal, operator servers) and `mcp-out` (bridge with
+  inter-container traffic disabled). Server-authored descriptions never reach
+  the model (the manifest is the authority), results are capped per server and
+  marked untrusted, the first result taints the conversation, write-tier tools
+  need the per-message `mcpWrite` grant backed by a Caddy-stamped admission
+  key, and revoking a server is one resolve. `./verify.sh` gains
+  `e2e-test/mcp.sh`; `e2e-test/mcp-worldgraph.sh` is the operator runbook
+  against the host-run worldGraph server.
+
 - Provider failures are classified instead of surfacing as a dead sandbox.
   The key sidecar now bounds the provider's headers phase (30 s, cleared once
   the stream starts) and answers `504 upstream_timeout` or `502
@@ -17,6 +35,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   provider and the transport cause, and the web tier reports a prompt that
   exceeded its own deadline as `sandbox_timeout` instead of "unreachable".
   Bad key, quota, and context-overflow errors keep their raw detail.
+
+- Per-agent disk quota (RFC 0022): a 2.5 GiB logical ceiling over `/workspace`
+  and `/data`, enforced on uploads, staging, skills and the model's
+  `write`/`edit`/`bash` calls with `507 storage_quota_exceeded`. `GET /storage`
+  reports used/available bytes and the `ok`/`warning`/`critical`/`full` state;
+  the dashboard shows one pie-chart container with the matching alert and an
+  on-demand refresh. No polling, so an idle sandbox still pauses.
 
 - Judge audit in the traces UI: `GET /inspect?report=citations` now returns the
   per-pair `verdicts` of each judged run, and the traces page renders them as

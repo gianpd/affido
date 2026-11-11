@@ -1061,5 +1061,110 @@ class IdentitySurfaceHttpTest(unittest.TestCase):
         self.assertEqual(sm.client_ip(Fake()), "198.51.100.7")  # type: ignore[arg-type]
 
 
+class McpCatalogAndDeploymentTest(unittest.TestCase):
+    """RFC 0024 §6: the deployment subset is MCP_SERVERS ∩ catalog, deduped,
+    unknown ids dropped loudly (never silently served, never fatal for users
+    who never asked for MCP)."""
+
+    def setUp(self) -> None:
+        self._saved = sm._mcp_catalog_cache
+        sm._mcp_catalog_cache = {
+            "worldgraph": {"id": "worldgraph", "title": "worldGraph", "url": "http://worldgraph:8766/mcp"},
+            "fake": {"id": "fake", "title": "E2E fake", "url": "http://e2e-fake-mcp:9410/mcp"},
+        }
+
+    def tearDown(self) -> None:
+        sm._mcp_catalog_cache = self._saved
+
+    def test_deployment_intersects_and_dedupes(self) -> None:
+        saved = sm.MCP_SERVERS_RAW
+        try:
+            sm.MCP_SERVERS_RAW = "fake, worldgraph,fake, missing"
+            ids = [entry["id"] for entry in sm.mcp_deployment()]
+            self.assertEqual(ids, ["fake", "worldgraph"])
+            sm.MCP_SERVERS_RAW = ""
+            self.assertEqual(sm.mcp_deployment(), [])
+        finally:
+            sm.MCP_SERVERS_RAW = saved
+
+
+class McpCreateArgsTest(unittest.TestCase):
+    """RFC 0024 §5/M1: the node — same hardening as the pair, read-only rootfs
+    with a /tmp tmpfs, no volumes, no published port, fourth entrypoint, and
+    the control token baked into env (which no other container can read)."""
+
+    def setUp(self) -> None:
+        self._saved_token = sm.MANAGER_TOKEN
+        sm.MANAGER_TOKEN = "unit-test-manager-secret"
+
+    def tearDown(self) -> None:
+        sm.MANAGER_TOKEN = self._saved_token
+
+    def test_mcp_create_args_shape(self) -> None:
+        user = "user-mcp"
+        args = sm.mcp_create_args(user, {"worldgraph": "172.19.0.5"}, ["10.0.0.0/24"])
+        self.assertEqual(args[0], "create")
+        self.assertIn(sm.mcp_node_name(user), args)
+        env = {args[i + 1] for i, f in enumerate(args) if f == "-e"}
+        self.assertIn("MCP_PEERS=10.0.0.0/24", env)
+        self.assertIn(f"MCP_CONTROL_TOKEN={sm.mcp_control_token(user)}", env)
+        self.assertIn(f"MCP_CATALOG={sm.MCP_CATALOG_PATH_IN_IMAGE}", env)
+        self.assertIn("--read-only", args)
+        i = args.index("--tmpfs")
+        self.assertTrue(args[i + 1].startswith("/tmp:"))
+        self.assertIn(f"seccomp={sm.SECCOMP_PROFILE}", args)
+        self.assertIn("--cap-drop", args)
+        self.assertEqual(args[args.index("--cap-drop") + 1], "ALL")
+        flags = [args[i + 1] for i, f in enumerate(args) if f == "--add-host"]
+        self.assertEqual(flags, ["worldgraph:172.19.0.5"])
+        self.assertEqual(args[-3:-1], ["sh", "-c"])  # entrypoint via sh -c, never a volume
+        self.assertIn("node /app/mcp-gateway.ts", args[-1])
+        self.assertNotIn("-v", args)  # no volume, ever
+
+    def test_control_tokens_are_distinct_and_deterministic(self) -> None:
+        token = sm.mcp_control_token("user-a")
+        self.assertEqual(token, sm.mcp_control_token("user-a"))
+        self.assertNotEqual(token, sm.mcp_control_token("user-b"))
+        self.assertNotEqual(token, sm.websearch_control_token("user-a"))
+        sm.MANAGER_TOKEN = "another-secret"
+        self.assertNotEqual(token, sm.mcp_control_token("user-a"))
+
+    def test_create_args_bake_the_mcp_surface_only_when_offered(self) -> None:
+        saved_deployment = sm.mcp_deployment
+        try:
+            sm.mcp_deployment = lambda: [{"id": "worldgraph"}]
+            args = sm.create_args("user-mcp-on")
+            env = [args[i + 1] for i, f in enumerate(args) if f == "-e"]
+            self.assertIn("MCP_SERVERS=worldgraph", env)
+            self.assertIn(
+                f"MCP_URL=http://{sm.mcp_node_name('user-mcp-on')}:{sm.MCP_PORT}", env)
+            sm.mcp_deployment = lambda: []
+            env = [args[i + 1] for i, f in enumerate(sm.create_args("user-mcp-on")) if f == "-e"]
+            self.assertFalse(any(e.startswith("MCP_") for e in env))
+        finally:
+            sm.mcp_deployment = saved_deployment
+
+
+class McpTokenCryptoTest(unittest.TestCase):
+    """RFC 0024 §10.1: same KEK as provider keys, MCP-specific AAD — a token
+    can be decrypted neither as a provider key nor for another owner."""
+
+    def setUp(self) -> None:
+        sm._kek.clear()
+        sm.LLM_KEK_FILE = os.path.join(_KEYDIR, "raw")
+
+    def test_round_trip_and_domain_separation(self) -> None:
+        ciphertext, nonce = sm.mcp_token_encrypt("u1", "worldgraph", "wgt_secret")
+        self.assertEqual(sm.mcp_token_decrypt("u1", "worldgraph", ciphertext, nonce), "wgt_secret")
+        with self.assertRaises(sm.ManagerError):
+            sm.mcp_token_decrypt("u2", "worldgraph", ciphertext, nonce)
+        with self.assertRaises(sm.ManagerError):
+            sm.mcp_token_decrypt("u1", "other", ciphertext, nonce)
+        # Provider-key AAD does not decrypt an MCP token and vice versa.
+        provider = sm.encrypt_key("u1", "worldgraph", "sk_provider")
+        with self.assertRaises(sm.ManagerError):
+            sm.mcp_token_decrypt("u1", "worldgraph", provider[0], provider[1])
+
+
 if __name__ == "__main__":
     unittest.main()

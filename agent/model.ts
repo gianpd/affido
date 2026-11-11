@@ -228,6 +228,20 @@ const lastToolArgs = (messages: readonly Message[], name: string): Record<string
 	return undefined;
 };
 
+/** The newest called mcp__ tool whose name contains `needle` (any run): the
+ * RFC 0024 dance's fallback when tool_search finds nothing because the tool
+ * was already loaded by an earlier submission of the same conversation. */
+const lastCalledMcpTool = (messages: readonly Message[], needle: string): string | undefined => {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (message === undefined || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+		for (const part of [...message.content].reverse()) {
+			if (part.type === "toolCall" && part.name.startsWith("mcp__") && part.name.includes(needle)) return part.name;
+		}
+	}
+	return undefined;
+};
+
 const lastUserText = (messages: readonly Message[]): string => {
 	for (let index = messages.length - 1; index >= 0; index--) {
 		const message = messages[index];
@@ -305,6 +319,68 @@ const scripted: FauxResponseFactory = (transcript) => {
 		return fauxAssistantMessage([fauxToolCall("web_search", { query: "affido e2e search" }, { id: callId("web-search") })], {
 			stopReason: "toolUse",
 		});
+	}
+	// RFC 0024 dance: a prompt "probe the mcp <word> tool" drives
+	// tool_search -> the loaded mcp__ tool matching <word> -> a text answer that
+	// carries the node's envelope (or its named refusal). "write" targets the
+	// write-tier tool of the e2e fake server (save_note); the word is otherwise
+	// a tool-name substring, so the e2e can pick echo/flood/stall and the real
+	// verification can pick graphs (worldgraph). Keying on named tool results,
+	// like the web dance: section flips insert system entries between messages.
+	if (/probe the mcp/i.test(userText)) {
+		const word = /probe the mcp ([a-z_]+) tool/i.exec(userText)?.[1] ?? "graphs";
+		const writeDance = word === "write";
+		const wanted = writeDance ? "save_note" : word;
+		const mcpResults = [];
+		for (let index = transcript.messages.length - 1; index >= 0; index--) {
+			const message = transcript.messages[index];
+			if (message === undefined) continue;
+			if (message.role === "user") break;
+			if (message.role !== "toolResult" || !Array.isArray(message.content)) continue;
+			if (!message.toolName.startsWith("mcp__")) continue;
+			mcpResults.unshift({
+				name: message.toolName,
+				text: message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
+				isError: message.isError,
+			});
+		}
+		const last = mcpResults.at(-1);
+		if (last !== undefined) {
+			return fauxAssistantMessage([fauxText(`MCP result (${last.name}): ${last.text}`)]);
+		}
+		const search = lastToolResultNamed(transcript.messages, "tool_search");
+		if (search !== undefined && !search.isError) {
+			const names = [...search.text.matchAll(/^- (mcp__[A-Za-z0-9_]+):/gm)].map((match) => match[1] ?? "");
+			const target = names.find((name) => name.includes(wanted));
+			if (target !== undefined) {
+				const args: Record<string, string> = writeDance ? { text: "e2e note" } : {};
+				return fauxAssistantMessage([fauxToolCall(target, args, { id: callId("mcp") })], { stopReason: "toolUse" });
+			}
+			// A tool loaded by an earlier run is no longer deferred, so the search
+			// finds nothing — but it is still offered, and the transcript remembers
+			// its name: call it again instead of giving up.
+			const earlier = lastCalledMcpTool(transcript.messages, wanted);
+			if (earlier !== undefined) {
+				const args: Record<string, string> = writeDance ? { text: "e2e note" } : {};
+				return fauxAssistantMessage([fauxToolCall(earlier, args, { id: callId("mcp") })], { stopReason: "toolUse" });
+			}
+			return fauxAssistantMessage([fauxText(`tool_search loaded no mcp tool matching ${wanted}.`)]);
+		}
+		if (search !== undefined && search.isError) {
+			// tool_search can legitimately be gone: the user disabled the last
+			// server and the conversation deselected the extension (D6). A tool
+			// loaded earlier is still callable, and its refusal is the assertion.
+			const earlier = lastCalledMcpTool(transcript.messages, wanted);
+			if (earlier !== undefined) {
+				const args: Record<string, string> = writeDance ? { text: "e2e note" } : {};
+				return fauxAssistantMessage([fauxToolCall(earlier, args, { id: callId("mcp") })], { stopReason: "toolUse" });
+			}
+			return fauxAssistantMessage([fauxText(`tool_search failed: ${search.text}`)]);
+		}
+		return fauxAssistantMessage(
+			[fauxToolCall("tool_search", { query: wanted }, { id: callId("mcp-search") })],
+			{ stopReason: "toolUse" },
+		);
 	}
 	// The skill hint is server-built, so these branches key on its exact shape.
 	if (userText.includes("[skill hint]") && userText.includes("is not installed")) {

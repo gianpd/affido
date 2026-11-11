@@ -59,3 +59,11 @@ agent/judge-harvest/
 *.woff2
 *.mp3
 *.srt
+
+# RFC 0024 D5 (as amended 2026-11-12): the operator's real MCP catalog is
+# deployment-local — the connected servers and their hosts are operator
+# configuration, not portable repo content. The repo ships
+# agent/catalog/mcp.json.example (the e2e fake server only); the Dockerfile
+# falls back to it when the real file is absent, so a fresh clone still
+# builds the image and passes the gate.
+agent/catalog/mcp.json
