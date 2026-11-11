@@ -726,13 +726,13 @@ was collected is reported as unavailable, never as verified.
 
 | Axis | Workspace volume | Corpus plane |
 |---|---|---|
-| Capacity | host disk per user | quota, not disk |
+| Capacity | 2.5 GiB logical quota per sandbox, plus host disk (RFC 0022) | quota, not disk |
 | Sharing | none, per sandbox | corpus + roles |
 | Versioning | none | immutable versions + audit |
 | Search | `ls`/`grep`, O(files), context blow-up | Postgres FTS, bounded top-k |
 | Upload | wakes and pins the sandbox | control plane, async |
 | Cost | volume per user, backup per volume | GB + requests, lifecycle |
-| Failure | disk full, volume lost | bucket durability, new dependency |
+| Failure | 507 `storage_quota_exceeded`; disk full, volume lost | bucket durability, new dependency |
 | Multi-host | no | yes, stateless plane |
 
 Cost notes:
@@ -835,6 +835,9 @@ object is deleted before the window ends.
    Pin `parserVersion` in the catalog and keep old text versions for citations.
 7. **Quotas.** Per-user bytes, documents, parses per day and storage growth.
    Without quotas, "unlimited uploads" becomes an abuse and cost problem.
+   RFC 0022 now caps one sandbox's two volumes at 2.5 GiB and reports the
+   usage in the dashboard; that is a per-sandbox ceiling, not the per-user
+   catalog/object-storage quota this plane still needs.
 8. **Search quality.** Postgres FTS may be insufficient for multilingual or
    OCR-heavy corpora. Measure recall before adding embeddings.
 9. **Synthesis cost.** A canonical page with many branches requires an LLM

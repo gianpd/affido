@@ -1,0 +1,4 @@
+# Per-run artifacts are runtime evidence, not source. They stay on disk under
+# runs/<run-id>/ so any metric in REPORT.md can be re-derived; the report itself
+# is written to the tracked REPORT.md at this directory's root.
+runs/

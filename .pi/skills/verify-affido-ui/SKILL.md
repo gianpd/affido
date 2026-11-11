@@ -6,15 +6,15 @@ disable-model-invocation: false
 
 # verify-affido-ui
 
-Drive the affido SvelteKit app (`frontend/`) exactly as a user does — real signup/login, real chat through Caddy → sandbox-manager → per-user sandbox agent — and capture screenshots the agent reads as evidence. Nothing is mocked: the browser hits `http://localhost:5173` (vite dev server), which talks to the compose control plane (Caddy `:18080`, Postgres `:15432`, sandbox-manager).
+Drive the affido SvelteKit app (`frontend/`) exactly as a user does — real signup/login, real chat through Caddy → sandbox-manager → per-user sandbox agent — and capture screenshots the agent reads as evidence. Nothing is mocked: the browser hits `http://localhost:5174` (vite dev server), which talks to the compose control plane (Caddy `:18080`, Postgres `:15432`, sandbox-manager).
 
 You can read images: after driving, open every screenshot with the `read` tool and study it. A screenshot you did not read is not evidence.
 
 ## Launch
 
-The control plane runs in compose; the frontend runs as a vite dev server (port is pinned by `ORIGIN=http://localhost:5173` in `frontend/.env`, so use 5173, not preview).
+The control plane runs in compose; the frontend runs as a vite dev server (port is pinned by `ORIGIN=http://localhost:5174` in `frontend/.env`, so use 5174, not preview).
 
-If `:5173` already answers (`curl -fsS http://localhost:5173/login`), another session left a dev server up: reuse it and do not start a second one — and never kill one you did not start (`cleanup.sh` only kills the PID it recorded in `/tmp/affido-ui-dev.pid`).
+If `:5174` already answers (`curl -fsS http://localhost:5174/login`), another session left a dev server up: reuse it and do not start a second one — and never kill one you did not start (`cleanup.sh` only kills the PID it recorded in `/tmp/affido-ui-dev.pid`).
 
 ```bash
 cd /home/jaco/develops/RESEARCH/affido
@@ -22,12 +22,12 @@ cd /home/jaco/develops/RESEARCH/affido
 # 1. Control plane (skip if ./dev.sh status already shows caddy/oltp/sandbox-manager Up)
 ./dev.sh up                 # default provider is the keyless faux agent
 
-# 2. Frontend dev server (one per repo; port 5173 is fixed by ORIGIN)
+# 2. Frontend dev server (one per repo; port 5174 is fixed by ORIGIN)
 cd frontend && nohup pnpm dev >/tmp/affido-ui-dev.log 2>&1 & echo $! >/tmp/affido-ui-dev.pid
 cd ..
 
 # 3. Wait for ready (vite answers /login once compiled)
-for i in $(seq 1 60); do curl -fsS http://localhost:5173/login >/dev/null && break; sleep 1; done
+for i in $(seq 1 60); do curl -fsS http://localhost:5174/login >/dev/null && break; sleep 1; done
 ```
 
 Ready = the curl loop exits fast. If it never answers, read `/tmp/affido-ui-dev.log`.
@@ -42,11 +42,11 @@ Run first whenever anything looks off. Read-only.
 curl -fsS http://localhost:18080/            # expect: affido agents: per-user sandboxes at /u/<user_id>/...
 docker compose -p affido ps                  # caddy, oltp (healthy), sandbox-manager must be Up
 docker exec oltp pg_isready -U pi -d pi      # expect: accepting connections
-curl -fsS http://localhost:5173/login >/dev/null && echo UI-UP
+curl -fsS http://localhost:5174/login >/dev/null && echo UI-UP
 node .pi/skills/verify-affido-ui/drive.mjs --help   # playwright resolves from frontend/node_modules
 ```
 
-If `:5173` is down, do the Launch step 2. If compose is down, `./dev.sh up` (this provisions nothing destructive; Postgres volume persists). Note which agent image the manager runs (`./dev.sh status`): `affido-agent:latest` = faux provider (free), `affido-agent:openrouter` = real model calls (keep prompts to one per run).
+If `:5174` is down, do the Launch step 2. If compose is down, `./dev.sh up` (this provisions nothing destructive; Postgres volume persists). Note which agent image the manager runs (`./dev.sh status`): `affido-agent:latest` = faux provider (free), `affido-agent:openrouter` = real model calls (keep prompts to one per run).
 
 ## Drive
 
@@ -97,6 +97,6 @@ Removes, per verify user: the sandbox container + `pi-ws-*`/`pi-data-*` volumes 
 
 ## Helpers
 
-- `node .pi/skills/verify-affido-ui/drive.mjs <scenario> [flags]` — scenarios `signup login chat documents skills traces uploads logout`; flags `--out DIR --state FILE --email E --password P --name N --prompt TXT --base URL` (default base `http://localhost:5173`). Must be run from the repo root or `frontend/` (playwright resolves from `frontend/node_modules`; or set `AFFIDO_FRONTEND=<repo>/frontend`).
+- `node .pi/skills/verify-affido-ui/drive.mjs <scenario> [flags]` — scenarios `signup login chat documents skills traces uploads logout`; flags `--out DIR --state FILE --email E --password P --name N --prompt TXT --base URL` (default base `http://localhost:5174`). Must be run from the repo root or `frontend/` (playwright resolves from `frontend/node_modules`; or set `AFFIDO_FRONTEND=<repo>/frontend`).
 - `.pi/skills/verify-affido-ui/cleanup.sh [runDir…]` — teardown above; executable.
 - `features/README.md` — the feature map; one file per feature with selectors and gotchas.

@@ -19,5 +19,5 @@ Landing page → *Sign in* → `/login`. Two tabs: *Sign in* and *Create account
 
 - Both tabs' forms exist in the DOM; always scope `getByLabel` to the right form or Playwright hits strict-mode violations.
 - The session cookie is the same credential Caddy's `forward_auth` validates against Postgres (manager `user_from_session`): if signin works but chat 401s, the `session` table and the cookie disagree — check `docker exec oltp psql -U pi -d pi -c 'select * from session'`.
-- `ORIGIN` in `frontend/.env` must equal the URL you drive (`http://localhost:5173`); a mismatch breaks better-auth's cookie/baseURL silently.
+- `ORIGIN` in `frontend/.env` must equal the URL you drive (`http://localhost:5174`); a mismatch breaks better-auth's cookie/baseURL silently.
 - Password reset is covered by unit tests (`frontend/src/lib/server/password-reset.spec.ts`); the UI path is drivable but changes the password of whatever email you enter — only drive it on a verify user.

@@ -17,7 +17,7 @@
      If the image predates the RFC (check `docker images affido-agent --format '{{.CreatedAt}}'`
      against the newest commit touching agent/ingest.ts), rebuild and reload:
      docker build -t affido-agent:latest ./agent && ./dev.sh reload
-   - Frontend dev server on :5173 per the skill (reuse an existing one; never kill one you
+   - Frontend dev server on :5174 per the skill (reuse an existing one; never kill one you
      did not start).
    - Fresh signups get the keyless faux provider by default — do not configure BYOK.
 

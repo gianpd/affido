@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // affido UI verification driver. Drives the real SvelteKit app at
-// http://localhost:5173 with Playwright chromium and leaves screenshots +
+// http://localhost:5174 with Playwright chromium and leaves screenshots +
 // facts.json in --out. Invoked by .pi/skills/verify-affido-ui/SKILL.md;
 // scenario semantics live in .pi/skills/verify-affido-ui/features/.
 //
@@ -46,7 +46,7 @@ const flag = (name, fallback) => {
 	return i !== -1 && args[i + 1] ? args[i + 1] : fallback;
 };
 
-const base = flag('base', 'http://localhost:5173').replace(/\/$/, '');
+const base = flag('base', 'http://localhost:5174').replace(/\/$/, '');
 const out = path.resolve(flag('out', 'verify-runs/adhoc'));
 const stateFile = flag('state', '') ? path.resolve(flag('state', '')) : '';
 fs.mkdirSync(out, { recursive: true });

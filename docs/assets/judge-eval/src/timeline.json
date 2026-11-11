@@ -1,0 +1,268 @@
+{
+  "lead": 0.35,
+  "tail": 0.7,
+  "outro": 2.2,
+  "total": 147.424,
+  "scenes": [
+    {
+      "id": "hook",
+      "no": "01",
+      "kicker": "The problem",
+      "title": "True, but wrong",
+      "text": "This citation is real. This sentence has nothing to do with it. Yet for provenance, everything checks out: the quote exists, it is identical to the document, the token is valid. Nobody asked the one question that matters: does this quote actually support this sentence?",
+      "start": 0.0,
+      "audioStart": 0.35,
+      "duration": 15.984,
+      "end": 17.034
+    },
+    {
+      "id": "gap",
+      "no": "02",
+      "kicker": "The gap",
+      "title": "Provenance is not meaning",
+      "text": "A verified citation can still be a wrong citation. The provenance check only asks whether the words exist in the document. It never checks meaning. So an agent can take a real quote and staple it to a fact about something else.",
+      "start": 17.034,
+      "audioStart": 17.384,
+      "duration": 13.104,
+      "end": 31.188
+    },
+    {
+      "id": "judge",
+      "no": "03",
+      "kicker": "The fix",
+      "title": "One question, three answers",
+      "text": "The new question is a single one: does the evidence support the claim? Three answers: supported, unrelated, contradicted. One pass, no generation. A line passes only if at least one quote supports it and none contradicts it. A contradiction always wins. If the check fails, the answer is not published, and the model tries again.",
+      "start": 31.188,
+      "audioStart": 31.538,
+      "duration": 20.904,
+      "end": 53.142
+    },
+    {
+      "id": "eval",
+      "no": "04",
+      "kicker": "The test",
+      "title": "150 pairs, two numbers",
+      "text": "To prove it, we built a test set: a hundred and fifty claim-quote pairs, labelled by hand, sixty in Italian, sixty in dev, thirty held out for test. Two numbers matter: false accepts, wrong citations let through; and false rejects, correct citations blocked. The target: cut false accepts by sixty percent, and keep false rejects under ten.",
+      "start": 53.142,
+      "audioStart": 53.492,
+      "duration": 23.232,
+      "end": 77.424
+    },
+    {
+      "id": "results",
+      "no": "05",
+      "kicker": "The results",
+      "title": "The local model is not enough",
+      "text": "The first model is local: it cuts false accepts by seventy-five percent, but blocks half of the correct citations. Out. The decision model over the A P I scores thirty out of thirty: zero false accepts, zero false rejects, about two hundred milliseconds per pair. Precise enough to switch on by default.",
+      "start": 77.424,
+      "audioStart": 77.774,
+      "duration": 19.536,
+      "end": 98.01
+    },
+    {
+      "id": "change",
+      "no": "06",
+      "kicker": "What changes",
+      "title": "Faithful at write time",
+      "text": "With the judge on, the agent can no longer staple a real quote to a sentence it does not support. Numbers, dates, negations: if they change, the citation is contradicted and the answer never ships. That is faithfulness at write time, not a score computed afterwards.",
+      "start": 98.01,
+      "audioStart": 98.36,
+      "duration": 16.728,
+      "end": 115.788
+    },
+    {
+      "id": "laquer",
+      "no": "07",
+      "kicker": "The comparison",
+      "title": "Before, not after",
+      "text": "Recent benchmarks, like LA Quer, measure after the fact: a user highlights a sentence and a model checks whether the sources support it. We check before, while the agent is writing. Same question, different moment. And the numbers are not comparable: provenance alone is not enough.",
+      "start": 115.788,
+      "audioStart": 116.138,
+      "duration": 17.304,
+      "end": 134.142
+    },
+    {
+      "id": "close",
+      "no": "08",
+      "kicker": "The close",
+      "title": "Two proofs, one citation",
+      "text": "Two proofs. The quote exists. And the quote is about the sentence. Without the second, the first is decoration. Citations verified. Now also relevant.",
+      "start": 134.142,
+      "audioStart": 134.492,
+      "duration": 10.032,
+      "end": 145.224
+    }
+  ],
+  "cues": [
+    {
+      "start": 0.4,
+      "end": 2.004,
+      "text": "This citation is real."
+    },
+    {
+      "start": 2.004,
+      "end": 4.05,
+      "text": "This sentence has nothing to do with it."
+    },
+    {
+      "start": 4.05,
+      "end": 11.011,
+      "text": "Yet for provenance, everything checks out: the quote exists, it is identical to the document, the token is valid."
+    },
+    {
+      "start": 11.011,
+      "end": 16.305,
+      "text": "Nobody asked the one question that matters: does this quote actually support this sentence?"
+    },
+    {
+      "start": 17.434,
+      "end": 20.545,
+      "text": "A verified citation can still be a wrong citation."
+    },
+    {
+      "start": 20.545,
+      "end": 24.663,
+      "text": "The provenance check only asks whether the words exist in the document."
+    },
+    {
+      "start": 24.663,
+      "end": 25.962,
+      "text": "It never checks meaning."
+    },
+    {
+      "start": 25.962,
+      "end": 30.447,
+      "text": "So an agent can take a real quote and staple it to a fact about something else."
+    },
+    {
+      "start": 31.588,
+      "end": 35.557,
+      "text": "The new question is a single one: does the evidence support the claim?"
+    },
+    {
+      "start": 35.557,
+      "end": 39.258,
+      "text": "Three answers: supported, unrelated, contradicted."
+    },
+    {
+      "start": 39.258,
+      "end": 41.305,
+      "text": "One pass, no generation."
+    },
+    {
+      "start": 41.305,
+      "end": 45.937,
+      "text": "A line passes only if at least one quote supports it and none contradicts it."
+    },
+    {
+      "start": 45.937,
+      "end": 48.167,
+      "text": "A contradiction always wins."
+    },
+    {
+      "start": 48.167,
+      "end": 52.395,
+      "text": "If the check fails, the answer is not published, and the model tries again."
+    },
+    {
+      "start": 53.542,
+      "end": 63.822,
+      "text": "To prove it, we built a test set: a hundred and fifty claim-quote pairs, labelled by hand, sixty in Italian, sixty in dev, thirty held out for test."
+    },
+    {
+      "start": 63.822,
+      "end": 71.126,
+      "text": "Two numbers matter: false accepts, wrong citations let through; and false rejects, correct citations blocked."
+    },
+    {
+      "start": 71.126,
+      "end": 76.678,
+      "text": "The target: cut false accepts by sixty percent, and keep false rejects under ten."
+    },
+    {
+      "start": 77.824,
+      "end": 85.016,
+      "text": "The first model is local: it cuts false accepts by seventy-five percent, but blocks half of the correct citations."
+    },
+    {
+      "start": 85.016,
+      "end": 85.69,
+      "text": "Out."
+    },
+    {
+      "start": 85.69,
+      "end": 95.028,
+      "text": "The decision model over the A P I scores thirty out of thirty: zero false accepts, zero false rejects, about two hundred milliseconds per pair."
+    },
+    {
+      "start": 95.028,
+      "end": 97.247,
+      "text": "Precise enough to switch on by default."
+    },
+    {
+      "start": 98.41,
+      "end": 103.899,
+      "text": "With the judge on, the agent can no longer staple a real quote to a sentence it does not support."
+    },
+    {
+      "start": 103.899,
+      "end": 110.786,
+      "text": "Numbers, dates, negations: if they change, the citation is contradicted and the answer never ships."
+    },
+    {
+      "start": 110.786,
+      "end": 115.038,
+      "text": "That is faithfulness at write time, not a score computed afterwards."
+    },
+    {
+      "start": 116.188,
+      "end": 124.777,
+      "text": "Recent benchmarks, like LA Quer, measure after the fact: a user highlights a sentence and a model checks whether the sources support it."
+    },
+    {
+      "start": 124.777,
+      "end": 127.4,
+      "text": "We check before, while the agent is writing."
+    },
+    {
+      "start": 127.4,
+      "end": 129.324,
+      "text": "Same question, different moment."
+    },
+    {
+      "start": 129.324,
+      "end": 133.392,
+      "text": "And the numbers are not comparable: provenance alone is not enough."
+    },
+    {
+      "start": 134.542,
+      "end": 135.521,
+      "text": "Two proofs."
+    },
+    {
+      "start": 135.521,
+      "end": 136.808,
+      "text": "The quote exists."
+    },
+    {
+      "start": 136.808,
+      "end": 138.879,
+      "text": "And the quote is about the sentence."
+    },
+    {
+      "start": 138.879,
+      "end": 141.599,
+      "text": "Without the second, the first is decoration."
+    },
+    {
+      "start": 141.599,
+      "end": 143.168,
+      "text": "Citations verified."
+    },
+    {
+      "start": 143.168,
+      "end": 144.492,
+      "text": "Now also relevant."
+    }
+  ]
+}

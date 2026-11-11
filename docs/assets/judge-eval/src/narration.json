@@ -1,0 +1,72 @@
+{
+  "voice": "en-US-AndrewNeural",
+  "rate": "+2%",
+  "lead": 0.35,
+  "tail": 0.7,
+  "scenes": [
+    {
+      "id": "hook",
+      "no": "01",
+      "kicker": "The problem",
+      "title": "True, but wrong",
+      "text": "This citation is real. This sentence has nothing to do with it. Yet for provenance, everything checks out: the quote exists, it is identical to the document, the token is valid. Nobody asked the one question that matters: does this quote actually support this sentence?",
+      "speech": "This citation is real. This sentence has nothing to do with it. Yet for provenance, everything checks out: the quote exists, it is identical to the document, the token is valid. Nobody asked the one question that matters: does this quote actually support this sentence?"
+    },
+    {
+      "id": "gap",
+      "no": "02",
+      "kicker": "The gap",
+      "title": "Provenance is not meaning",
+      "text": "A verified citation can still be a wrong citation. The provenance check only asks whether the words exist in the document. It never checks meaning. So an agent can take a real quote and staple it to a fact about something else.",
+      "speech": "A verified citation can still be a wrong citation. The provenance check only asks whether the words exist in the document. It never checks meaning. So an agent can take a real quote and staple it to a fact about something else."
+    },
+    {
+      "id": "judge",
+      "no": "03",
+      "kicker": "The fix",
+      "title": "One question, three answers",
+      "text": "The new question is a single one: does the evidence support the claim? Three answers: supported, unrelated, contradicted. One pass, no generation. A line passes only if at least one quote supports it and none contradicts it. A contradiction always wins. If the check fails, the answer is not published, and the model tries again.",
+      "speech": "The new question is a single one: does the evidence support the claim? Three answers: supported, unrelated, contradicted. One pass, no generation. A line passes only if at least one quote supports it and none contradicts it. A contradiction always wins. If the check fails, the answer is not published, and the model tries again."
+    },
+    {
+      "id": "eval",
+      "no": "04",
+      "kicker": "The test",
+      "title": "150 pairs, two numbers",
+      "text": "To prove it, we built a test set: a hundred and fifty claim-quote pairs, labelled by hand, sixty in Italian, sixty in dev, thirty held out for test. Two numbers matter: false accepts, wrong citations let through; and false rejects, correct citations blocked. The target: cut false accepts by sixty percent, and keep false rejects under ten.",
+      "speech": "To prove it, we built a test set: a hundred and fifty claim-quote pairs, labelled by hand, sixty in Italian, sixty in dev, thirty held out for test. Two numbers matter: false accepts, wrong citations let through; and false rejects, correct citations blocked. The target: cut false accepts by sixty percent, and keep false rejects under ten."
+    },
+    {
+      "id": "results",
+      "no": "05",
+      "kicker": "The results",
+      "title": "The local model is not enough",
+      "text": "The first model is local: it cuts false accepts by seventy-five percent, but blocks half of the correct citations. Out. The decision model over the A P I scores thirty out of thirty: zero false accepts, zero false rejects, about two hundred milliseconds per pair. Precise enough to switch on by default.",
+      "speech": "The first model is local: it cuts false accepts by seventy-five percent, but blocks half of the correct citations. Out. The decision model over the A P I scores thirty out of thirty: zero false accepts, zero false rejects, about two hundred milliseconds per pair. Precise enough to switch on by default."
+    },
+    {
+      "id": "change",
+      "no": "06",
+      "kicker": "What changes",
+      "title": "Faithful at write time",
+      "text": "With the judge on, the agent can no longer staple a real quote to a sentence it does not support. Numbers, dates, negations: if they change, the citation is contradicted and the answer never ships. That is faithfulness at write time, not a score computed afterwards.",
+      "speech": "With the judge on, the agent can no longer staple a real quote to a sentence it does not support. Numbers, dates, negations: if they change, the citation is contradicted and the answer never ships. That is faithfulness at write time, not a score computed afterwards."
+    },
+    {
+      "id": "laquer",
+      "no": "07",
+      "kicker": "The comparison",
+      "title": "Before, not after",
+      "text": "Recent benchmarks, like LA Quer, measure after the fact: a user highlights a sentence and a model checks whether the sources support it. We check before, while the agent is writing. Same question, different moment. And the numbers are not comparable: provenance alone is not enough.",
+      "speech": "Recent benchmarks, like LA Quer, measure after the fact: a user highlights a sentence and a model checks whether the sources support it. We check before, while the agent is writing. Same question, different moment. And the numbers are not comparable: provenance alone is not enough."
+    },
+    {
+      "id": "close",
+      "no": "08",
+      "kicker": "The close",
+      "title": "Two proofs, one citation",
+      "text": "Two proofs. The quote exists. And the quote is about the sentence. Without the second, the first is decoration. Citations verified. Now also relevant.",
+      "speech": "Two proofs. The quote exists. And the quote is about the sentence. Without the second, the first is decoration. Citations verified. Now also relevant."
+    }
+  ]
+}

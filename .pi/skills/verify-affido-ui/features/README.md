@@ -1,6 +1,6 @@
 # Feature map — what the affido UI exposes and how to prove each piece
 
-The driver is `.pi/skills/verify-affido-ui/drive.mjs` (Playwright chromium against `http://localhost:5173`, real stack behind it). Every proof = drive the user path + read the screenshots + check `facts.json`. One entry point per feature is never enough when this map lists others.
+The driver is `.pi/skills/verify-affido-ui/drive.mjs` (Playwright chromium against `http://localhost:5174`, real stack behind it). Every proof = drive the user path + read the screenshots + check `facts.json`. One entry point per feature is never enough when this map lists others.
 
 | Feature | Route(s) | Scenario | File |
 |---|---|---|---|
