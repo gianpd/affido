@@ -187,9 +187,27 @@ sidecar_c="${CONTAINER}-sidecar"
 sidecar_ns="$(docker exec "${sidecar_c}" head -1 /etc/resolv.conf | awk '{print $2}')"
 [[ "${sidecar_ns}" == "${want_dns}" ]] \
 	|| fail "sidecar resolv.conf first nameserver is '${sidecar_ns}', expected ${want_dns}"
+# RFC 0013/0016/0024: the agent reaches its sidecar and nodes through
+# /etc/hosts entries baked at create time (runsc has no embedded DNS). L1
+# stops the whole group, and starting it again re-assigns the network
+# endpoints, so the resumed agent must be recreated against the live map. A
+# stale entry is not cosmetic: the model call through the sidecar then dials
+# whichever container holds that address and fails with a connection error.
+net="pi-net-${CONTAINER#u}"
+live="$(docker network inspect "${net}" -f '{{range .Containers}}{{.Name}}={{.IPv4Address}} {{end}}')"
+for suffix in sidecar websearch mcp; do
+	sibling="${CONTAINER}-${suffix}"
+	if ! docker inspect "${sibling}" >/dev/null 2>&1; then continue; fi
+	want_ip="$(printf '%s' "${live}" | tr ' ' '\n' \
+		| awk -F= -v n="${sibling}" '$1 == n { split($2, a, "/"); print a[1] }')"
+	[[ -n "${want_ip}" ]] || fail "${sibling} has no address on ${net}"
+	got_ip="$(docker exec "${CONTAINER}" awk -v n="${sibling}" '$2 == n { print $1 }' /etc/hosts)"
+	[[ "${got_ip}" == "${want_ip}" ]] \
+		|| fail "after L1 the agent bakes ${sibling}=${got_ip}, live ${want_ip}: the resumed agent would dial the wrong container"
+done
 [[ "$(sql -c "SELECT count(*) FROM sandbox_registry WHERE user_id = '${USER_ID}'")" == "1" ]] \
 	|| fail "more than one sandbox row for ${USER_ID}"
-pass "manager restarted ${CONTAINER}; conversation 1 kept ${entries} entries; resolver rewritten on both halves"
+pass "manager restarted ${CONTAINER}; conversation 1 kept ${entries} entries; resolver and sibling addresses rewritten"
 
 echo "== negative: identity comes from the session, not the path =="
 code="$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/u/${USER_ID}/status")"

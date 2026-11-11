@@ -2163,6 +2163,39 @@ def dns_rewrite(container: str) -> None:
                         container, cp.stderr.strip())
 
 
+def create_agent(user_id: str, net: str) -> str:
+    """Create and start the agent with its siblings' current addresses baked.
+
+    gVisor's netstack cannot use Docker's embedded DNS, so the agent's routes to
+    the sidecar and the optional MCP node are /etc/hosts entries fixed at create
+    time. A stop releases the network endpoints and the next start re-assigns
+    addresses (L1 eviction stops the whole group), so an agent started with the
+    old baked hosts dials whichever container now holds that address: the
+    provider call through the sidecar dies with a connection error on the first
+    prompt after a resume. Recreate the agent instead; /data and /workspace are
+    volumes, nothing durable is lost (R7).
+    """
+    sidecar = sidecar_name(user_id)
+    websearch = websearch_name(user_id)
+    baked = guest_ips(net)
+    for name in (sidecar, websearch):
+        address = container_ip(net, name)
+        if address is None:
+            raise RuntimeError(f"{name} has no address on {net}")
+        baked[name] = address
+    if mcp_deployment():
+        mcp = mcp_node_name(user_id)
+        address = container_ip(net, mcp)
+        if address is None:
+            raise RuntimeError(f"mcp node {mcp} has no address on {net}")
+        baked[mcp] = address
+    container = container_name(user_id)
+    docker("rm", "-f", container, check=False)
+    docker(*create_args(user_id, baked))
+    docker("start", container)
+    return container
+
+
 def start_pair(user_id: str, container: str, sidecar: str) -> None:
     """Start the agent, its key sidecar and the web-search node (RFC 0013 R7,
     RFC 0016 §4).
@@ -2178,6 +2211,7 @@ def start_pair(user_id: str, container: str, sidecar: str) -> None:
     works while the search stack is down, and the web tools answer a named
     `websearch_unavailable` instead of failing the whole resolve."""
     websearch = websearch_name(user_id)
+    agent_stopped = docker_running(container) is not True
     try:
         ensure_started(websearch)
         wait_healthy_websearch(websearch)
@@ -2195,6 +2229,11 @@ def start_pair(user_id: str, container: str, sidecar: str) -> None:
     if AGENT_DNS:
         dns_rewrite(sidecar)
     wait_healthy_sidecar(sidecar)
+    if agent_stopped:
+        # The group was stopped and is being started again: the siblings came
+        # back with re-assigned addresses, so the agent's baked /etc/hosts map
+        # is stale (see create_agent). Recreate it against the live map.
+        create_agent(user_id, network_name(user_id))
     ensure_started(container)
     if AGENT_DNS:
         dns_rewrite(container)
@@ -2288,29 +2327,13 @@ def provision(user_id: str) -> None:
             or websearch_recreated
             or mcp_recreated
         ):
-            # The agent's routes to the sidecar and the node are baked /etc/hosts
-            # entries (runsc cannot use Docker's embedded DNS), fixed at create
-            # time. A recreated container may hold a new IP, so the agent is
-            # recreated with it — durable state lives on volumes, nothing is
-            # lost (R7).
+            # A sibling may hold a new address (RFC 0013 R7), so the agent is
+            # recreated with the live map instead of a stale one.
             ensure_started(sidecar)
             ensure_started(websearch)
-            sidecar_ip = container_ip(net, sidecar)
-            websearch_ip = container_ip(net, websearch)
-            if sidecar_ip is None:
-                raise RuntimeError(f"sidecar {sidecar} has no address on {net}")
-            if websearch_ip is None:
-                raise RuntimeError(f"web-search node {websearch} has no address on {net}")
-            baked = {**hosts, sidecar: sidecar_ip, websearch: websearch_ip}
             if deployment:
                 ensure_started(mcp)
-                mcp_ip = container_ip(net, mcp)
-                if mcp_ip is None:
-                    raise RuntimeError(f"mcp node {mcp} has no address on {net}")
-                baked[mcp] = mcp_ip
-            if docker_running(container) is not None:
-                docker("rm", "-f", container, check=False)
-            docker(*create_args(user_id, baked))
+            create_agent(user_id, net)
     start_pair(user_id, container, sidecar)
 
 

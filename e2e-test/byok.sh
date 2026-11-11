@@ -199,16 +199,27 @@ status_json="$(agent_status)"
 	|| fail "L0 recovery lost the runtime model: ${status_json}"
 pass "L0 pause + resolve: same model (keyVia=sidecar, ${FINGERPRINT2}), same conversation ${CONV}"
 
-echo "== durability: L1 stop re-delivers, session intact (§6.4) =="
-docker stop "${CONTAINER}" >/dev/null
+echo "== durability: L1 group stop re-delivers, sibling addresses rebuilt (§6.4) =="
+# Stop the whole group the way eviction_tick does: agent, sidecar and the
+# nodes. A stop frees the per-user network endpoints and the next start
+# re-assigns them; the agent's map of its siblings is baked /etc/hosts fixed at
+# create time (runsc has no embedded DNS), so the resume path must rebuild the
+# agent. Stopping only the agent cannot catch a stale map: every sibling keeps
+# its address.
+group=("${CONTAINER}" "${SIDECAR_C}")
+for extra in "${CONTAINER}-websearch" "${CONTAINER}-mcp"; do
+	if docker inspect "${extra}" >/dev/null 2>&1; then group+=("${extra}"); fi
+done
+docker stop "${group[@]}" >/dev/null
 answer="$(prompt "byok-4")"
+[[ "$(printf '%s' "${answer}" | field "d['status']")" == "done" ]] || fail "prompt after the group stop failed: ${answer}"
 [[ "$(printf '%s' "${answer}" | field "d['conversationId']")" == "${CONV}" ]] \
 	|| fail "L1 recovery changed the conversation: ${answer}"
 [[ "$(printf '%s' "${answer}" | field "d['answer']")" == *"fake upstream answered"* ]] \
 	|| fail "L1 recovery did not re-deliver (answer not from upstream): ${answer}"
 [[ "$(bearers | grep -cF "Bearer ${KEY2}")" -ge 3 ]] \
 	|| fail "re-delivery did not generate from the upstream again: $(bearers)"
-pass "docker stop + resolve: re-delivery, conversation ${CONV} intact"
+pass "group stop + resolve: agent rebuilt on the live sibling addresses, conversation ${CONV} intact"
 
 echo "== durability: agent recreation re-provisions and re-delivers (§10 M3) =="
 docker rm -f "${CONTAINER}" >/dev/null

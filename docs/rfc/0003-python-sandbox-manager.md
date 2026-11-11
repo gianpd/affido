@@ -748,7 +748,7 @@ Invariants:
 | Schema bootstrap | `migrate` | `CREATE TABLE IF NOT EXISTS`; production migration adds the FK |
 | Claim a user | `try_claim` | advisory lock + insert `creating`; returns whether we won |
 | Create/start | `provision` | per-user network → volumes → `docker create` → `start` → `/health` → `running` |
-| Resolve | `resolve` | none → claim+provision; container gone → reprovision; `running` → probe; else start+wait; always `touch` |
+| Resolve | `resolve` | none → claim+provision; container gone → reprovision; `running` → probe; else start+wait (the agent is recreated when the group was stopped: a stop re-assigns the addresses baked into its `/etc/hosts`); always `touch` |
 | Idle → stop (L1) | `eviction_tick` | agent `paused:true` and idle ≥ `STOP_AFTER_S` → `docker stop` → `stopped` |
 | Drift + watchdog | `reconcile_tick` | missing container → `stopped`; unhealthy `N` ticks → `docker restart` |
 | Status | `GET /status` | registry row merged with live `docker inspect` |
@@ -781,8 +781,9 @@ sandbox)
      │                                      │                            │ and idle >= STOP_AFTER_S
      │                                  reconcile                        ▼
      │                                  (repair)                     stopped ──resolve──▶ running
-     │                                                               │  docker start; agent
-     │                                       idle >= CKPT_AFTER_S     │  resumes from SQLite
+     │                                                               │  docker start (the agent is
+     │                                       idle >= CKPT_AFTER_S     │  recreated; its baked sibling
+     │                                                               │  addresses are re-assigned)
      └─────────── docker rm ◀──────────── checkpointed  (L2, optional, runsc image on disk)
 
   running & unhealthy for N probes ──watchdog──▶ restart (docker restart)

@@ -177,9 +177,11 @@ socket) and a Caddy route per user. On every request Caddy's `forward_auth`
 subrequest asks the manager to resolve the user; the manager provisions
 (network, volumes, container) or starts the sandbox and returns
 `X-Sandbox-Endpoint`, which Caddy then dials. The manager stops an idle sandbox
-after `STOP_AFTER_S` and starts it again on the next request; the agent resumes
-the same SQLite session. Sandboxes run under gVisor (`runsc`, mandatory — the
-manager refuses to boot without it).
+after `STOP_AFTER_S` and brings it back on the next request; the agent resumes
+the same SQLite session. The agent container itself is recreated when it comes
+back, because the addresses of its sidecar and nodes are baked into
+`/etc/hosts` at create time and a stop frees them for re-assignment. Sandboxes
+run under gVisor (`runsc`, mandatory — the manager refuses to boot without it).
 
 The e2e verifier does not log in through the web client; it seeds a
 better-auth-shaped `"session"` row. The manager looks up the token part of a

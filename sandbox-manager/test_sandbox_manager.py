@@ -1166,5 +1166,76 @@ class McpTokenCryptoTest(unittest.TestCase):
             sm.mcp_token_decrypt("u1", "worldgraph", provider[0], provider[1])
 
 
+class AgentRecreateOnResumeTest(unittest.TestCase):
+    """L1 eviction stops the whole group; starting it again re-assigns the
+    addresses on the per-user network. The agent's baked /etc/hosts entries are
+    fixed at create time, so a resumed agent must be recreated against the live
+    map — otherwise the sidecar URL points at another container and the first
+    prompt after the resume dies with a model connection error."""
+
+    def setUp(self) -> None:
+        self.saved = {
+            name: getattr(sm, name)
+            for name in (
+                "docker", "docker_running", "container_ip", "guest_ips",
+                "mcp_deployment", "create_agent", "ensure_started",
+                "wait_healthy_websearch", "wait_healthy_mcp",
+                "wait_healthy_sidecar", "wait_healthy", "mark_running",
+                "AGENT_DNS",
+            )
+        }
+        self.calls: list[tuple[str, ...]] = []
+        self.recreated: list[str] = []
+
+    def tearDown(self) -> None:
+        for name, value in self.saved.items():
+            setattr(sm, name, value)
+
+    def _start(self, running: bool | None) -> None:
+        sm.docker = lambda *args, **kwargs: self.calls.append(args) or ""
+        sm.docker_running = lambda container: running
+        sm.ensure_started = lambda container: None
+        sm.wait_healthy_websearch = lambda container: None
+        sm.wait_healthy_mcp = lambda container: None
+        sm.wait_healthy_sidecar = lambda container: None
+        sm.wait_healthy = lambda container: None
+        sm.mark_running = lambda user_id, container: None
+        sm.mcp_deployment = lambda: []
+        sm.AGENT_DNS = ""
+        sm.create_agent = lambda user_id, net: (
+            self.recreated.append(net) or sm.container_name(user_id)
+        )
+        user = "u-resume"
+        sm.start_pair(user, sm.container_name(user), sm.sidecar_name(user))
+
+    def test_stopped_group_recreates_the_agent(self) -> None:
+        self._start(running=False)
+        self.assertEqual(self.recreated, [sm.network_name("u-resume")])
+
+    def test_running_agent_is_started_in_place(self) -> None:
+        self._start(running=True)
+        self.assertEqual(self.recreated, [])
+
+    def test_create_agent_bakes_the_current_sibling_addresses(self) -> None:
+        user = "u-resume"
+        sidecar, websearch = sm.sidecar_name(user), sm.websearch_name(user)
+        sm.docker = lambda *args, **kwargs: self.calls.append(args) or ""
+        sm.guest_ips = lambda net: {"caddy": "10.0.0.3"}
+        sm.container_ip = lambda net, container: {
+            sidecar: "10.0.0.9", websearch: "10.0.0.8",
+        }[container]
+        sm.mcp_deployment = lambda: []
+        sm.create_agent(user, sm.network_name(user))
+        create = next(args for args in self.calls if args[0] == "create")
+        baked = [create[i + 1] for i, flag in enumerate(create) if flag == "--add-host"]
+        self.assertIn(f"{sidecar}:10.0.0.9", baked)
+        self.assertIn(f"{websearch}:10.0.0.8", baked)
+        self.assertIn("caddy:10.0.0.3", baked)
+        self.assertTrue(any(args[:2] == ("rm", "-f") for args in self.calls))
+        # Created but not started would leave the agent dead until the next
+        # resolve; the container must come up from here.
+        self.assertIn(("start", sm.container_name(user)), self.calls)
+
+
 if __name__ == "__main__":
     unittest.main()
