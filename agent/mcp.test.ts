@@ -38,7 +38,7 @@ const serverEntry = (overrides: Record<string, unknown> = {}): Record<string, un
 	host: "t-server",
 	network: "mcp-in",
 	auth: { kind: "bearer", required: true },
-	limits: { timeoutMs: 5000, maxResultBytes: 8192, maxResultChars: 500, requestsPerMinute: 100, concurrency: 2 },
+	limits: { timeoutMs: 5000, maxResultBytes: 8192, requestsPerMinute: 100, concurrency: 2 },
 	tools: [
 		{
 			name: "probe",
@@ -153,7 +153,9 @@ test("catalog validation rejects every drift the RFC names", () => {
 		() => of([serverEntry({ tools: [{ ...((serverEntry().tools as unknown[])[0] as object), description: "TODO(operator): explain this tool" }] })]),
 		/TODO/u,
 	);
-	assert.throws(() => of([serverEntry({ limits: { maxResultChars: 5 } })]), /maxResultChars/u);
+	assert.throws(() => of([serverEntry({ limits: { maxResultBytes: 512 } })]), /maxResultBytes/u);
+	assert.throws(() => of([serverEntry({ limits: { maxResultBytes: 131_073 } })]), /maxResultBytes/u);
+	assert.throws(() => of([serverEntry({ limits: { maxResultChars: 5 } })]), /maxResultChars was removed/u);
 	assert.throws(() => parseMcpCatalog({ version: 2, servers: [] }), /version must be 1/u);
 });
 
@@ -294,7 +296,7 @@ test("write is a per-run grant: real only with the admission stamp, and the tool
 	}
 });
 
-test("the manifest is the authority: schema-validated args, unknown tools, server_disabled, capped results", async () => {
+test("the manifest is the authority: schema-validated args, unknown tools, server_disabled, whole results under the byte cap", async () => {
 	const node = await startGateway({
 		upstreamTools: ["probe", "mutate", "uncatalogued"], // extra tool is ignored
 		respond: () => ({ ok: true, text: "x".repeat(1000) }),
@@ -315,14 +317,15 @@ test("the manifest is the authority: schema-validated args, unknown tools, serve
 		const disabled = await node.call(token, { serverId: "other", tool: "probe", args: { text: "x" } });
 		assert.equal(disabled.status, 403);
 		assert.equal(disabled.body.error, "server_disabled");
-		// Success: capped to the manifest's maxResultChars (500), honestly.
+		// Success: the node forwards the whole text; the transport owns the byte
+		// cap, so there is no truncation marker to report.
 		const ok = await node.call(token, { serverId: "t", tool: "probe", args: { text: "x" } });
 		assert.equal(ok.status, 200);
 		const result: McpResultEnvelope = ok.body.result;
 		assert.equal(result.untrusted, true);
-		assert.equal(result.text.length, 500);
-		assert.equal(result.truncated, true);
-		assert.equal(result.totalChars, 1000);
+		assert.equal(result.text.length, 1000);
+		assert.equal("truncated" in result, false);
+		assert.equal("totalChars" in result, false);
 		// /servers reports the manifest set, not the server's extras as tools.
 		const servers = (await (await fetch(`${node.base}/servers`)).json()) as {
 			servers: { tools: { name: string }[]; extraTools: number }[];
@@ -438,7 +441,7 @@ const MCP_SERVER: McpManifestServer = {
 	host: "t-node",
 	network: "mcp-in",
 	auth: { kind: "bearer", required: true },
-	limits: { timeoutMs: 5000, maxResultBytes: 65536, maxResultChars: 6000, requestsPerMinute: 60, concurrency: 2 },
+	limits: { timeoutMs: 5000, maxResultBytes: 131072, requestsPerMinute: 60, concurrency: 2 },
 	tools: [
 		{
 			name: "probe",
@@ -527,7 +530,7 @@ const stubNode = async (options: { refuse?: string } = {}): Promise<{ url: strin
 				}
 				return reply(200, {
 					requestId: "req_test",
-					result: { untrusted: true, server: "t", tool: "probe", text: "echo:hello", truncated: false, totalChars: 11 },
+					result: { untrusted: true, server: "t", tool: "probe", text: "echo:hello" },
 					diagnostics: { elapsedMs: 1 },
 				});
 			}

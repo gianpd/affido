@@ -428,8 +428,10 @@ are real (generated once by `npm run mcp:manifest --prefix agent` →
 `agent/scripts/mcp-manifest.mjs`), but descriptions and per-tool tiers
 (read/write) are operator-written and committed; at runtime the node only
 verifies `tools/list` against the manifest and discards everything the server
-says about itself. Every result is capped per server
-(`maxResultChars`, default 6000) and marked `untrusted: true`; the first
+says about itself. Every result is capped per server at 128 KiB
+(`maxResultBytes`: the transport refuses anything over it while the body
+streams, never truncates, and no layer cuts downstream) and marked
+`untrusted: true`; the first
 successful result taints the conversation exactly like a web page does
 (`409 web_tainted` on ingest/uploads/skills afterwards). Write-tier tools are
 authorized per message: the composer's "allow changes" sends `mcpWrite:
@@ -575,7 +577,7 @@ plus web search against an e2e-only fake SearXNG/Camofox (authorisation
 refusals, forged tokens, taint durability across a restart), connected MCP
 tools against an e2e-only fake MCP server on the operator network (manifest
 authority over hostile server descriptions, the per-run write gate with the
-Caddy admission stamp, truncation/timeout bounds, revocation-as-resolve), the
+Caddy admission stamp, over-cap/timeout bounds, revocation-as-resolve), the
 sandbox
 durability checks, the containment negatives, and the full BYOK chain against a
 fake upstream (delivery split, pinned-upstream refusal, RAM-only key custody in

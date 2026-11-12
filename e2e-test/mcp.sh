@@ -168,26 +168,21 @@ UNTTICKED_ANSWER="$(printf '%s' "${unticked}" | field "d['answer']")"
 	|| fail "a run without the user's mcpWrite performed a write: ${UNTTICKED_ANSWER}"
 pass "write refused without mcpWrite (direct and unticked), allowed with the stamp"
 
-echo "== V8: truncation and timeout are named, bounded results (D15/T6) =="
+echo "== V8: over-cap results are refused and timeouts are named (D15/T6) =="
 flood="$(curl -fsS --max-time 180 -X POST -H "Cookie: ${COOKIE}" \
 	-H 'content-type: application/json' \
 	-d '{"prompt":"probe the mcp flood tool","requestId":"mcp-flood-'${RUN_ID}'"}' \
 	"${BASE}/u/${USER_ID}/prompt")" || fail "the flood prompt failed"
 FLOOD_ANSWER="$(printf '%s' "${flood}" | field "d['answer']")"
-[[ "${FLOOD_ANSWER}" == *"truncated"* ]] || fail "the flood result was not reported truncated: ${FLOOD_ANSWER}"
-CHARS="$(printf '%s' "${FLOOD_ANSWER}" | python3 -c '
-import sys, json, re
-text = sys.stdin.read()
-match = re.search(r"\"text\": \"(x*)", text)
-print(len(match.group(1)) if match else 0)')"
-[[ "${CHARS}" -le 2000 ]] || fail "the model received ${CHARS} characters, over the 2000 budget"
+[[ "${FLOOD_ANSWER}" == *"upstream_error"* && "${FLOOD_ANSWER}" == *"exceeds 131072 bytes"* ]] \
+	|| fail "the over-cap result was not refused by the transport: ${FLOOD_ANSWER}"
 stall="$(curl -fsS --max-time 180 -X POST -H "Cookie: ${COOKIE}" \
 	-H 'content-type: application/json' \
 	-d '{"prompt":"probe the mcp stall tool","requestId":"mcp-stall-'${RUN_ID}'"}' \
 	"${BASE}/u/${USER_ID}/prompt")" || fail "the stall prompt failed"
 STALL_ANSWER="$(printf '%s' "${stall}" | field "d['answer']")"
 [[ "${STALL_ANSWER}" == *"timeout"* ]] || fail "the slow server was not a named timeout: ${STALL_ANSWER}"
-pass "flood truncated at the per-server budget; stall answered timeout"
+pass "flood refused over the 128 KiB byte cap; stall answered timeout"
 
 echo "== V9: revocation is a resolve, not a restart =="
 disable="$(curl -fsS --max-time 60 -X PUT -H "Cookie: ${COOKIE}" -H "Origin: ${BASE}" -H 'content-type: application/json' \

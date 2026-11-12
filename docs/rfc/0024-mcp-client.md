@@ -22,7 +22,7 @@ user (chat): "what is blocking the Alpha release?"
   -> agent: register the run with the MCP node (control token) -> runToken
   -> model: tool_search "issues"                  (deferred tools, nothing in the prompt)
   -> model: mcp__linear__list_issues {...}        (runToken in the request)
-  -> node: allowlisted host, per-user credential, response capped at 6000 chars
+  -> node: allowlisted host, per-user credential, response refused over 128 KiB
   -> conversation is tainted; ingest/upload/skill install are now refused
 ```
 
@@ -95,7 +95,7 @@ rather than a proxy to whatever URL the user pasted.
 | D12 | Fail closed: a tool missing from the manifest, a disabled server, a non-peer caller, or an invalid result is a named error, never a fallback to the server's own description or schema. |
 | D13 | The transport sits behind a small port (`McpTransport`). V1 ships a hand-written stateless HTTP transport (`stateless-http.ts`, §3.1: one JSON-RPC object per POST, no handshake, no session); the `@modelcontextprotocol/sdk` adapter is deferred until a catalog server actually needs sessions or SSE, and lands behind the same port without touching callers. |
 | D14 | No per-call URL, no `sourceId`-like indirection from the model: the model names a `serverId` from the catalog, nothing else. |
-| D15 | The model-side text budget is a per-server manifest limit, `limits.maxResultChars` (default 6000), not a global constant: a JSON result truncated mid-syntax is unusable, so a server whose pages are structured needs a higher budget than one that returns prose. |
+| D15 | One size check, in the transport: `limits.maxResultBytes` caps a result body at 128 KiB (131072 bytes, about 32k tokens) while it streams; a body over the cap is refused (`upstream_error`), never truncated. The node forwards the text unchanged: it does not measure, decide, or cut sizes. |
 
 ### 3.1 Prior art: relate's MCP surfaces
 
@@ -181,7 +181,7 @@ Rejected:
 | # | Threat | Defense | Residual |
 |---|---|---|---|
 | T1 | Hostile text in a tool **description** (never called) | D5: descriptions come from the committed manifest; `tools/list` descriptions are discarded. `mcp__…` names are manifest names. | none (structurally removed) |
-| T2 | Hostile text in a tool **result** | D8 taint, `untrusted: true` envelope, `maxResultChars` cap (D15), no spill file. Persistence paths (`/ingest`, `/uploads/*`, `/skills/file`) refuse tainted conversations. | the model can still be *misled* within the run |
+| T2 | Hostile text in a tool **result** | D8 taint, `untrusted: true` envelope, the transport's `maxResultBytes` refusal (D15), no spill file. Persistence paths (`/ingest`, `/uploads/*`, `/skills/file`) refuse tainted conversations. | the model can still be *misled* within the run |
 | T3 | Credential theft from the sandbox | D9: no credential in the agent, the workspace, or the env. The node holds the user's token for that one server. | the server already knows its own token |
 | T4 | Exfiltration of workspace data through arguments | No workspace mount in the node; tools are narrow (a manifest review, not a generic `http`); every call is traced with its arguments; D7 gates any tool with an effect. | the model can copy text into an argument |
 | T5 | Side effects chosen by the server (`delete_all`) | D7: write tier off by default and a per-run admission stamp; the composer shows which enabled servers have write tools. | a user who ticks "allow changes" authorizes every write tool of the run (§14.1) |
@@ -304,7 +304,7 @@ never supplies a URL, a host, a header name, or a tool schema.
       "host": "mcp.linear.app",
       "network": "mcp-out",
       "auth": { "kind": "bearer", "required": true },
-      "limits": { "timeoutMs": 30000, "maxResultBytes": 65536, "maxResultChars": 6000, "requestsPerMinute": 30, "concurrency": 2 },
+      "limits": { "timeoutMs": 30000, "maxResultBytes": 131072, "requestsPerMinute": 30, "concurrency": 2 },
       "tools": [
         {
           "name": "list_issues",
@@ -416,17 +416,19 @@ model input.
   later), but every call checks the current run's `write` flag at call time.
   Without it, the result is `write_not_authorized`, which tells the model to ask
   the user to enable changes.
-- Byte budget: `limits.maxResultChars` from the manifest (default 6000, D15)
-  characters of formatted text per result, hard cap. Unlike `bash`, there is
+- Byte budget: `limits.maxResultBytes` from the manifest (default and ceiling
+  128 KiB = 131072 bytes, about 32k tokens, D15), enforced by the transport
+  while the body streams. A body over the cap is refused (`upstream_error`),
+  never truncated, and the node forwards the text unchanged: there is no
+  second cut downstream. Unlike `bash`, there is
   **no spill file**: full untrusted text has no reason to land
-  on disk. Truncation is reported to the model as `truncated: true` with
-  `totalChars`.
+  on disk.
 - Result envelope, shared by the tool and the node (`mcp-protocol.ts`, the
   `web-protocol.ts` pattern):
 
 ```json
 { "untrusted": true, "server": "linear", "tool": "list_issues",
-  "text": "…", "truncated": false, "totalChars": 812 }
+  "text": "…" }
 ```
 
 - Error codes the model can act on: `server_disabled`, `tool_unavailable`,
@@ -499,7 +501,7 @@ The node keeps credentials in RAM only; it has no volume to leak them to.
 | Limit | Default | Enforced by |
 |---|---|---|
 | call timeout | 30 s | node (fetch abort) and agent (60 s outer) |
-| result bytes | 64 KiB from the server; `maxResultChars` (default 6000) to the model | node, agent |
+| result bytes | 128 KiB (131072 bytes) from the server; over the cap is a named refusal | transport; the node and the agent never cut |
 | requests per minute | 30 per server | node token bucket |
 | concurrency | 2 per server | node semaphore |
 | breaker | 5 failures in 60 s → 5 min `unhealthy` | node; calls fail fast, `GET /servers` shows it |
@@ -548,8 +550,8 @@ reach the fake server directly.
 taint write), `agent.ts` (run pointer, registration on admission, `mcpconfig`),
 `tools.ts` (`McpConfigTool`, `McpStatusTool`, `/prompt` accepts `mcpWrite`),
 `server.ts` wiring, `web-tools.ts` taint doc v2 + `migrate`. Tests: deferred
-exposure, write gate refusal, taint after the first result, truncation, timeout,
-invalid result, `tool_unavailable`.
+exposure, write gate refusal, taint after the first result, over-cap refusal,
+timeout, invalid result, `tool_unavailable`.
 
 **M3 — control plane and UI.**
 Manager: `/mcp/servers` CRUD, encryption, delivery, `hasToken`. Caddy: strip

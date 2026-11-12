@@ -76,10 +76,9 @@ const server = createServer((req, res) => {
 				return result(text({ saved: true, total: NOTES.length }));
 			}
 			if (name === "flood") {
-				// ~10 KB: under every byte budget, far over the manifest's 2000-char
-			// budget — the honest-truncation probe. (The byte cap itself, which
-				// aborts the read mid-stream, is pinned by the agent unit tests.)
-				return result(text({ blob: "x".repeat(10_000) }));
+				// ~140 KB, over the 128 KiB body cap: the transport aborts the read
+				// mid-stream and the model gets the named refusal, not a truncation.
+				return result(text({ blob: "x".repeat(140_000) }));
 			}
 			if (name === "stall") {
 				// Sleeps past the manifest's 5 s call timeout, then answers anyway.

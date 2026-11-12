@@ -66,7 +66,7 @@ const entry = {
 	host: new URL(url).hostname,
 	network,
 	auth: { kind: "bearer", required: Boolean(token) },
-	limits: { timeoutMs: 30000, maxResultBytes: 65536, maxResultChars: 6000, requestsPerMinute: 30, concurrency: 2 },
+	limits: { timeoutMs: 30000, maxResultBytes: 131072, requestsPerMinute: 30, concurrency: 2 },
 	tools,
 };
 

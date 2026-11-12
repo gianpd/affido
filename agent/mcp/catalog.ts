@@ -12,7 +12,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { MCP_DEFAULT_LIMITS, MCP_SERVER_ID_RE, type McpLimits } from "../mcp-protocol.ts";
+import { MCP_DEFAULT_LIMITS, MCP_MAX_RESULT_BYTES, MCP_SERVER_ID_RE, type McpLimits } from "../mcp-protocol.ts";
 
 export type McpToolTier = "read" | "write";
 
@@ -140,6 +140,13 @@ const isHttpUrl = (value: string): boolean => {
 
 const parseLimits = (raw: unknown, where: string): McpLimits => {
 	const record = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+	// Removed in D15: a stale catalog must fail loud, not silently deliver
+	// 128 KiB where the operator expected a 6k-character cut.
+	if (record["maxResultChars"] !== undefined) {
+		throw new McpCatalogError(
+			`${where}.limits.maxResultChars was removed: maxResultBytes (<= ${MCP_MAX_RESULT_BYTES}) is the only size cap, refused over it, never truncated`,
+		);
+	}
 	const int = (key: keyof McpLimits, min: number, max: number, fallback: number): number => {
 		const value = record[key];
 		if (value === undefined) return fallback;
@@ -150,8 +157,7 @@ const parseLimits = (raw: unknown, where: string): McpLimits => {
 	};
 	return {
 		timeoutMs: int("timeoutMs", 1_000, 120_000, MCP_DEFAULT_LIMITS.timeoutMs),
-		maxResultBytes: int("maxResultBytes", 1_024, 1_048_576, MCP_DEFAULT_LIMITS.maxResultBytes),
-		maxResultChars: int("maxResultChars", 500, 65_536, MCP_DEFAULT_LIMITS.maxResultChars),
+		maxResultBytes: int("maxResultBytes", 1_024, MCP_MAX_RESULT_BYTES, MCP_DEFAULT_LIMITS.maxResultBytes),
 		requestsPerMinute: int("requestsPerMinute", 1, 600, MCP_DEFAULT_LIMITS.requestsPerMinute),
 		concurrency: int("concurrency", 1, 16, MCP_DEFAULT_LIMITS.concurrency),
 	};

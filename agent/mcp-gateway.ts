@@ -11,7 +11,8 @@
 // key from Caddy via the agent's relay), the catalog enforcement (D5: the
 // committed manifest is the authority; server descriptions and schemas are
 // discarded), the per-server limits (§10.3: timeout, bytes while streaming,
-// chars to the model, rate, concurrency, breaker) and the write tier gate
+// rate, concurrency, breaker; the byte cap is the transport's, the node adds
+// no size check of its own) and the write tier gate
 // (D7: write needs a run whose registration carried the Caddy admission
 // header — the sandbox cannot mint one, T9).
 
@@ -350,21 +351,17 @@ export const createMcpGatewayServer = async (options: McpGatewayOptions = {}): P
 			throw refusal(outcome.code === "timeout" ? 504 : 502, outcome.code, detail);
 		}
 		entry.failures = [];
-		// D15: the model-facing budget is per-server chars, hard cap, truncation
-		// reported honestly. No spill file: untrusted text never lands on disk.
-		const full = outcome.text;
-		const budget = entry.manifest.limits.maxResultChars;
-		const text = full.length <= budget ? full : full.slice(0, budget);
-		log(`call ${serverId}.${tool} ok (${full.length} chars${full.length > budget ? `, truncated to ${budget}` : ""}, run ${run.id})`);
+		// D15: the only size check lives in the transport (`maxResultBytes`, a
+		// streaming refusal); the node forwards the text it got and never cuts
+		// it. No spill file: untrusted text never lands on disk.
+		log(`call ${serverId}.${tool} ok (${Buffer.byteLength(outcome.text, "utf8")} bytes, run ${run.id})`);
 		return {
 			requestId,
 			result: {
 				untrusted: true,
 				server: serverId,
 				tool,
-				text,
-				truncated: full.length > text.length,
-				totalChars: full.length,
+				text: outcome.text,
 			},
 			diagnostics: { elapsedMs: now() - started },
 		};

@@ -7,7 +7,8 @@
 //     pinned by unit tests, shared by the node and the tools (§3.1: a refusal
 //     is legible to the model and stable in the trace);
 //   - the result envelope every successful call returns, `untrusted: true` by
-//     construction, capped to the manifest's `maxResultChars`.
+//     construction, capped to the manifest's `maxResultBytes` by the transport
+//     (a body over the cap is refused there, never truncated here).
 
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
@@ -71,13 +72,17 @@ export const capServerText = (text: string, cap: number = MCP_ERROR_TEXT_CAP): s
 
 // ── result envelope ─────────────────────────────────────────────────────────
 
+/** The one size ceiling of an MCP result (D15): 128 KiB, roughly 32k tokens.
+ * The transport enforces it while the body streams and refuses anything above
+ * it; no layer truncates. A UTF-8 text this long never exceeds the character
+ * bound below (bytes >= UTF-16 code units). */
+export const MCP_MAX_RESULT_BYTES = 131_072;
+
 export const McpResultEnvelopeSchema = Type.Object({
 	untrusted: Type.Literal(true),
 	server: Type.String({ minLength: 1, maxLength: 64 }),
 	tool: Type.String({ minLength: 1, maxLength: 128 }),
-	text: Type.String({ maxLength: 65536 }),
-	truncated: Type.Boolean(),
-	totalChars: Type.Integer({ minimum: 0 }),
+	text: Type.String({ maxLength: MCP_MAX_RESULT_BYTES }),
 });
 export type McpResultEnvelope = Static<typeof McpResultEnvelopeSchema>;
 
@@ -120,15 +125,13 @@ export const isMcpConfiguredServer = (value: unknown): value is McpConfiguredSer
 export type McpLimits = {
 	readonly timeoutMs: number;
 	readonly maxResultBytes: number;
-	readonly maxResultChars: number;
 	readonly requestsPerMinute: number;
 	readonly concurrency: number;
 };
 
 export const MCP_DEFAULT_LIMITS: McpLimits = {
 	timeoutMs: 30_000,
-	maxResultBytes: 65_536,
-	maxResultChars: 6_000,
+	maxResultBytes: MCP_MAX_RESULT_BYTES,
 	requestsPerMinute: 30,
 	concurrency: 2,
 };

@@ -19,9 +19,10 @@ export interface McpTransport {
 	/** The server's `tools/list`. Descriptions are already discarded here: the
 	 * caller sees names and schemas only. */
 	listTools(signal: AbortSignal): Promise<{ readonly ok: true; readonly tools: readonly McpUpstreamTool[] } | { readonly ok: false; readonly code: "upstream_error" | "timeout" | "invalid_result"; readonly detail: string }>;
-	/** One `tools/call`. The result text is the raw upstream payload, capped to
-	 * `maxResultBytes` by the transport; the caller applies the model-facing
-	 * `maxResultChars` cap. */
+	/** One `tools/call`. The result text is the raw upstream payload. The
+	 * transport enforces `maxResultBytes` while reading the body: over the cap
+	 * is a refusal (`upstream_error`), never a truncation. The caller forwards
+	 * the text unchanged. */
 	callTool(name: string, args: Record<string, unknown>, maxResultBytes: number, signal: AbortSignal): Promise<McpToolCallResult>;
 	close(): void;
 }

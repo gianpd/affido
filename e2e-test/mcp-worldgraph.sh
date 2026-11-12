@@ -88,15 +88,9 @@ ANSWER="$(printf '%s' "${reply}" | field "d['answer']")"
 	|| fail "the model did not see list_graphs output: ${ANSWER}"
 [[ "${ANSWER}" == *"(mcp__worldgraph__list_graphs)"* ]] \
 	|| fail "the answer does not name the tool: ${ANSWER}"
-# The result was capped to the manifest budget and marked untrusted.
+# The result is marked untrusted; the only size check is the transport's byte
+# cap, so a full result carries no truncation marker.
 [[ "${ANSWER}" == *"untrusted"* ]] || fail "the result is not marked untrusted: ${ANSWER}"
-TRUNCATED="$(printf '%s' "${ANSWER}" | python3 -c '
-import sys, re
-text = sys.stdin.read()
-match = re.search(r"\"truncated\": (\w+)", text)
-print(match.group(1) if match else "absent")')"
-[[ "${TRUNCATED}" == "True" || "${TRUNCATED}" == "False" || "${TRUNCATED}" == "absent" ]] \
-	|| fail "unexpected truncation marker: ${TRUNCATED}"
 pass "tool_search -> mcp__worldgraph__list_graphs through the node, ${graphs} real graphs"
 
 echo "== a second real tool: entity search across graphs =="

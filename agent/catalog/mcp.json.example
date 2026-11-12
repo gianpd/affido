@@ -8,7 +8,7 @@
 			"host": "e2e-fake-mcp",
 			"network": "mcp-in",
 			"auth": { "kind": "bearer", "required": true },
-			"limits": { "timeoutMs": 5000, "maxResultBytes": 65536, "maxResultChars": 2000, "requestsPerMinute": 60, "concurrency": 2 },
+			"limits": { "timeoutMs": 5000, "maxResultBytes": 131072, "requestsPerMinute": 60, "concurrency": 2 },
 			"tools": [
 				{
 					"name": "echo",
@@ -38,7 +38,7 @@
 				},
 				{
 					"name": "flood",
-					"description": "Return a result far over the character budget: the e2e truncation probe.",
+					"description": "Return a result over the byte cap: the e2e rejection probe.",
 					"tier": "read",
 					"parameters": {
 						"type": "object",
